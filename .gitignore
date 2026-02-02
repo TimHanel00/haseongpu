@@ -77,3 +77,6 @@ talk/*.spl
 talk/*.nav
 talk/*.snm
 talk/*.~lock.*
+build/
+cmake-build-debug/
+example/example_c/bin/
