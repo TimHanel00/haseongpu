@@ -305,32 +305,32 @@ import scipy.io
 from scipy.io import savemat
 
 
-def compact_mesh(p, t):
-    """
-    p: (N,2) float
-    t: (M,3) int, 1-based (MATLAB style)
-    Returns:
-      p2: compacted points (K,2)
-      t2: remapped triangles (M,3) still 1-based
-    """
-    p = np.asarray(p, dtype=np.float64)
-    t = np.asarray(t, dtype=np.int64)
-
-    # Flatten triangle indices, unique used vertices (still 1-based)
-    used = np.unique(t.reshape(-1))
-    used_sorted = np.sort(used)
-
-    # Build mapping old_index(1-based) -> new_index(1-based)
-    # Use dict for clarity; could be vectorized but this is robust.
-    mapping = {old: new for new, old in enumerate(used_sorted, start=1)}
-
-    # Remap triangles
-    t2 = np.vectorize(mapping.get)(t).astype(np.int32)
-
-    # Subset points (convert used indices to 0-based for slicing)
-    p2 = p[used_sorted - 1, :].astype(np.float64)
-
-    return p2, t2
+# def compact_mesh(p, t):
+#     """
+#     p: (N,2) float
+#     t: (M,3) int, 1-based (MATLAB style)
+#     Returns:
+#       p2: compacted points (K,2)
+#       t2: remapped triangles (M,3) still 1-based
+#     """
+#     p = np.asarray(p, dtype=np.float64)
+#     t = np.asarray(t, dtype=np.int64)
+#
+#     # Flatten triangle indices, unique used vertices (still 1-based)
+#     used = np.unique(t.reshape(-1))
+#     used_sorted = np.sort(used)
+#
+#     # Build mapping old_index(1-based) -> new_index(1-based)
+#     # Use dict for clarity; could be vectorized but this is robust.
+#     mapping = {old: new for new, old in enumerate(used_sorted, start=1)}
+#
+#     # Remap triangles
+#     t2 = np.vectorize(mapping.get)(t).astype(np.int32)
+#
+#     # Subset points (convert used indices to 0-based for slicing)
+#     p2 = p[used_sorted - 1, :].astype(np.float64)
+#
+#     return p2, t2
 
 
 def set_variables(p, t):
@@ -338,7 +338,7 @@ def set_variables(p, t):
     Builds variable.mat in a way that matches parser.cu assertions.
     """
     # 1) Compact mesh so numberOfPoints matches max index used by triangles
-    p, t = compact_mesh(p, t)
+    ## p, t = compact_mesh(p, t) do not compact the mesh this will cause index space problems later on
 
     # Sanitize
     p = np.asarray(p, dtype=np.float64)
@@ -347,8 +347,8 @@ def set_variables(p, t):
     num_tri = t.shape[0]
     num_pts = p.shape[0]
 
-    # Convert triangles to 0-based for computations
-    t0 = t - 1  # shape (num_tri, 3), values 0..num_pts-1
+    # DO not substract -1 as t is already 0 based
+    # t0 = t - 1  # shape (num_tri, 3), values 0..num_pts-1
 
     # =========================================================
     # STEP 1: triangleNeighbors (sorted_int)
@@ -358,11 +358,11 @@ def set_variables(p, t):
     sorted_int = np.zeros((num_tri, 3), dtype=np.int32)  # 0 means "no neighbor" (MATLAB style)
 
     for i in range(num_tri):
-        a, b, c = t0[i]
+        a, b, c = t[i]
         for j in range(num_tri):
             if i == j:
                 continue
-            tj = t0[j]
+            tj = t[j]
             # Share edge (a,b)
             if len({a, b}.intersection(tj)) == 2:
                 sorted_int[i, 0] = j + 1
@@ -403,7 +403,7 @@ def set_variables(p, t):
     x_center = np.zeros(num_tri, dtype=np.float64)
     y_center = np.zeros(num_tri, dtype=np.float64)
     for i in range(num_tri):
-        pts = t0[i]
+        pts = t[i]
         x_center[i] = np.mean(p[pts, 0])
         y_center[i] = np.mean(p[pts, 1])
 
@@ -427,7 +427,7 @@ def set_variables(p, t):
     vec2 = np.array([0.0, 0.0, 0.1], dtype=np.float64)
 
     for i in range(num_tri):
-        pts = t0[i]
+        pts = t[i]
 
         # Edge 1-2
         vec1 = np.array([p[pts[0], 0], p[pts[0], 1], 0.0], dtype=np.float64) - \
@@ -458,9 +458,9 @@ def set_variables(p, t):
     # =========================================================
     surface = np.zeros(num_tri, dtype=np.float64)
     for i in range(num_tri):
-        a = np.sum((p[t0[i, 0]] - p[t0[i, 1]]) ** 2)
-        b = np.sum((p[t0[i, 2]] - p[t0[i, 1]]) ** 2)
-        c = np.sum((p[t0[i, 0]] - p[t0[i, 2]]) ** 2)
+        a = np.sum((p[t[i, 0]] - p[t[i, 1]]) ** 2)
+        b = np.sum((p[t[i, 2]] - p[t[i, 1]]) ** 2)
+        c = np.sum((p[t[i, 0]] - p[t[i, 2]]) ** 2)
         surface[i] = np.sqrt(1.0 / 16.0 * (4.0 * a * c - (a + c - b) ** 2))
 
     # =========================================================
@@ -471,7 +471,7 @@ def set_variables(p, t):
     # - trianglePointIndices ("t_int") should be uint32 0..num_pts-1.
     # =========================================================
     savemat("variable.mat", {
-        "t_int": t0.astype(np.uint32),
+        "t_int": t.astype(np.uint32),
         "sorted_int": triangleNeighbors.astype(np.int32),
         "forbidden": forbiddenEdge.astype(np.int32),
         "normals_p": triangleNormalPoint.astype(np.uint32),
@@ -482,10 +482,6 @@ def set_variables(p, t):
         "x_center": x_center,
         "y_center": y_center,
         "surface": surface,
-
-        # Optional: save compacted p/t too for debugging
-        "p_compact": p,
-        "t_compact": t
     })
 
     # Quick diagnostics (helps confirm parser assertions)

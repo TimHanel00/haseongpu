@@ -53,9 +53,9 @@ def vtk_wedge(file_n, phi_ASE, p, t_int, mesh_z, z_mesh):
         
         # Write header
         fid.write(f'# vtk DataFile Version 2.0{nl}')
-        fid.write('Wedge example{nl}')
-        fid.write('ASCII{nl}')
-        fid.write('DATASET UNSTRUCTURED_GRID{nl}')
+        fid.write(f'Wedge example{nl}')
+        fid.write(f'ASCII{nl}')
+        fid.write(f'DATASET UNSTRUCTURED_GRID{nl}')
         fid.write(f'POINTS {size_p2} float{nl}')
         
         # Write data-coordinates
