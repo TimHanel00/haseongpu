@@ -33,11 +33,11 @@ import time
 import numpy as np
 from scipy.io import loadmat, savemat
 from scipy.interpolate import griddata
-from beta_int3 import beta_int3
+from beta_int3 import beta_int3Main
 from set_variables import set_variables
 from vtk_wedge import vtk_wedge
 from calcPhiASE import calcPhiASE
-
+import csv
 
 
 # Crystal parameter
@@ -111,7 +111,7 @@ timetotal = 1e-3  # [s]
 time_t = timetotal / timeslice
 
 # ASE application
-maxGPUs = 2 #TODO this was 2 before but gave error
+maxGPUs = 1
 nPerNode = 4
 deviceMode = 'gpu'
 # parallelMode = 'mpi'
@@ -184,13 +184,20 @@ temp_f = crystal['tfluo']
 crystal['tfluo'] = 1
 beta_c_2 = np.zeros((p.shape[0], mesh_z))
 intensity = pump['I']
-
-for i_p in range(p.shape[0]):
-    beta_crystal = np.copy(beta_cell[i_p, :])
-    pulse = np.zeros((steps['time'], 1))
-    pump['I'] = intensity * np.exp(-np.sqrt(p[i_p, 0]**2/pump['ry']**2 + p[i_p, 1]**2/pump['rx']**2)**pump['exp'])
-    beta_crystal, beta_store, pulse, Ntot_gradient = beta_int3(beta_crystal, pulse, phy_const, crystal, steps, pump, mode, Ntot_gradient)
-    beta_c_2[i_p, :] = beta_crystal[:]
+# first of beta int
+beta_int3Main(
+    beta_c_2=beta_c_2,
+    p=p,
+    beta_cell=beta_cell,
+    pump=pump,
+    intensity=intensity,
+    const=phy_const,
+    crystal=crystal,
+    steps=steps,
+    int_field=pump,
+    mode=mode,
+    Ntot_gradient=Ntot_gradient
+)
 
 # calculate change in beta_cell due to pumping
 dndt_pump = (beta_c_2 - beta_cell) / time_beta
@@ -245,11 +252,11 @@ length_Yb = Yb_points_t.shape[0]
 
 #Make sure that clad is integer variable
 clad_int = np.int32(clad)
-
+slice_times_series=[]
 ################################ Main pump loop ###################################
 
 for i_slice in range(1, timeslice_tot):
-
+    start_slice_t=time.perf_counter()
     print('TimeSlice', i_slice, 'of', timeslice_tot-1, 'started')
     # ******************* BETA PUMP TEST ******************************
     # make a test with the gain routine "gain.m" for each of the points
@@ -265,10 +272,11 @@ for i_slice in range(1, timeslice_tot):
     file_p = 'dndt_pump_' + str(i_slice) + '.vtk'
     file_A = 'dndt_ASE_' + str(i_slice) + '.vtk'
     file_C = 'flux_clad_' + str(i_slice) + '.vtk'
-
+    vtk_wedge_in_t=time.perf_counter()
     vtk_wedge(file_b, beta_cell, p, t_int, mesh_z, z_mesh)
     vtk_wedge(file_p, dndt_pump, p, t_int, mesh_z, z_mesh)
-
+    vtk_wedge_out_t=time.perf_counter()
+    print(f'[TIME] vtk first time in: {vtk_wedge_out_t-vtk_wedge_in_t}')
     # Interpolate beta_vol from beta_cell
     x_1 = p[:,0]
     y_1 = p[:,1]
@@ -302,7 +310,7 @@ for i_slice in range(1, timeslice_tot):
 
         z = z + z_mesh
         zi = zi + z_mesh
-
+    phi_ASECall_in_t=time.perf_counter()
     ############################ Call external ASE application ####################
     phi_ASE, mse_values, N_rays = calcPhiASE(
         p,
@@ -336,7 +344,8 @@ for i_slice in range(1, timeslice_tot):
         parallelMode,
         maxGPUs,
         nPerNode)
-
+    phi_ASECall_out_t=time.perf_counter()
+    print(f'[TIME] Total extern phi call time: {phi_ASECall_out_t-phi_ASECall_in_t}')
     # Calc dn/dt ASE, change it to only the Yb:YAG points
     for i_p in range(length_Yb):
         for i_z in range(mesh_z):
@@ -351,40 +360,99 @@ for i_slice in range(1, timeslice_tot):
             # Calc local gain (g_l)
             pos_clad = clad_points_t[i_p]
             flux_clad[pos_clad,i_z] = clad_abs*phi_ASE[pos_clad,i_z]/crystal['tfluo']
-
+    vtk_wedge_in_t=time.perf_counter()
     vtk_wedge(file_A,dndt_ASE , p, t_int, mesh_z, z_mesh)
     vtk_wedge(file_C,flux_clad , p, t_int, mesh_z, z_mesh)
+    vtk_wedge_out_t=time.perf_counter()
+    compression_in_t=time.perf_counter()
     np.savez_compressed('save_' + str(i_slice) + '.npz', dndt_ASE=dndt_ASE, flux_clad=flux_clad)
+    compression_out_t=time.perf_counter()
 
     ############################ Prepare next timeslice ###########################
+    prepare_slice_in_t = time.perf_counter()
+
     temp = pump['T']
     time_beta = 1e-6
     pump['T'] = time_beta
     temp_f = crystal['tfluo']
     crystal['tfluo'] = 1
-    beta_c_2 = np.zeros((p.shape[0],mesh_z))
+
+    beta_c_2 = np.zeros((p.shape[0], mesh_z))
     intensity = pump['I']
 
-    for i_p in range(p.shape[0]):
-        beta_crystal = np.copy(beta_cell[i_p, :])
-        pulse = np.zeros((steps['time'], 1))
-        pump['I'] = intensity*np.exp(-np.sqrt(p[i_p,0]**2/pump['ry']**2+p[i_p,1]**2/pump['rx']**2)**pump['exp'])
-        [beta_crystal,beta_store,pulse,Ntot_gradient] = beta_int3(beta_crystal,pulse,phy_const,crystal,steps,pump,mode,Ntot_gradient)
+    pump_loop_in_t = time.perf_counter()
+    beta_int3Main(
+        beta_c_2=beta_c_2,
+        p=p,
+        beta_cell=beta_cell,
+        pump=pump,
+        intensity=intensity,
+        const=phy_const,
+        crystal=crystal,
+        steps=steps,
+        int_field=pump,
+        mode=mode,
+        Ntot_gradient=Ntot_gradient
+    )
 
-        beta_c_2[i_p, :] = beta_crystal.ravel()
-    if i_slice<timeslice:
-        dndt_pump = np.divide(np.subtract(beta_c_2,beta_cell),time_beta)
+    pump_loop_out_t = time.perf_counter()
+
+    dndt_in_t = time.perf_counter()
+    if i_slice < timeslice:
+        dndt_pump = np.divide(np.subtract(beta_c_2, beta_cell), time_beta)
     else:
-        dndt_pump = np.zeros((p.shape[0],mesh_z))
+        dndt_pump = np.zeros((p.shape[0], mesh_z))
+    dndt_out_t = time.perf_counter()
+
+    # optional NaN/inf checks
+    if not np.isfinite(beta_c_2).all():
+        print('[WARN] beta_c_2 contains non-finite values (NaN/Inf)')
+    if not np.isfinite(dndt_pump).all():
+        print('[WARN] dndt_pump contains non-finite values (NaN/Inf)')
+
+    # restore pump/crystal state
+    restore_in_t = time.perf_counter()
     pump['I'] = intensity
     pump['T'] = temp
     crystal['tfluo'] = temp_f
+    restore_out_t = time.perf_counter()
+
+    # update beta_cell
+    update_in_t = time.perf_counter()
+    tfluo = crystal['tfluo']
+    exp_fac = np.exp(-time_t / tfluo)
+    one_minus = (1.0 - exp_fac)
+
     for i_p in range(p.shape[0]):
-        for i_z in range(mesh_z-1):
-            beta_cell[i_p,i_z] = crystal['tfluo']*(dndt_pump[i_p,i_z]-dndt_ASE[i_p,i_z])*(1-np.exp(-time_t/crystal['tfluo']))+beta_cell[i_p,i_z]*np.exp(-time_t/crystal['tfluo'])
+        i_p_upd_in_t = time.perf_counter()
+        for i_z in range(mesh_z - 1):
+            beta_cell[i_p, i_z] = (
+                    tfluo * (dndt_pump[i_p, i_z] - dndt_ASE[i_p, i_z]) * one_minus
+                    + beta_cell[i_p, i_z] * exp_fac
+            )
+        i_p_upd_out_t = time.perf_counter()
+    update_out_t = time.perf_counter()
 
+    end_slice_t = time.perf_counter()
+    sliceTime=end_slice_t-start_slice_t
+    print(f'[TIME] Total time for the current time slice: {sliceTime}')
+    slice_times_series.append(sliceTime)
 
+csv_name = "slice_times.csv"
+with open(csv_name, "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["slice", "seconds"])
+    for i, dt in enumerate(slice_times_series, start=1):
+        w.writerow([i, dt])
 
+slice_times = np.asarray(slice_times_series, dtype=np.float64)
+print("\n=== Performance Measurements (Timings) ===")
+print(f"slices measured: {slice_times.size}")
+print(f"mean: {slice_times.mean():.3f} s, std: {slice_times.std():.3f} s")
+print(f"min:  {slice_times.min():.3f} s, max: {slice_times.max():.3f} s")
+print(f"total (measured slices): {slice_times.sum():.3f} s")
+
+print(f"[INFO] Wrote slice time series to {csv_name}")
 file_b = 'beta_cell_' + str(timeslice_tot) + '.vtk'
 file_p = 'dndt_pump_' + str(timeslice_tot) + '.vtk'
 file_A = 'dndt_ASE_' + str(timeslice_tot) + '.vtk'
@@ -399,7 +467,7 @@ print('Calculations finished')
 toc = time.perf_counter()
 elapsed_time= toc - tic
 
-print(f'Time taken: {toc} seconds')
+print(f'Total time taken: {elapsed_time} seconds')
 
 
 
