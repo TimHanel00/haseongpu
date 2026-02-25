@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Carlchristian Eckert
  * @license GPLv3
@@ -37,28 +36,27 @@
 #define V_PROGRESS 32
 #define V_NOLABEL 64
 
-#define COLOR_ERROR 31 //red
-#define COLOR_WARN 31  //red
-#define COLOR_INFO 32  //green
-#define COLOR_STATISTIC 32 //green
-#define COLOR_DEBUG 36  //cyan
-
+#define COLOR_ERROR 31      //red
+#define COLOR_WARN 31       //red
+#define COLOR_INFO 32       //green
+#define COLOR_STATISTIC 32  //green
+#define COLOR_DEBUG 36      //cyan
 
 extern unsigned verbosity;
 
 struct nullstream : std::ostream {
-  nullstream() : std::ostream(0) { }
+  nullstream() : std::ostream(0) {}
 };
 
 /**
  * @brief An output stream that writes to std::cout or std::cerr (depending
  *        on the verbosity that is set.
  *
- *        usage: 
- *        dout(V_ERROR) << ... 
+ *        usage:
+ *        dout(V_ERROR) << ...
  *        writes only, if the verbosity-flag V_ERROR is activated
  *
- * @param activation_level a bitmask containing all the bits, on which 
+ * @param activation_level a bitmask containing all the bits, on which
  *        verbosity levels the output should appear
  *
  */

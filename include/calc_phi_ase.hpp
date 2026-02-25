@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -42,7 +41,7 @@
  *                         in case of adaptive sampling.
  * @param maxRepetitions   Number of Repetitions will
  *                         be done, when not reaching mse threshold
- * @param dMesh            All information about triangles, points, contants. 
+ * @param dMesh            All information about triangles, points, contants.
  *                         Is located in device memory. See mesh.h for details.
  * @param hMesh            Same as dMesh, but locatet in host memory.
  * @param sigmaA           Vector with Absorption values
@@ -59,19 +58,18 @@
  * @param runtime          Reference to the needed runtime.
  *
  **/
-float calcPhiAse ( const unsigned minRaysPerSample,
-		   const unsigned maxRaysPerSample,
-		   const unsigned maxRepetitions,
-		   const Mesh& mesh,
-		   const std::vector<double>& sigmaA,
-		   const std::vector<double>& sigmaE,
-		   const double mseThreshold,
-		   const bool useReflections,
-		   std::vector<float> &hPhiAse,
-		   std::vector<double> &hMse,
-		   std::vector<unsigned> &hTotalRays,
-		   const unsigned gpu_i,
-		   const unsigned minSample_i,
-		   const unsigned maxSample_i,
-		   float &runtime);
-
+float calcPhiAse(const unsigned minRaysPerSample,
+                 const unsigned maxRaysPerSample,
+                 const unsigned maxRepetitions,
+                 const Mesh& mesh,
+                 const std::vector<double>& sigmaA,
+                 const std::vector<double>& sigmaE,
+                 const double mseThreshold,
+                 const bool useReflections,
+                 std::vector<float>& hPhiAse,
+                 std::vector<double>& hMse,
+                 std::vector<unsigned>& hTotalRays,
+                 const unsigned gpu_i,
+                 const unsigned minSample_i,
+                 const unsigned maxSample_i,
+                 float& runtime);

@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -33,8 +32,8 @@
 
 /**
  * @brief A wrapper for calcPhiAse, that distributes sample points
- *        to the available MPI nodes.The Nodes will split 
- *        up in one head node and the others as compute nodes. 
+ *        to the available MPI nodes.The Nodes will split
+ *        up in one head node and the others as compute nodes.
  *        The head node distributes the available sample
  *        points by demand.
  *
@@ -44,7 +43,7 @@
  *                         in case of adaptive sampling.
  * @param maxRepetitions   Number of Repetitions will
  *                         be done, when not reaching mse threshold
- * @param dMesh            All information about triangles, points, contants. 
+ * @param dMesh            All information about triangles, points, contants.
  *                         Is located in device memory. See mesh.h for details.
  * @param hMesh            Same as dMesh, but locatet in host memory.
  * @param hsigmaA           Vector with Absorption values
@@ -59,16 +58,15 @@
  *
  * @return number of used compute nodes
  */
-float calcPhiAseMPI ( const unsigned minRaysPerSample,
-		      const unsigned maxRaysPerSample,
-		      const unsigned maxRepetitions,
-		      const Mesh& mesh,
-		      const std::vector<double>& hSigmaA,
-		      const std::vector<double>& hSigmaE,
-		      const double mseThreshold,
-		      const bool useReflections,
-		      std::vector<float> &hPhiAse,
-		      std::vector<double> &hMse,
-		      std::vector<unsigned> &hTotalRays,
-		      const unsigned gpu_i);
-
+float calcPhiAseMPI(const unsigned minRaysPerSample,
+                    const unsigned maxRaysPerSample,
+                    const unsigned maxRepetitions,
+                    const Mesh& mesh,
+                    const std::vector<double>& hSigmaA,
+                    const std::vector<double>& hSigmaE,
+                    const double mseThreshold,
+                    const bool useReflections,
+                    std::vector<float>& hPhiAse,
+                    std::vector<double>& hMse,
+                    std::vector<unsigned>& hTotalRays,
+                    const unsigned gpu_i);

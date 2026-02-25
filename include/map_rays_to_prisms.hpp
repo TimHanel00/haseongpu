@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Carlchristian Eckert
  * @license GPLv3
@@ -32,13 +31,13 @@
  *        whereas i itself is the new value to be stored in the output array.
  *
  *        example:
- *        raysPerPrism [3,0,2,1] 
+ *        raysPerPrism [3,0,2,1]
  *
- *        3 elements in output should be 0 
- *        0 elements in output should be 1 
- *        2 elements in output should be 2 
+ *        3 elements in output should be 0
+ *        0 elements in output should be 1
+ *        2 elements in output should be 2
  *        1 element  in output should be 3
- *        
+ *
  *        resulting output arrays:
  *        [0 0 0 2 2 3] (indicesOfPrisms)
  *
@@ -50,16 +49,14 @@
  * @param raysPerPrism the input array
  *                       must be equal to the the length of the prefixSum.
  * @param reflectionSlices the number of reflectionSlices. see numberOfPrisms
- * @param raysPerSample the size of indicesOfPrisms/numberOfReflections. Actually 
+ * @param raysPerSample the size of indicesOfPrisms/numberOfReflections. Actually
  *                      identical to the sum of all values in raysPerPrism
  * @param numberOfPrisms the number of prisms. numberOfPrisms * reflectionSlices
  */
-void mapRaysToPrisms(
-    thrust::device_vector<unsigned> &indicesOfPrisms,
-    thrust::device_vector<unsigned> &numberOfReflections,
-    const thrust::device_vector<unsigned> &raysPerPrism,
-    thrust::device_vector<unsigned> &prefixSum,
-    const unsigned reflectionSlices,
-    const unsigned raysPerSample,
-    const unsigned numberOfPrisms
-    );
+void mapRaysToPrisms(thrust::device_vector<unsigned>& indicesOfPrisms,
+                     thrust::device_vector<unsigned>& numberOfReflections,
+                     const thrust::device_vector<unsigned>& raysPerPrism,
+                     thrust::device_vector<unsigned>& prefixSum,
+                     const unsigned reflectionSlices,
+                     const unsigned raysPerSample,
+                     const unsigned numberOfPrisms);

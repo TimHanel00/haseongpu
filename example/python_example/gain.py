@@ -1,4 +1,5 @@
- ##################################################################################
+#!/usr/bin/env python3
+# ##################################################################################
  # Copyright 2013 Daniel Albach, Erik Zenker, Carlchristian Eckert
  #
  # This file is part of HASEonGPU

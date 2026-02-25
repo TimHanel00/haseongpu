@@ -21,17 +21,15 @@
 #pragma once
 #include <mesh.hpp>
 
-float forLoopsClad(
-	std::vector<double> *dndtAse,
-	unsigned &raysPerSample,
-	Mesh *mesh,
-	double *betaCells,
-	float hostNTot,
-	double hostSigmaA,
-	double hostSigmaE,
-	unsigned hostNumberOfPoints,
-	unsigned hostNumberOfTriangles,
-	unsigned hostNumberOfLevels,
-	float hostThicknessOfPrism,
-	float hostCrystalFluorescence	);
-
+float forLoopsClad(std::vector<double>* dndtAse,
+                   unsigned& raysPerSample,
+                   Mesh* mesh,
+                   double* betaCells,
+                   float hostNTot,
+                   double hostSigmaA,
+                   double hostSigmaE,
+                   unsigned hostNumberOfPoints,
+                   unsigned hostNumberOfTriangles,
+                   unsigned hostNumberOfLevels,
+                   float hostThicknessOfPrism,
+                   float hostCrystalFluorescence);

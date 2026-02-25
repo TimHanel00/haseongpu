@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @brief A collection of functions to print the progress
  *        of a process as a nice progressbar
@@ -52,7 +51,6 @@ void simpleProgressBar(unsigned part, unsigned full);
  */
 void fancyProgressBar(const unsigned nTotal);
 
-
 /**
  * @brief DEPRECATED!
  *        writes the progress of an operation into dout(V_PROGRESS),
@@ -63,8 +61,7 @@ void fancyProgressBar(const unsigned nTotal);
  * @param path the name of the file to write
  *
  */
-void fancyProgressBar(const unsigned current,const unsigned nTotal);
-
+void fancyProgressBar(const unsigned current, const unsigned nTotal);
 
 /**
  * @brief writes the progress of an operation into a given file,

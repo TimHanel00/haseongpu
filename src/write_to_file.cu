@@ -26,11 +26,11 @@
 #include <write_to_file.hpp>
 
 int writeValueToFile(
-    const float value, 
-    const std::string path, 
-    const std::string indexName1, 
-    const int index1, 
-    const std::string indexName2, 
+    const float value,
+    const std::string path,
+    const std::string indexName1,
+    const int index1,
+    const std::string indexName2,
     const int index2
     ){
 

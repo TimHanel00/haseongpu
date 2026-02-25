@@ -55,9 +55,9 @@
 // default without V_DEBUG
 unsigned verbosity = V_ERROR | V_INFO | V_WARNING | V_PROGRESS | V_STAT; // extern through logging.hpp
 
-/** 
+/**
  * @brief Calculates dndt ASE from phi ASE values
- * 
+ *
  * @param mesh needed for some constants
  * @param sigmaA absorption
  * @param sigmaE emission
@@ -84,7 +84,7 @@ int main(int argc, char **argv){
   float runtime = 0.0;
   bool writeVtk = false;
   bool useReflections = false;
-  std::vector<unsigned> devices; 
+  std::vector<unsigned> devices;
   unsigned maxGpus = 0;
   DeviceMode deviceMode = NO_DEVICE_MODE;
   ParallelMode parallelMode = NO_PARALLEL_MODE;
@@ -105,10 +105,10 @@ int main(int argc, char **argv){
 
   // Parse Commandline
   parseCommandLine(argc, argv, &minRaysPerSample, &maxRaysPerSample, &inputPath,
-		   &writeVtk, &deviceMode, &parallelMode, &useReflections, &maxGpus, &minSampleRange, &maxSampleRange, &maxRepetitions, &outputPath, &mseThreshold, &lambdaResolution);
+           &writeVtk, &deviceMode, &parallelMode, &useReflections, &maxGpus, &minSampleRange, &maxSampleRange, &maxRepetitions, &outputPath, &mseThreshold, &lambdaResolution);
 
   printCommandLine(minRaysPerSample, maxRaysPerSample, inputPath,
-		   writeVtk, compareLocation, deviceMode, parallelMode, useReflections, maxGpus, minSampleRange, maxSampleRange, maxRepetitions, outputPath, mseThreshold);
+           writeVtk, compareLocation, deviceMode, parallelMode, useReflections, maxGpus, minSampleRange, maxSampleRange, maxRepetitions, outputPath, mseThreshold);
   // Set/Test device to run experiment with
   //
   //TODO: this call takes a LOT of time (2-5s). Can this be avoided?
@@ -127,7 +127,7 @@ int main(int argc, char **argv){
   if(fileToVector(inputPath + "lambdaE.txt", &lambdaE)) return 1;
   lambdaResolution = std::max(lambdaResolution, (unsigned) lambdaA.size());
   lambdaResolution = std::max(lambdaResolution, (unsigned) lambdaE.size());
-  
+
   assert(sigmaA.size() == lambdaA.size());
   assert(sigmaE.size() == lambdaE.size());
 
@@ -194,7 +194,7 @@ int main(int argc, char **argv){
             unsigned maxSample_i = min((float)samplesPerNode, (gpu_i + 1) * samplePerGpu);
 
             minSample_i += minSampleRange;
-            maxSample_i += minSampleRange; 
+            maxSample_i += minSampleRange;
 
             threadIds[gpu_i] = calcPhiAseThreaded( minRaysPerSample,
                 maxRaysPerSample,
@@ -204,8 +204,8 @@ int main(int argc, char **argv){
                 sigmaEInterpolated,
                 mseThreshold,
                 useReflections,
-                phiAse, 
-                mse, 
+                phiAse,
+                mse,
                 totalRays,
                 devices.at(gpu_i),
                 minSample_i,
@@ -218,7 +218,7 @@ int main(int argc, char **argv){
           for(std::vector<float>::iterator it = runtimes.begin(); it != runtimes.end(); ++it){
             runtime = max(*it, runtime);
           }
-          cudaDeviceReset();      
+          cudaDeviceReset();
           runmode="GPU mode Threaded";
           break;
 
@@ -258,7 +258,7 @@ int main(int argc, char **argv){
     for(unsigned sample_i = 0; sample_i < meshs[0].numberOfSamples; ++sample_i){
       dndtAse.at(sample_i) = calcDndtAse(meshs[0], maxSigmaA, maxSigmaE, phiAse.at(sample_i), sample_i);
       if(sample_i <=10)
-	dout(V_DEBUG) << "Dndt ASE[" << sample_i << "]: " << dndtAse.at(sample_i) << " " << mse.at(sample_i) << std::endl;
+    dout(V_DEBUG) << "Dndt ASE[" << sample_i << "]: " << dndtAse.at(sample_i) << " " << mse.at(sample_i) << std::endl;
     }
     for(unsigned sample_i = 0; sample_i < meshs[0].numberOfSamples; ++sample_i){
       dout(V_DEBUG) << "PHI ASE[" << sample_i << "]: " << phiAse.at(sample_i) << " " << mse.at(sample_i) <<std::endl;
@@ -269,11 +269,11 @@ int main(int argc, char **argv){
   // Write experiment data
   // output folder has to be the same as TMP_FOLDER in the calling MatLab script
   writeMatlabOutput(outputPath,
-		    phiAse,
-		    totalRays,
-		    mse,
-		    meshs[0].numberOfSamples,
-		    meshs[0].numberOfLevels);
+            phiAse,
+            totalRays,
+            mse,
+            meshs[0].numberOfSamples,
+            meshs[0].numberOfLevels);
 
   // Write solution to vtk files
   if(writeVtk){

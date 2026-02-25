@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -33,7 +32,7 @@
 /**
  * @brief Calculates the reflectionPoint and reflectionAngle with upper or lower surface
  *        of gain medium. Depending on the number of reflection the
- *        ray still has to do and the reflection surface. 
+ *        ray still has to do and the reflection surface.
  *
  * @param startPoint      Point where the ray should start from.
  * @param endPoint        Point where the will end.
@@ -47,12 +46,10 @@
  *         1 otherwise
  *
  */
-__device__ int calcNextReflection(const Point startPoint, 
-				  const Point endPoint, 
-				  const unsigned reflectionsLeft, 
-				  const ReflectionPlane reflectionPlane, 
-				  Point *reflectionPoint, 
-				  double *reflectionAngle, 
-				  const Mesh &mesh);
-
-
+__device__ int calcNextReflection(const Point startPoint,
+                                  const Point endPoint,
+                                  const unsigned reflectionsLeft,
+                                  const ReflectionPlane reflectionPlane,
+                                  Point* reflectionPoint,
+                                  double* reflectionAngle,
+                                  const Mesh& mesh);

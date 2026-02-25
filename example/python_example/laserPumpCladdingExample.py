@@ -1,4 +1,5 @@
-# ##################################################################################
+#!/usr/bin/env python3
+###################################################################################
  # Copyright 2013 Daniel Albach, Erik Zenker, Carlchristian Eckert
  #
  # This file is part of HASEonGPU
@@ -475,5 +476,3 @@ if __name__ == "__main__":
             f"Material path '{material_path}' is not a file."
         )
     main(material_path=args.material)
-
-

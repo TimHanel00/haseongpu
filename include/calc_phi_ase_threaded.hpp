@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -28,7 +27,7 @@
 
 #pragma once
 #include <pthread.h> /* pthread_t */
-#include <vector> /* std::vector */
+#include <vector>    /* std::vector */
 
 #include <mesh.hpp>
 
@@ -43,7 +42,7 @@
  *                         in case of adaptive sampling.
  * @param maxRepetitions   Number of Repetitions will
  *                         be done, when not reaching mse threshold
- * @param dMesh            All information about triangles, points, contants. 
+ * @param dMesh            All information about triangles, points, contants.
  *                         Is located in device memory. See mesh.h for details.
  * @param hMesh            Same as dMesh, but locatet in host memory.
  * @param sigmaA           Vector with Absorption values
@@ -63,25 +62,23 @@
  *             or should be replaced by c++11 threads
  * @return     threadId
  */
-pthread_t calcPhiAseThreaded( const unsigned minRaysPerSample,
-			      const unsigned maxRaysPerSample,
-			      const unsigned maxRepetitions,
-			      const Mesh& mesh,
-			      const std::vector<double>& sigmaA,
-			      const std::vector<double>& sigmaE,
-			      const double mseThreshold,
-			      const bool useReflections,
-			      std::vector<float> &phiAse,
-			      std::vector<double> &mse,
-			      std::vector<unsigned> &totalRays,
-			      const unsigned gpu_i,
-			      const unsigned minSample_i,
-			      const unsigned maxSample_i,
-			      float &runtime);
+pthread_t calcPhiAseThreaded(const unsigned minRaysPerSample,
+                             const unsigned maxRaysPerSample,
+                             const unsigned maxRepetitions,
+                             const Mesh& mesh,
+                             const std::vector<double>& sigmaA,
+                             const std::vector<double>& sigmaE,
+                             const double mseThreshold,
+                             const bool useReflections,
+                             std::vector<float>& phiAse,
+                             std::vector<double>& mse,
+                             std::vector<unsigned>& totalRays,
+                             const unsigned gpu_i,
+                             const unsigned minSample_i,
+                             const unsigned maxSample_i,
+                             float& runtime);
 /**
  * @brief Wait for all threads to finish
  *
  */
 void joinAll(std::vector<pthread_t> threadIds);
-
-

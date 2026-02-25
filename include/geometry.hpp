@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -58,11 +57,9 @@ struct NormalRay {
   TwoDimDir dir;
 };
 
-enum ReflectionPlane {TOP_REFLECTION = 1, BOTTOM_REFLECTION = -1};
+enum ReflectionPlane { TOP_REFLECTION = 1, BOTTOM_REFLECTION = -1 };
 
 __host__ __device__ Vector direction(Point startPoint, Point endPoint);
 __host__ __device__ float distance(Point startPoint, Point endPoint);
 __host__ __device__ Ray generateRay(Point startPoint, Point endPoint);
 __host__ __device__ Ray normalizeRay(Ray ray);
-
-

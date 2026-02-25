@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -28,19 +27,18 @@
  */
 
 #pragma once
-#include <string>  /* string */
+#include <string> /* string */
 #include <iostream>
 #include <fstream> /* ifstream */
 #include <cstdlib> /* atof */
-#include <vector> 
+#include <vector>
 
 #include <logging.hpp>
 #include <mesh.hpp>
 #include <nan_fix.hpp>
 
-enum DeviceMode { NO_DEVICE_MODE, GPU_DEVICE_MODE, CPU_DEVICE_MODE};
+enum DeviceMode { NO_DEVICE_MODE, GPU_DEVICE_MODE, CPU_DEVICE_MODE };
 enum ParallelMode { NO_PARALLEL_MODE, THREADED_PARALLEL_MODE, MPI_PARALLEL_MODE };
-
 
 /**
  * @brief Parses a given file(filename) line by line.
@@ -49,31 +47,30 @@ enum ParallelMode { NO_PARALLEL_MODE, THREADED_PARALLEL_MODE, MPI_PARALLEL_MODE 
  *        int, float, double).
  *
  * @param filename file to parse
- * @param vector contains the parsed values 
+ * @param vector contains the parsed values
  *
  * @return 1 if parsing was succesful (file can be opened)
  * @return 0 otherwise
  **/
 template <class T>
-int fileToVector(const std::string filename, std::vector<T> *v){
+int fileToVector(const std::string filename, std::vector<T>* v) {
   std::string line;
-  std::ifstream fileStream; 
+  std::ifstream fileStream;
   T value = 0.0;
 
   fileStream.open(filename.c_str());
-  if(fileStream.is_open()){
-    while(fileStream.good()){
+  if (fileStream.is_open()) {
+    while (fileStream.good()) {
       std::getline(fileStream, line);
-      value = (T) atof(line.c_str());
-      if(isNaN(value)){
-	dout(V_ERROR) << "NAN in input data: " << filename << std::endl;
-	exit(1);
+      value = (T)atof(line.c_str());
+      if (isNaN(value)) {
+        dout(V_ERROR) << "NAN in input data: " << filename << std::endl;
+        exit(1);
       }
       v->push_back(value);
     }
 
-  }
-  else{
+  } else {
     dout(V_ERROR) << "Can't open file " << filename << std::endl;
     fileStream.close();
     return 1;
@@ -81,7 +78,6 @@ int fileToVector(const std::string filename, std::vector<T> *v){
   v->pop_back();
   fileStream.close();
   return 0;
-  
 }
 /**
  * @brief Parses just one line(value) of a given file(filename).
@@ -89,92 +85,75 @@ int fileToVector(const std::string filename, std::vector<T> *v){
  *        int, float, double).
  *
  * @param filename file to parse
- * @param value is the value which was parsed 
+ * @param value is the value which was parsed
  *
  * @return 1 if parsing was succesful (file can be opened)
  * @return 0 otherwise
  **/
 template <class T>
-int fileToValue(const std::string filename, T &value){
+int fileToValue(const std::string filename, T& value) {
   std::string line;
-  std::ifstream fileStream; 
+  std::ifstream fileStream;
 
   fileStream.open(filename.c_str());
-  if(fileStream.is_open()){
-      std::getline(fileStream, line);
-      value = (T) atof(line.c_str());
-  }
-  else{
+  if (fileStream.is_open()) {
+    std::getline(fileStream, line);
+    value = (T)atof(line.c_str());
+  } else {
     dout(V_ERROR) << "Can't open file " << filename << std::endl;
     fileStream.close();
     return 1;
   }
   fileStream.close();
   return 0;
-  
 }
 
+void parseCommandLine(const int argc,
+                      char** argv,
+                      unsigned* raysPerSample,
+                      unsigned* maxRaysPerSample,
+                      std::string* inputPath,
+                      bool* writeVtk,
+                      DeviceMode* deviceMode,
+                      ParallelMode* parallelMode,
+                      bool* useReflections,
+                      unsigned* maxgpus,
+                      int* minSample_i,
+                      int* maxSample_i,
+                      unsigned* maxRepetitions,
+                      std::string* outputPath,
+                      double* mseThreshold,
+                      unsigned* lambdaResolution);
 
-void parseCommandLine(
-    const int argc,
-    char** argv,
-    unsigned *raysPerSample,
-    unsigned *maxRaysPerSample,
-    std::string *inputPath,
-    bool *writeVtk,
-    DeviceMode *deviceMode,
-    ParallelMode *parallelMode,
-    bool *useReflections,
-    unsigned *maxgpus,
-    int *minSample_i,
-    int *maxSample_i,
-    unsigned *maxRepetitions,
-    std::string *outputPath,
-    double *mseThreshold,
-    unsigned *lambdaResolution
-    );
+void printCommandLine(unsigned raysPerSample,
+                      unsigned maxRaysPerSample,
+                      std::string inputPath,
+                      bool writeVtk,
+                      std::string compareLocation,
+                      const DeviceMode deviceMode,
+                      const ParallelMode parallelMode,
+                      bool useReflections,
+                      unsigned maxgpus,
+                      int minSample_i,
+                      int maxSample_i,
+                      unsigned maxRepetitions,
+                      std::string outputPath,
+                      double mseThreshold);
 
-void printCommandLine(
-    unsigned raysPerSample,
-    unsigned maxRaysPerSample,
-    std::string inputPath,
-    bool writeVtk,
-    std::string compareLocation,
-    const DeviceMode deviceMode,
-    const ParallelMode parallelMode,
-    bool useReflections,
-    unsigned maxgpus,
-    int minSample_i,
-    int maxSample_i,
-    unsigned maxRepetitions,
-    std::string outputPath,
-    double mseThreshold
-    );
+int checkParameterValidity(const int argc,
+                           const unsigned raysPerSample,
+                           unsigned* maxRaysPerSample,
+                           const std::string inputPath,
+                           const unsigned deviceCount,
+                           const DeviceMode deviceMode,
+                           const ParallelMode parallelMode,
+                           unsigned* maxgpus,
+                           const int minSample_i,
+                           const int maxSample_i,
+                           const unsigned maxRepetitions,
+                           const std::string outputPath,
+                           double* mseThreshold);
 
-int checkParameterValidity(
-    const int argc,
-    const unsigned raysPerSample,
-    unsigned *maxRaysPerSample,
-    const std::string inputPath,
-    const unsigned deviceCount,
-    const DeviceMode deviceMode,
-    const ParallelMode parallelMode,
-    unsigned *maxgpus,
-    const int minSample_i,
-    const int maxSample_i,
-    const unsigned maxRepetitions,
-    const std::string outputPath,
-    double *mseThreshold
-    );
+void checkSampleRange(int* minSampleRange, int* maxSampleRange, const unsigned numberOfSamples);
 
-void checkSampleRange(
-	int* minSampleRange,
-	int* maxSampleRange,
-	const unsigned numberOfSamples
-	);
-
-std::vector<Mesh> parseMesh(std::string rootPath,
-			    std::vector<unsigned> devices,
-			    unsigned maxGpus);
-
-
+std::vector<Mesh> parseMesh(std::string rootPath, std::vector<unsigned> devices, unsigned maxGpus);

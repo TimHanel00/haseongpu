@@ -18,14 +18,12 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #pragma once
 #ifndef __GCC__
-#pragma GCC diagnostic push 
-#pragma GCC diagnostic ignored "-Wunused-parameter" 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
 #endif
 #include <thrust/host_vector.h>
 #ifndef __GCC__
 #pragma GCC diagnostic pop
 #endif
-

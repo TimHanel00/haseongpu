@@ -2,7 +2,7 @@
 ================================================================================
 
 **Copyright 2014** Erik Zenker, Carlchristian Eckert, Marius Melzer,
-	    	       Daniel Albach
+                   Daniel Albach
 
 
 HASEonGPU is a fast GPU-implementation of a Monte-Carlo

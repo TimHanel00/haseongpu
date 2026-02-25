@@ -18,10 +18,9 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Carlchristan Eckert
- * @author Erik Zenker 
+ * @author Erik Zenker
  * @license GPLv3
  */
 
@@ -29,7 +28,7 @@
 #include <string>
 #include <vector>
 
-/** 
+/**
  * @brief writes a value to a file, where the filename is appended with 2 longish indices
  *
  * @param value the value to write to a file
@@ -39,15 +38,12 @@
  * @param indexName2 identifier of the second index
  * @param index2 the value of the second index
  */
-int writeValueToFile(
-    const float value, 
-    const std::string path, 
-    const std::string indexName1, 
-    const int index1, 
-    const std::string indexName2, 
-    const int index2
-    );
-
+int writeValueToFile(const float value,
+                     const std::string path,
+                     const std::string indexName1,
+                     const int index1,
+                     const std::string indexName2,
+                     const int index2);
 
 /**
  * @brief writes a vector to a file

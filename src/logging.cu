@@ -63,4 +63,3 @@ std::ostream& dout(unsigned activation_level) {
 
   return std::cout;
 }
-

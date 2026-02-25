@@ -48,7 +48,7 @@ void ray_histogram(const std::vector<unsigned> totalRays, const unsigned max, co
       //itG->second++;
     } else{
       histRed.find(totalRays.at(j))->second++;
-      //itR->second++; 
+      //itR->second++;
     }
   }
 
@@ -65,13 +65,13 @@ void ray_histogram(const std::vector<unsigned> totalRays, const unsigned max, co
     // set color = green
     dout(V_STAT | V_NOLABEL) << "\033[0;32m";
     for(unsigned j=0;j< ceil(maxLength*(float(itG->second)/totalRays.size())) ; ++j){
-      dout(V_STAT | V_NOLABEL) << "#"; 
+      dout(V_STAT | V_NOLABEL) << "#";
     }
 
     // set color = red
     dout(V_STAT | V_NOLABEL) << "\033[0;31m";
     for(unsigned j=0;j< ceil(maxLength*(float(itR->second)/totalRays.size())) ; ++j){
-      dout(V_STAT | V_NOLABEL) << "#"; 
+      dout(V_STAT | V_NOLABEL) << "#";
     }
     dout(V_STAT | V_NOLABEL) << std::endl;
   }

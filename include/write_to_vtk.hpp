@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -32,7 +31,7 @@
 #include <mesh.hpp>
 
 /**
- * @brief creates a VTK file based on the mesh structure and 
+ * @brief creates a VTK file based on the mesh structure and
  *        the dnd_ase values from a finished experiment
  *
  * @param mesh all information about triangles, points, contants. See mesh.h for details
@@ -47,16 +46,16 @@
  * @return 0
  */
 int writePointsToVtk(const Mesh& mesh,
-	       const std::vector<double> ase,
-	       const std::string filename, 
-	       const unsigned minRaysPerSample,
-	       const unsigned maxRaysPerSample,
-	       const float mseThreshold,
-	       const bool useReflections,
-	       const float runtime);
+                     const std::vector<double> ase,
+                     const std::string filename,
+                     const unsigned minRaysPerSample,
+                     const unsigned maxRaysPerSample,
+                     const float mseThreshold,
+                     const bool useReflections,
+                     const float runtime);
 
 /**
- * @brief creates a VTK file based on the mesh structure and 
+ * @brief creates a VTK file based on the mesh structure and
  *        the values within prisms from a finished experiment
  *
  * @param mesh all information about triangles, points, contants. See mesh.h for details
@@ -71,23 +70,20 @@ int writePointsToVtk(const Mesh& mesh,
  * @return 0
  */
 int writePrismToVtk(const Mesh& mesh,
-	       const std::vector<double> prismData,
-	       const std::string filename, 
-	       const unsigned minRaysPerSample,
-	       const unsigned maxRaysPerSample,
-	       const float mseThreshold,
-	       const bool useReflections,
-	       const float runtime);
+                    const std::vector<double> prismData,
+                    const std::string filename,
+                    const unsigned minRaysPerSample,
+                    const unsigned maxRaysPerSample,
+                    const float mseThreshold,
+                    const bool useReflections,
+                    const float runtime);
 
 /**
  * @brief Compares a dataset with data that is extracted from a vtk-file.
- *   
+ *
  * @param compare the vector to compare with the VTK-data
  * @param filename the filename of the VTK-file to use for comparison
  * @return a vector containing the difference between "compare" and "data"
  *
  */
 std::vector<double> compareVtk(std::vector<double> compare, std::string filename);
-
-
-

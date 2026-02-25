@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -36,7 +35,7 @@
  * @param sample_i         Index of sample point for which importance sampling should be done.
  * @param reflectionSlices 1 + (2 * maxReflections) - Coded information about how many
  *                         reflections a ray should do and on which surface to start.
- * @param dMesh            All information about triangles, points, contants. 
+ * @param dMesh            All information about triangles, points, contants.
  *                         Is located on device memory. See mesh.h for details.
  * @param sigmaA           Absorption value of the ray.
  * @param sigmaE           Emission value of the ray.
@@ -46,13 +45,13 @@
  *
  */
 void importanceSamplingPropagation(unsigned sample_i,
-				   const unsigned reflectionSlices,
-				   Mesh dMesh,
-				   const double sigmaA,
-				   const double sigmaE,
-				   double *preImportance,
-				   dim3 blockDim,
-				   dim3 gridDim);
+                                   const unsigned reflectionSlices,
+                                   Mesh dMesh,
+                                   const double sigmaA,
+                                   const double sigmaE,
+                                   double* preImportance,
+                                   dim3 blockDim,
+                                   dim3 gridDim);
 
 /**
  * @brief Calculates importance and ray distribution on prisms.
@@ -60,7 +59,7 @@ void importanceSamplingPropagation(unsigned sample_i,
  *
  * @param reflectionSlices   1 + (2 * maxReflections) - Coded information about how many
  *                           reflections a ray should do and on which surface to start.
- * @param dMesh              All information about triangles, points, contants. 
+ * @param dMesh              All information about triangles, points, contants.
  *                           Is located on device memory. See mesh.h for details.
  * @param raysPerSample      Number of rays that should be distributed on gain medium.
  * @param preImportance      Values calculated from importanceSamplingPropagation.
@@ -74,13 +73,12 @@ void importanceSamplingPropagation(unsigned sample_i,
  *
  */
 unsigned importanceSamplingDistribution(const unsigned reflectionSlices,
-					Mesh dMesh,
-					const unsigned raysPerSample,
-					double *preImportance,
-					double *importance,
-					unsigned *raysPerPrism,
-					double hSumPhi,
-					const bool distributeRandomly,
-					dim3 blockDim,
-					dim3 gridDim);
-
+                                        Mesh dMesh,
+                                        const unsigned raysPerSample,
+                                        double* preImportance,
+                                        double* importance,
+                                        unsigned* raysPerPrism,
+                                        double hSumPhi,
+                                        const bool distributeRandomly,
+                                        dim3 blockDim,
+                                        dim3 gridDim);

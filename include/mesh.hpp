@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Erik Zenker
  * @author Carlchristian Eckert
@@ -38,7 +37,6 @@
 #define REFLECTION_SMALL 1E-3
 #define SMALL 1E-5
 #define VERY_SMALL 0.0
-
 
 /**
  * @brief Contains the structure of the crystal
@@ -75,9 +73,9 @@
  *           [ triangle1edge0, triangle2edge0, ... triangleNedge0, triangle1edge1, triangle2edge1, ... ]
  *           i.e. all first edges of each triangle, followed by all second edges of each triangle and so on.
  *
- * trianglesPointIndices contains the indices to access the "points" datastructure 
+ * trianglesPointIndices contains the indices to access the "points" datastructure
  *           (each triangle has 3 points as vertices). Each entry is an
- *           index from 0 to numberOfPoints, corresponding to the positions 
+ *           index from 0 to numberOfPoints, corresponding to the positions
  *           of a vertex in "points".
  *           structure is similar to "forbiddenEdge":
  *           [ triangle1A, triangle2A, ... triangleNA, triangle1B, triangle2B, ... triangleNB, triangle1C, ... ]
@@ -95,66 +93,64 @@
  *             are stored in this list.
  *             Indices point to locations in "points" (i.e. normal vectors start at
  *             triangle vertices!)
- *             structure is VERY similar to trianglePointIndices: 
+ *             structure is VERY similar to trianglePointIndices:
  *             [ triangle1p0, triangle2p0, ... triangleNp0, triangle1p1, triangle2p1, ... ]
  *
  * refractiveIndices [0]->bottomInside, [1]->bottomOutside, [2]->topInside, [3]->topOutside
- * 
+ *
  * reflectivities Contains the reflectivities for upper and lower surface of gain medium
  *                Structure is based on 2 layers of triangles:
  *                [refl_tri1_bott, refl_tri2_bott, ...,refl_triN_bott, refl_tri1_top, refl_tri2_top, ..., refl_triN_top]
- * 
+ *
  * totalReflectionAngles [0]-> bottomTotalReflectionAngle, [1]-> topTotalReflectionAngle
  */
 class Mesh {
- public:
-
+public:
   //Mesh();
-  Mesh(// Constants
-       double claddingAbsorption,
-       float surfaceTotal,
-       float thickness,
-       float nTot,
-       float crystalTFluo,
-       unsigned numberOfTriangles,
-       unsigned numberOfLevels,
-       unsigned numberOfPrisms,
-       unsigned numberOfPoints,
-       unsigned numberOfSamples,
-       unsigned claddingNumber,
-       // Vectors
-       std::vector<double> points,
-       std::vector<double> normalVec,
-       std::vector<double> betaVolume,
-       std::vector<double> centers,
-       std::vector<float> triangleSurfaces,
-       std::vector<int> forbiddenEdge,
-       std::vector<double> betaCells,
-       std::vector<unsigned> claddingCellTypes,
-       std::vector<float> refractiveIndices,
-       std::vector<float> reflectivities,
-       std::vector<float> totalReflectionAngles,
-       std::vector<unsigned> trianglePointIndices,
-       std::vector<int> triangleNeighbors,
-       std::vector<unsigned> triangleNormalPoint);
+  Mesh(  // Constants
+      double claddingAbsorption,
+      float surfaceTotal,
+      float thickness,
+      float nTot,
+      float crystalTFluo,
+      unsigned numberOfTriangles,
+      unsigned numberOfLevels,
+      unsigned numberOfPrisms,
+      unsigned numberOfPoints,
+      unsigned numberOfSamples,
+      unsigned claddingNumber,
+      // Vectors
+      std::vector<double> points,
+      std::vector<double> normalVec,
+      std::vector<double> betaVolume,
+      std::vector<double> centers,
+      std::vector<float> triangleSurfaces,
+      std::vector<int> forbiddenEdge,
+      std::vector<double> betaCells,
+      std::vector<unsigned> claddingCellTypes,
+      std::vector<float> refractiveIndices,
+      std::vector<float> reflectivities,
+      std::vector<float> totalReflectionAngles,
+      std::vector<unsigned> trianglePointIndices,
+      std::vector<int> triangleNeighbors,
+      std::vector<unsigned> triangleNormalPoint);
 
-
-  constHybridVector<double>   points;
-  constHybridVector<double>   betaVolume;
-  constHybridVector<double>   normalVec;
-  constHybridVector<double>   centers;
-  constHybridVector<float>    triangleSurfaces;
-  constHybridVector<int>      forbiddenEdge;
-  constHybridVector<double>   betaCells;
+  constHybridVector<double> points;
+  constHybridVector<double> betaVolume;
+  constHybridVector<double> normalVec;
+  constHybridVector<double> centers;
+  constHybridVector<float> triangleSurfaces;
+  constHybridVector<int> forbiddenEdge;
+  constHybridVector<double> betaCells;
   constHybridVector<unsigned> claddingCellTypes;
 
-  constHybridVector<float>    refractiveIndices; 
-  constHybridVector<float>    reflectivities;   //based on triangleIndex, with offset from bottom/top
-  constHybridVector<float>    totalReflectionAngles;
+  constHybridVector<float> refractiveIndices;
+  constHybridVector<float> reflectivities;  //based on triangleIndex, with offset from bottom/top
+  constHybridVector<float> totalReflectionAngles;
 
   // Indexstructs
   constHybridVector<unsigned> trianglePointIndices;
-  constHybridVector<int>      triangleNeighbors;
+  constHybridVector<int> triangleNeighbors;
   constHybridVector<unsigned> triangleNormalPoint;
 
   // Constants
@@ -173,7 +169,9 @@ class Mesh {
   ~Mesh();
 
   __device__ int getNeighbor(unsigned triangle, int edge) const;
-  __device__ Point genRndPoint(unsigned triangle, unsigned level, curandStateMtgp32 *globalState) const;
+  __device__ Point genRndPoint(unsigned triangle,
+                               unsigned level,
+                               curandStateMtgp32* globalState) const;
   __device__ double getBetaVolume(unsigned triangle, unsigned level) const;
   __device__ double getBetaVolume(unsigned prism) const;
   __device__ NormalRay getNormal(unsigned triangle, int edge) const;
@@ -182,14 +180,12 @@ class Mesh {
   __device__ int getForbiddenEdge(unsigned triangle, int edge) const;
   __device__ unsigned getCellType(unsigned triangle) const;
 
-
   unsigned getMaxReflections(ReflectionPlane reflectionPlane) const;
   unsigned getMaxReflections() const;
 
-  __device__ __host__ float getReflectivity(ReflectionPlane reflectionPlane, unsigned triangle) const;
+  __device__ __host__ float getReflectivity(ReflectionPlane reflectionPlane,
+                                            unsigned triangle) const;
   __device__ __host__ float getReflectionAngle(ReflectionPlane reflectionPlane) const;
 
   __device__ __host__ void test() const;
-
 };
-

@@ -32,19 +32,19 @@
 #include <mesh.hpp>
 
 
-/** 
+/**
  * @brief takes data and creates a nice VTK-file usable with paraview
  *
- * @param 
+ * @param
  */
 int writeToVtk(const Mesh& mesh,
-	       const std::vector<double> data,
-	       const std::string pfilename,
-	       const unsigned raysPerSample,
-	       const unsigned maxRaysPerSample,
-	       const float expectationThreshold,
-	       const bool useReflections,
-	       const float runtime,
+           const std::vector<double> data,
+           const std::string pfilename,
+           const unsigned raysPerSample,
+           const unsigned maxRaysPerSample,
+           const float expectationThreshold,
+           const bool useReflections,
+           const float runtime,
          const std::string vtkType){
 
   const double* vertexCoordinates = mesh.points.toArray();
@@ -58,7 +58,7 @@ int writeToVtk(const Mesh& mesh,
 
   // Construct experiment information
   unsigned r = useReflections ? mesh.getMaxReflections() : 0;
-  
+
   std::stringstream experimentStream;
   experimentStream << "RAYS=" << raysPerSample << " MAXRAYS=" << maxRaysPerSample << " REFLECTIONS=" << r << " EXPECTATION=" << expectationThreshold << " RUNTIME=" << runtime;
 
@@ -91,7 +91,7 @@ int writeToVtk(const Mesh& mesh,
   vtkFile << "CELLS" << " " << numberOfCells << " " << numberOfCells * 7 << std::endl;
   for(unsigned level_i=0; level_i < (numberOfLevels - 1); ++level_i){
     for(unsigned triangle_i=0; triangle_i < trianglesPerLevel; ++triangle_i){
-      vtkFile << "6 " 
+      vtkFile << "6 "
         << level_i     * verticesPerLevel + triangles[triangle_i] << " "
         << level_i     * verticesPerLevel + triangles[trianglesPerLevel + triangle_i] << " "
         << level_i     * verticesPerLevel + triangles[2 * trianglesPerLevel + triangle_i] << " "

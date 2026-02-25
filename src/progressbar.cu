@@ -100,7 +100,7 @@ void fancyProgressBar(const unsigned nTotal){
   static unsigned maxNTotal = 0;
   static timeval startTime;
   static unsigned part = 0;
-  
+
   //find the starting time of the whole progress
   if(part==0){ gettimeofday(&startTime,NULL); }
   maxNTotal = max(maxNTotal, nTotal);
@@ -111,7 +111,7 @@ void fancyProgressBar(const unsigned nTotal){
   ++part;
 
   //limit the update intervall (not faster than every 35ms, since that would be madness)
-  unsigned long long millisSpent = timevalDiffInMillis(startTime,now); 
+  unsigned long long millisSpent = timevalDiffInMillis(startTime,now);
   if(millisSpent > 35*tic || part==maxNTotal){
     ++tic;
 
@@ -150,7 +150,7 @@ void fancyProgressBar(const unsigned current, const unsigned nTotal){
   part=current;
 
   //limit the update intervall (not faster than every 35ms, since this would be madness)
-  unsigned long long millisSpent = timevalDiffInMillis(startTime,now); 
+  unsigned long long millisSpent = timevalDiffInMillis(startTime,now);
   if(millisSpent > 35*tic || part==maxNTotal){
     ++tic;
 
@@ -179,7 +179,7 @@ void fileProgressBar(unsigned nTotal, std::string path){
   std::ofstream filestream;
   static timeval startTime;
   static unsigned part = 0;
-  //if this is the first call, set the start time 
+  //if this is the first call, set the start time
   if(part==0){ gettimeofday(&startTime,NULL); }
   static const unsigned fillwidthPart = unsigned(1+log10(nTotal));
   static unsigned tic  = 0;
@@ -188,7 +188,7 @@ void fileProgressBar(unsigned nTotal, std::string path){
   ++part;
 
   //limit the update intervall (not faster than every 35ms, since that would be madness)
-  unsigned long long millisSpent = timevalDiffInMillis(startTime,now); 
+  unsigned long long millisSpent = timevalDiffInMillis(startTime,now);
   if(millisSpent > 35*tic || part==nTotal){
     ++tic;
 
@@ -219,4 +219,3 @@ void fileProgressBar(unsigned nTotal, std::string path){
     filestream.close();
   }
 }
-

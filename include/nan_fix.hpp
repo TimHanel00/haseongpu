@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 /**
  * @author Carlchristian Eckert
  * @licence GPLv3
@@ -31,23 +30,12 @@
  * @brief this allows the use of isnan() for int and unsigned
  * in the template function fileToVector()
  */
-inline bool isNaN(const int i){
-  return false;
-}
+inline bool isNaN(const int i) { return false; }
 
-inline bool isNaN(const unsigned int i){
-  return false;
-}
+inline bool isNaN(const unsigned int i) { return false; }
 
-inline bool isNaN(const float i){
-  return isnan(i);
-}
+inline bool isNaN(const float i) { return isnan(i); }
 
-inline bool isNaN(const double i){
-  return isnan(i);
-}
+inline bool isNaN(const double i) { return isnan(i); }
 
-inline bool isNaN(const long double i){
-  return isnan(i);
-}
-
+inline bool isNaN(const long double i) { return isnan(i); }

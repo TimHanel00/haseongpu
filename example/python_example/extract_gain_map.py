@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 #  Copyright 2013 Daniel Albach, Erik Zenker, Carlchristian Eckert
 #
@@ -17,7 +18,6 @@
 #  along with HASEonGPU.
 #  If not, see <http://www.gnu.org/licenses/>.
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 import numpy as np
 import scipy.io
 import time
@@ -37,7 +37,7 @@ for i_s in range(1, timeslices_tot + 1):
 
     # Load MATLAB file
     mat_data = scipy.io.loadmat(filename)
-    
+
     # Extract relevant variables from mat_data
     pump = mat_data['pump']
     steps = mat_data['steps']
@@ -45,7 +45,7 @@ for i_s in range(1, timeslices_tot + 1):
     p = mat_data['p']
     beta_cell = mat_data['beta_cell']
     laser = mat_data['laser']
-    
+
     time_step = pump['T'][0][0] / (steps['time'][0][0] - 1)
     crystal_step = crystal['length'][0][0] / (steps['crys'][0][0] - 1)
 

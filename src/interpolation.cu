@@ -28,7 +28,7 @@
 /**
  * @brief Returns the index of an value in vector v,
  *        that is smaller than t.
- *        
+ *
  * @param v vector
  * @param t bigger value
  * @return index of smaller value
@@ -47,7 +47,7 @@ unsigned getNextSmallerIndex(std::vector<double> v, double t){
 /**
  * @brief Returns the index of an value in vector v,
  *        that is bigger than t.
- *        
+ *
  * @param v vector
  * @param t smaller value
  * @return index of smaller value
@@ -64,13 +64,13 @@ unsigned getNextBiggerIndex(std::vector<double> v, double t){
 
 template <class T>
 bool isStrictlySorted(const std::vector<T> &v){
-    if(v.size() == 1) 
-	return true;
-    
+    if(v.size() == 1)
+    return true;
+
     for(unsigned i = 0; i < v.size() - 1; ++i){
-	if(v[i] >= v[i + 1]) {
-	    return false;
-	}
+    if(v[i] >= v[i + 1]) {
+        return false;
+    }
 
     }
 
@@ -102,7 +102,7 @@ std::vector<double> interpolateLinear(const std::vector<double> y, const std::ve
 
     // Monochromatic case
     if(y.size() == 1){
-	return std::vector<double>(nInterpolations, y.at(0));
+    return std::vector<double>(nInterpolations, y.at(0));
     }
 
     // Check x data if monoton increasing
@@ -111,46 +111,46 @@ std::vector<double> interpolateLinear(const std::vector<double> y, const std::ve
     // Create equidistant interpolation on x axis
     std::vector<double> interpolated_x(nInterpolations, 0);
     for(unsigned i = 0; i < nInterpolations; ++i){
-	interpolated_x.at(i) = x_min + (i * (x_range / nInterpolations));
+    interpolated_x.at(i) = x_min + (i * (x_range / nInterpolations));
     }
 
     // Start to interpolate y values for every x value
     std::vector<double> interpolated_y(nInterpolations, 0);
     for(unsigned i = 0; i < interpolated_x.size(); ++i){
-	// Get index of points before and after x
-	double y1_i = getNextSmallerIndex(x, interpolated_x.at(i));
-	double y2_i = getNextBiggerIndex(x, interpolated_x.at(i));
-	int y_diff = y2_i - y1_i;
+    // Get index of points before and after x
+    double y1_i = getNextSmallerIndex(x, interpolated_x.at(i));
+    double y2_i = getNextBiggerIndex(x, interpolated_x.at(i));
+    int y_diff = y2_i - y1_i;
 
-	if(y_diff == 1){
-	    // First point p1=(x1/y1) before x
-	    double x1 = x_min + y1_i;
-	    double y1 = y.at(y1_i);
+    if(y_diff == 1){
+        // First point p1=(x1/y1) before x
+        double x1 = x_min + y1_i;
+        double y1 = y.at(y1_i);
 
-	    // Second point p2=(x2/y2) after x
-	    double x2 = x_min + y2_i;
-	    double y2 = y.at(y2_i);
-	    assert(y.size() >= y1_i);
+        // Second point p2=(x2/y2) after x
+        double x2 = x_min + y2_i;
+        double y2 = y.at(y2_i);
+        assert(y.size() >= y1_i);
 
-	    // linear function between p1 and p2 (y=mx+b)
-	    double m = (y2 - y1) / (x2 / x1);
-	    double b = y1 - (m * x1);
+        // linear function between p1 and p2 (y=mx+b)
+        double m = (y2 - y1) / (x2 / x1);
+        double b = y1 - (m * x1);
 
-	    // Interpolate y from linear function
-	    interpolated_y.at(i) = m * interpolated_x.at(i) + b;
+        // Interpolate y from linear function
+        interpolated_y.at(i) = m * interpolated_x.at(i) + b;
 
-	}
-	else if(y_diff == 2){
-	    // No interpolation needed
-	    interpolated_y.at(i) = y.at(y1_i + 1);
-	}
-	else {
-	    dout(V_ERROR) << "Index of smaller and bigger sigma too seperated" << std::endl;
-	    exit(0);
-	}
-    
     }
-  
+    else if(y_diff == 2){
+        // No interpolation needed
+        interpolated_y.at(i) = y.at(y1_i + 1);
+    }
+    else {
+        dout(V_ERROR) << "Index of smaller and bigger sigma too seperated" << std::endl;
+        exit(0);
+    }
+
+    }
+
     return interpolated_y;
 }
 
@@ -160,7 +160,7 @@ std::vector<double> interpolateLinear(const std::vector<double> y, const std::ve
 /************************************************************************************/
 
 /**
- * @brief Interpolates the values of sigma_y to n values(interpolation range) linear. 
+ * @brief Interpolates the values of sigma_y to n values(interpolation range) linear.
  *        With the assumption, they are distributed between lambda_start
  *        and lambda_stop equidistant. For Example could you interpolate
  *        100 sigma values to 1000 sigma values, to reach a better resolution.
@@ -192,7 +192,7 @@ std::vector<double> interpolateWavelength(const std::vector<double> sigma_y, con
   for(unsigned i = lambda_start; i <= lambda_stop; ++i){
     sigma_x.push_back(i);
   }
-  
+
   for(unsigned i = 0; i < interpolation_range; ++i){
     double x = lambda_start + (i * (lambda_range / interpolation_range));
 
@@ -227,8 +227,8 @@ std::vector<double> interpolateWavelength(const std::vector<double> sigma_y, con
       dout(V_ERROR) << "Index of smaller and bigger sigma too seperated" << std::endl;
       exit(0);
     }
-    
+
   }
-  
+
   return y;
 }
