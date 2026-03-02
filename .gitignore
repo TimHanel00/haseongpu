@@ -78,4 +78,4 @@ talk/*.spl
 talk/*.nav
 talk/*.snm
 talk/*.~lock.*
-
+cmake-build-debug/
