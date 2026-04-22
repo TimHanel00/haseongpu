@@ -18,20 +18,518 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <cmath>
-#include <cstdlib>
-#include <vector>
-#include <cstdio>
-
 #include <for_loops_clad.hpp>
-#include <mt19937ar.hpp>
 #include <mesh.hpp>
+#include <mt19937ar.hpp>
 
-#define ALIVE 1
-#define DEAD 0
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <optional>
+#include <stdexcept>
+#include <vector>
 #define SMALL_FOR_LOOPS 1E-06 // 1�m is considered to be small
 #define MAXREFL 5 // number of max amount of reflections <= this has to be done in a better way later (distance defines the max number)
+enum RayLife : bool
+{
+    Alive = true,
+    Dead = false,
+};
+enum class SurfaceKind
+{
+    Face0,
+    Face1,
+    Face2,
+    Up,
+    Down
+};
 
+struct CandidateState
+{
+    SurfaceKind kind;
+    int forbiddenTag;
+};
+
+struct HitCandidate
+{
+    double length;
+    int nextTri;
+    int nextCellZ;
+    int nextForbidden;
+};
+
+struct PointM
+{
+    double x;
+    double y;
+    double z;
+    std::optional<unsigned> ptIndex;
+    std::optional<unsigned> zIndex;
+    [[nodiscard]] double length() const
+    {
+        return std::sqrt(x * x + y * y + z * z);
+    }
+    PointM operator/(double scalar) const
+    {
+        return PointM(x / scalar, y / scalar, z / scalar);
+    }
+    PointM operator-(PointM const &other) const
+    {
+        return {x - other.x, y - other.y, z - other.z};
+    }
+};
+struct BaseVersionSerialContext
+{
+    std::span<const double> p_in;
+    std::span<const unsigned> t_in;
+    std::span<const double> beta_v;
+    std::span<const double> n_x;
+    std::span<const double> n_y;
+    std::span<const int> neighbors;
+    std::span<const float> surface_new;
+    std::span<const double> center_x;
+    std::span<const double> center_y;
+    std::span<const unsigned> n_p;
+    std::span<const int> forbidden;
+    RayLife ray_life=Alive;   ;
+    unsigned nr_points;
+    unsigned N_cells;
+    unsigned nr_layers;
+    int NumRays;
+    double z_mesh;
+    double sigma_a;
+    double sigma_e;
+    double N_tot;
+};
+
+struct BaseVersionSerial
+{
+    BaseVersionSerialContext m_context;
+
+    std::vector<double>* m_dndtAse;
+    std::vector<double>& m_betaCells;
+    std::vector<PointM> m_points;
+    float m_hostCrystalFluorescence;
+
+    BaseVersionSerial(
+        std::vector<double>* dndtAse,
+        unsigned& raysPerSample,
+        Mesh& mesh,
+        std::vector<double>& betaCells,
+        float hostNTot,
+        double hostSigmaA,
+        double hostSigmaE,
+        unsigned hostNumberOfPoints,
+        unsigned hostNumberOfTriangles,
+        unsigned hostNumberOfLevels,
+        float hostThicknessOfPrism,
+        float hostCrystalFluorescence)
+        : m_dndtAse(dndtAse)
+        , m_betaCells(betaCells)
+        , m_hostCrystalFluorescence(hostCrystalFluorescence)
+    {
+        auto p_in = mesh.points.toArray();
+        auto t_in = mesh.trianglePointIndices.toArray();
+        auto beta_v = mesh.betaVolume.toArray();
+        auto normalVecArr = mesh.normalVec.toArray();
+        auto centers = mesh.centers.toArray();
+
+        m_context = BaseVersionSerialContext{
+            .p_in = p_in,
+            .t_in = t_in,
+            .beta_v = beta_v,
+            .n_x = std::span<const double>(
+                normalVecArr.data(),
+                hostNumberOfTriangles),
+            .n_y = std::span<const double>(
+                normalVecArr.data() + hostNumberOfTriangles,
+                hostNumberOfTriangles),
+            .neighbors = std::span<const int>(
+                mesh.triangleNeighbors.toArray().data(),
+                3 * hostNumberOfTriangles),
+            .surface_new = std::span<const float>(
+                mesh.triangleSurfaces.toArray().data(),
+                hostNumberOfTriangles),
+            .center_x = std::span<const double>(
+                centers.data(),
+                hostNumberOfTriangles),
+            .center_y = std::span<const double>(
+                centers.data() + hostNumberOfTriangles,
+                hostNumberOfTriangles),
+            .n_p = std::span<const unsigned>(
+                mesh.triangleNormalPoint.toArray().data(),
+                3 * hostNumberOfTriangles),
+            .forbidden = std::span<const int>(
+                mesh.forbiddenEdge.toArray().data(),
+                3 * hostNumberOfTriangles),
+
+            .nr_points = hostNumberOfPoints,
+            .N_cells = hostNumberOfTriangles,
+            .nr_layers = hostNumberOfLevels,
+            .NumRays = static_cast<int>(raysPerSample),
+            .z_mesh = hostThicknessOfPrism,
+            .sigma_a = hostSigmaA,
+            .sigma_e = hostSigmaE,
+            .N_tot = hostNTot};
+        for (unsigned point_i = 0; point_i < hostNumberOfPoints; ++point_i)
+        {
+            for (unsigned z = 0; z < m_context.nr_layers; ++z)
+            {
+                m_points.emplace_back(PointM{m_context.p_in[point_i],m_context.p_in[m_context.nr_points + point_i],z * m_context.z_mesh,std::make_optional(point_i),std::make_optional(z)});
+            }
+        }
+    }
+
+    void operator()()
+    {
+        mainLoop();
+    }
+
+    void mainLoop()
+    {
+        double u = 0.0, v = 0.0, w = 0.0;
+        unsigned t_1, t_2, t_3;
+        double p_cx, p_cy, p_cz;
+        double x_rand, y_rand, z_rand;
+        double gain;
+
+        auto phi = std::vector<double>(m_context.nr_points * m_context.nr_layers, 0.0);
+
+        auto importance = std::vector<double>(m_context.N_cells * (m_context.nr_layers - 1), 0);
+        auto N_rays = std::vector<int>(m_context.N_cells * (m_context.nr_layers - 1), 0);
+
+        printf("NumRays: %i\n", m_context.NumRays);
+        //for each sample
+        for(PointM const &sample_i : m_points)
+        {
+            if(!sample_i.ptIndex.has_value()||!sample_i.zIndex.has_value())
+            {
+                throw std::runtime_error("Point initialization failed!");
+            }
+            int realNumRays = 0;
+            calcImportance(sample_i, importance, N_rays, 1);
+
+            //for each triangle in the mesh
+            for(unsigned triangle_i = 0; triangle_i < m_context.N_cells; triangle_i++)
+            {
+                t_1 = m_context.t_in[triangle_i];
+                t_2 = m_context.t_in[m_context.N_cells + triangle_i];
+                t_3 = m_context.t_in[2 * m_context.N_cells + triangle_i];
+
+                // for each layer k in the prism
+                for(unsigned layer_i = 0; layer_i < m_context.nr_layers - 1; layer_i++)
+                {
+                    realNumRays += N_rays[triangle_i + layer_i * m_context.N_cells];
+
+                    //go over each ray in the prism
+                    for(unsigned ray_i = 0; ray_i < N_rays[triangle_i + layer_i * m_context.N_cells]; ray_i++)
+                    {
+                        // generate the random numbers in the triangle and the z-coordinate
+                        PointM randPoint = genRandPoint(t_1, t_2, t_3, layer_i);
+                        gain = propagation(randPoint, sample_i, triangle_i, layer_i, 1);
+
+                        phi[sample_i.ptIndex.value() + sample_i.zIndex.value() * (m_context.nr_points)] += gain
+                            * m_context.beta_v[triangle_i + layer_i * m_context.N_cells]
+                            * importance[triangle_i + layer_i * m_context.N_cells];
+
+                    } // rays loop end
+                } // nr_layers loop end
+            } // N_cells loop end
+
+            phi[sample_i.ptIndex.value() + sample_i.zIndex.value() * (m_context.nr_points)] = phi[sample_i.ptIndex.value()  + sample_i.zIndex.value() * (m_context.nr_points)] / realNumRays;
+        } // nr_points loop end
+        for(PointM const &sample_i : m_points)
+        {
+            unsigned index_i=sample_i.ptIndex.value();
+            phi[index_i] = phi[index_i] / (4.0 * 3.14159);
+            double gain_local = m_context.N_tot * m_betaCells[index_i] * (m_context.sigma_e + m_context.sigma_a)
+                - (m_context.N_tot * m_context.sigma_a);
+            m_dndtAse->at(index_i) = gain_local * phi[index_i] / m_hostCrystalFluorescence;
+        }
+
+        printf("\ncalculations finished, givig back the data\n");
+    }
+    //generate a random Point in the given triangle
+    PointM genRandPoint(unsigned t_1, unsigned t_2, unsigned t_3, unsigned layer_i) const
+    {
+        double u = genrand_real3();
+        double v = genrand_real3();
+
+        if((u + v) > 1)
+        {
+            u = 1 - u;
+            v = 1 - v;
+        }
+
+        double w = 1 - u - v;
+
+        double z_rand = (layer_i + genrand_real3()) * m_context.z_mesh;
+        double x_rand = m_context.p_in[t_1] * u + m_context.p_in[t_2] * v + m_context.p_in[t_3] * w;
+        double y_rand = m_context.p_in[m_context.nr_points + t_1] * u
+            + m_context.p_in[m_context.nr_points + t_2] * v
+            + m_context.p_in[m_context.nr_points + t_3] * w;
+
+        return PointM{x_rand, y_rand, z_rand};
+    }
+    void calcImportance(
+        PointM const&p,
+        std::vector<double>& importance,
+        std::vector<int>& N_rays,
+        int N_reflections)
+    {
+        int i_t, i_z, Rays_dump = 0, rays_left, i_r, rand_t, rand_z;
+        double sum_phi = 0.0, surf_tot = 0.0;
+        double prop;
+
+        //    calculate the gain from the centers of each of the boxes to the observed point
+        //    calculate the gain and make a "mapping"
+        //    receipt: pick the point in the center of one cell,
+        //    calculate the gain from this point to the observed point,
+        //    estimate the inner part of the Phi_ASE - Integral,
+        //    scale the amount of rays proportionally with it
+        //    sum the amount of rays and scale it to Int=1, which gives the inverse weights
+        //    the number of rays is determined via floor(), with ceil(), zero-redions could be added
+
+        //    use the routine "propagation"!, test: no reflections, just exponential
+
+        for(i_t = 0; i_t < static_cast<int>(m_context.N_cells); i_t++)
+        {
+            for(i_z = 0; i_z < (static_cast<int>(m_context.nr_layers) - 1); i_z++) //remember the definition differences MatLab/C for indices
+            {
+                auto startPoint=PointM{m_context.center_x[i_t],m_context.center_y[i_t],m_context.z_mesh * (i_z + 0.5)};
+                prop = propagation(startPoint,p, i_t, i_z, N_reflections);
+
+                importance[i_t + i_z * m_context.N_cells] = m_context.beta_v[i_t + i_z * m_context.N_cells] * (prop);
+                sum_phi += importance[i_t + i_z * m_context.N_cells];
+            }
+            surf_tot += m_context.surface_new[i_t];
+        }
+
+        //    now calculate the number of rays
+        for(i_t = 0; i_t < static_cast<int>(m_context.N_cells); i_t++)
+        {
+            for(i_z = 0; i_z < (static_cast<int>(m_context.nr_layers) - 1); i_z++) //remember the definition differences MatLab/C for indices
+            {
+                //            this is the amount of the sampled rays out of the cells
+                N_rays[i_t + i_z * m_context.N_cells]
+                    = (int)(floor(importance[i_t + i_z * m_context.N_cells] / sum_phi * m_context.NumRays));
+
+                Rays_dump += N_rays[i_t + i_z * m_context.N_cells];
+            }
+        }
+
+        rays_left = m_context.NumRays - Rays_dump;
+        //    distribute the remaining not distributed rays randomly
+        if((rays_left) > 0)
+        {
+            for(i_r = 0; i_r < rays_left; i_r++)
+            {
+                rand_t = (int)(genrand_real3() * m_context.N_cells);
+                rand_z = (int)(genrand_real3() * (m_context.nr_layers - 1));
+                N_rays[rand_t + rand_z * m_context.N_cells]++;
+            }
+        }
+
+        //    now think about the mount of rays which would come out of this volume(surface)
+        //    dividing this number with the new amount of rays gives the final importance weight for this area!
+        for(i_t = 0; i_t < static_cast<int>(m_context.N_cells); i_t++)
+        {
+            for(i_z = 0; i_z < (static_cast<int>(m_context.nr_layers) - 1); i_z++) //remember the definition differences MatLab/C for indices
+            {
+                //            this is the amount of the sampled rays out of the cells
+                if(N_rays[i_t + i_z * m_context.N_cells] > 0)
+                {
+                    importance[i_t + i_z * m_context.N_cells]
+                        = static_cast<float>(m_context.NumRays) * m_context.surface_new[i_t] / surf_tot / N_rays[i_t + i_z * m_context.N_cells];
+                    //                importance[i_t + i_z*N_cells] = NumRays*surface[i_t]/surf_tot;
+                }
+                else
+                {
+                    importance[i_t + i_z * m_context.N_cells] = 0; // case of beta of this point == 0 e.g.
+                }
+            }
+        }
+    }
+    static std::array<CandidateState, 5> createStates()
+    {
+        return {{
+            {SurfaceKind::Face0, 0},
+            {SurfaceKind::Face1, 1},
+            {SurfaceKind::Face2, 2},
+            {SurfaceKind::Up,    3},
+            {SurfaceKind::Down,  4},
+        }};
+    }
+    [[nodiscard]] int faceOffset(SurfaceKind kind) const
+    {
+        switch(kind)
+        {
+        case SurfaceKind::Face0: return 0;
+        case SurfaceKind::Face1: return static_cast<int>(m_context.N_cells);
+        case SurfaceKind::Face2: return static_cast<int>(2 * m_context.N_cells);
+        default: return 0;
+        }
+    }
+    double propagation(
+    PointM const& rand,
+    PointM const& p,
+    int t_start,
+    int mesh_start,
+    int N_refl)
+    {
+        PointM currentPos = rand;
+        PointM vec = p - rand;
+        double norm = vec.length();
+        PointM dir = vec / norm;
+
+        double distance = norm;
+        double distance_total = norm;
+        double gain = 1.0;
+
+        int tri = t_start;
+        int cell_z = mesh_start;
+        int forb = -1;
+
+        N_refl = 0;
+
+        while(true)
+        {
+            double bestLength = distance;
+            std::optional<HitCandidate> bestHit;
+
+            for(auto const& state : createStates())
+            {
+                if(state.forbiddenTag == forb)
+                    continue;
+
+                auto hit = tryIntersection(state, currentPos, dir, tri, cell_z, bestLength);
+                if(hit && hit->length < bestLength)
+                {
+                    bestLength = hit->length;
+                    bestHit = hit;
+                }
+            }
+
+            if(!bestHit)
+            {
+                break;
+            }
+
+            gain *= exp(
+                m_context.N_tot
+                * (m_context.beta_v[tri + cell_z * m_context.N_cells]
+                   * (m_context.sigma_e + m_context.sigma_a)
+                   - m_context.sigma_a)
+                * bestHit->length);
+
+            distance -= bestHit->length;
+
+            currentPos.x += bestHit->length * dir.x;
+            currentPos.y += bestHit->length * dir.y;
+            currentPos.z += bestHit->length * dir.z;
+
+            if(fabs(distance) < SMALL_FOR_LOOPS)
+            {
+                m_context.ray_life = Dead;
+                break;
+            }
+
+            tri = bestHit->nextTri;
+            cell_z = bestHit->nextCellZ;
+            forb = bestHit->nextForbidden;
+        }
+
+        gain /= (distance_total * distance_total);
+        return gain;
+    }
+
+    [[nodiscard]] std::optional<HitCandidate> tryIntersection(
+    CandidateState const& state,
+    PointM const& currentPos,
+    PointM const& dir,
+    int tri,
+    int cell_z,
+    double currentBestLength) const
+{
+    double nominator = 0.0;
+    double denominator = 0.0;
+    double length_help = 0.0;
+
+    switch(state.kind)
+    {
+    case SurfaceKind::Face0:
+    case SurfaceKind::Face1:
+    case SurfaceKind::Face2:
+    {
+        int offset = faceOffset(state.kind);
+        int idx = tri + offset;
+
+        nominator =
+            (m_context.n_x[idx] * m_context.p_in[m_context.n_p[idx]]
+           + m_context.n_y[idx] * m_context.p_in[m_context.n_p[idx] + m_context.nr_points])
+          - (m_context.n_x[idx] * currentPos.x + m_context.n_y[idx] * currentPos.y);
+
+        denominator = m_context.n_x[idx] * dir.x + m_context.n_y[idx] * dir.y;
+
+        if(denominator == 0.0)
+            return std::nullopt;
+
+        length_help = nominator / denominator;
+        if(length_help <= 0.0 || length_help >= currentBestLength)
+            return std::nullopt;
+
+        return HitCandidate{
+            .length = length_help,
+            .nextTri = m_context.neighbors[idx],
+            .nextCellZ = cell_z,
+            .nextForbidden = m_context.forbidden[idx]
+        };
+    }
+
+    case SurfaceKind::Up:
+    {
+        nominator = (cell_z + 1) * m_context.z_mesh - currentPos.z;
+        denominator = dir.z;
+
+        if(denominator == 0.0)
+            return std::nullopt;
+
+        length_help = nominator / denominator;
+        if(length_help <= 0.0 || length_help >= currentBestLength)
+            return std::nullopt;
+
+        return HitCandidate{
+            .length = length_help,
+            .nextTri = tri,
+            .nextCellZ = cell_z + 1,
+            .nextForbidden = 4
+        };
+    }
+
+    case SurfaceKind::Down:
+    {
+        nominator = cell_z * m_context.z_mesh - currentPos.z;
+        denominator = dir.z;
+
+        if(denominator == 0.0)
+            return std::nullopt;
+
+        length_help = nominator / denominator;
+        if(length_help <= 0.0 || length_help >= currentBestLength)
+            return std::nullopt;
+
+        return HitCandidate{
+            .length = length_help,
+            .nextTri = tri,
+            .nextCellZ = cell_z - 1,
+            .nextForbidden = 3
+        };
+    }
+    }
+
+    return std::nullopt;
+}
+};
 // change 2011/02/23
 // added external input of emission and absorption cross section
 
@@ -42,585 +540,3 @@
 // compiler note: mex for_loops_clad.cpp mt19937ar.cpp
 
 //global variables
-double *p_in, *beta_v;
-double const *n_y,*n_x,*center_y,*center_x;
-int *neighbors, *forbidden;
-unsigned *n_p;
-int size_p, N_cells, mesh_z, rays;
-int NumRays;
-double z_mesh;
-unsigned *t_in;
-float *surface_new;
-
-
-//ray_life determines, if the ray is DEAD or ALIVE
-int ray_life;
-
-//  spectral properties
-double sigma_a;
-double sigma_e;
-double N_tot;
-
-// function prototypes
-double propagation(double x_pos, double y_pos, double z_pos, double x_dest, double y_dest, double z_dest, int t_start, int mesh_start, int N_refl);
-void importf(int point, int mesh_start, double *importance, int *N_rays, int N_reflections);
-
-float forLoopsClad(
-    std::vector<double> *dndtAse,
-    unsigned &raysPerSample,
-    Mesh *mesh,
-    double *betaCells,
-    float hostNTot,
-    double hostSigmaA,
-    double hostSigmaE,
-    unsigned hostNumberOfPoints,
-    unsigned hostNumberOfTriangles,
-    unsigned hostNumberOfLevels,
-    float hostThicknessOfPrism,
-    float hostCrystalFluorescence   )
-{
-  double u=0.0, v=0.0, w=0.0;
-  int i=0, j=0, k=0, l=0, iz=0;
-  int t_1,t_2,t_3;
-  double p_cx,p_cy, p_cz;
-  double x_rand, y_rand, z_rand;
-//  double distance;
-  double gain;
-
-//  int N_rays_dump;
-
-//  mex inputs and outputs
-//  double *p_in, *beta_p, *beta_v, *n_x, *n_y, *surface, *center_x, *center_y;
-//  int *t_in, *neighbors, *n_p;
-//  defined global ^^
-  double *phi, *importance;
-  int size_t;
-  int *N_rays;
-  //int N_refl; // number of reflections that the beam will do
-
-
-//  be very careful how the data is sent to this file and how it has to be cast!
-//  remember, some are int32 and some are double32, some are arrays, some not!
-
-// ************* INPUT ORDER BEGIN *************
-//  for further informations take a look on "mesh_cyl_rect.m"
-
-  p_in = mesh->points;
-  t_in = mesh->trianglePointIndices;
-  beta_v = mesh->betaVolume;
-  n_x = mesh->normalVec;
-  auto normalVecArr = mesh->normalVec.toArray();  // owns data for the whole function
-
-  n_y = normalVecArr.data() + 3 * mesh->numberOfTriangles;
-
-  neighbors = mesh->triangleNeighbors;
-  surface_new = mesh->triangleSurfaces;
-  center_x = mesh->centers;
-  center_y = &(mesh->centers.toArray()[mesh->numberOfTriangles]);
-  n_p = mesh->triangleNormalPoint;
-  forbidden = mesh->forbiddenEdge;
-
-// *************  INPUT ORDER END  *************
-
-//  associate inputs
-  size_p = hostNumberOfPoints; //number of points
-  size_t = hostNumberOfTriangles; //number of triangles per sheet
-  mesh_z = hostNumberOfLevels; //number of meshing in z-direction
-
-//  mexPrintf("mesh_z: %i\n", mesh_z);
-//  mexEvalString("drawnow;");
-
-
-  //int dim[]={size_t,mesh_z-1};
-
-
-
-//  associate outputs
-  phi = (double *) malloc(size_p * mesh_z * sizeof(double));
-    for(int i=0; i<size_p*mesh_z; i++){
-        phi[i] = 0.;
-    }
-  importance = (double *) malloc(size_t * (mesh_z-1) * sizeof(double));
-  N_rays = (int *) malloc(size_t * (mesh_z-1) * sizeof(int));
-    for(int i=0; i<size_t*(mesh_z-1); i++){
-        importance[0] = 0.;
-        N_rays[0] = 0;
-    }
-
-  NumRays = raysPerSample;
-  N_tot = hostNTot;
-  z_mesh = hostThicknessOfPrism;
-  sigma_a = hostSigmaA;
-  sigma_e = hostSigmaE;
-
-  N_cells = size_t;
-  printf("NumRays: %i\n", NumRays);
-
-//  print the first 3 values
-//  mexPrintf("the first point is: (%1.5f, %1.5f)\n",p_in[0],p_in[size_p]);
-//  mexPrintf("the second point is: (%1.5f, %1.5f)\n",p_in[1],p_in[size_p+1]);
-//  mexPrintf("the third point is: (%1.5f, %1.5f)\n\n",p_in[2],p_in[size_p+2]);
-//
-
-//  make drawnow to force MatLab to show the bash output during run
-//  mexEvalString("drawnow;"); // to draw the output to the bash
-
-//  mexPrintf("the first triangle is: (%i, %i, %i)\n",t_in[0],t_in[size_t],t_in[2*size_t]);
-//  mexPrintf("the second triangle is: (%i, %i, %i)\n",t_in[1],t_in[size_t+1],t_in[2*size_t+1])
-//  mexPrintf("the third triangle is: (%i, %i, %i)\n\n",t_in[2],t_in[size_t+2],t_in[2*size_t+2]);
-
-
-  for(i=0;i<size_p;i++)
-  {
-      p_cx = p_in[i];
-      p_cy = p_in[size_p+i];
-
-      for(iz=0;iz<mesh_z;iz++)
-      {
-          p_cz = iz*z_mesh;
-          int realNumRays = 0;
-          importf(i,iz,importance,N_rays,1);
-
-          for(j=0;j<N_cells;j++)
-          {
-              t_1 = t_in[j];
-              t_2 = t_in[N_cells + j];
-              t_3 = t_in[2*N_cells + j];
-
-              for(k=0;k<(mesh_z-1);k++)
-              {
-                  realNumRays+=N_rays[j+k*N_cells];
-                  for(l=0;l<N_rays[j+k*N_cells];l++)
-                  {
-//                        generate the random numbers in the triangle and the z-coordinate
-                      u = genrand_real3();
-                      v = genrand_real3();
-
-                      if((u+v)>1)
-                      {
-                          u = 1-u;
-                          v = 1-v;
-                      }
-                      w = 1-u-v;
-                      z_rand = (k + genrand_real3())*z_mesh;
-                      x_rand = p_in[t_1]*u + p_in[t_2]*v + p_in[t_3]*w;
-                      y_rand = p_in[size_p + t_1]*u + p_in[size_p + t_2]*v + p_in[size_p + t_3]*w;
-
-                      gain = propagation(x_rand, y_rand, z_rand, p_cx, p_cy, p_cz, j, k, 1);
-
-                      phi[i+iz*(size_p)] += gain * beta_v[j+k*N_cells] * importance[j+k*N_cells];
-
-                  } // rays loop end
-    //            if(k==1 && j < 36 && N_rays[j+k*N_cells]>0){
-    //                printf("\n-> Prism %d SUM=%f\n",j+k*N_cells,phi[i+iz*size_p]);
-    //                printf("   %d rays start(%f, %f, %f) gain=%f imp=%f beta_v=%f\n",
-    //                    N_rays[j+k*N_cells],x_rand,y_rand,z_rand,gain,importance[j+k*N_cells],beta_v[j+k*N_cells]);
-    //            }
-              }//mesh_z loop end
-          }//N_cells  loop end
-          phi[i+iz*(size_p)] = phi[i+iz*(size_p)]/realNumRays;
-
-      }//iz llop end
-  }//size_p loop end
-
-
-    for (int sample_i=0; sample_i < size_p * mesh_z ; sample_i++){
-        phi[sample_i] = phi[sample_i] / (4.0 * 3.14159);
-        double gain_local = N_tot * betaCells[sample_i] * (sigma_e+sigma_a) - (N_tot*sigma_a);
-        dndtAse->at(sample_i) = gain_local * phi[sample_i] / hostCrystalFluorescence;
-    }
-  printf("\ncalculations finished, givig back the data\n");
-
-
-return 0;
-
-}// mexfunction end
-
-
-// write a function for the transport from one point to another
-// as parameters you should give the current position, the destination and the number of reflections wanted
-// as well as the beta informations
-// give back to integrated gain
-
-double propagation(double const start_x_pos, double const start_y_pos, double z_pos, double x_dest, double y_dest, double z_dest, int t_start, int mesh_start, int N_refl){
-//    in first try no reflections
-//    calculate the vector and make the the calculation, which surface would be the shortest to reach
-//    then get the length, make the integration, get the information about the next cell out of the array
-//    set the point to the surface (this surface is "forbidden" in the calculations)
-//    proceed until you hit a the point or the surface
-//    if you are closer then "small" stop and return the value
-    double x_pos=start_x_pos;
-    double y_pos=start_y_pos;
-    double vec_x, vec_y,vec_z, norm;
-    double distance, length, length_help, distance_total;
-    double gain=1;
-    double nominator, denominator;
-    int tri, cell_z; // the current triangle number and position concerning the z's
-    int decider; // which one is the shortest - info
-    int tri_next, cell_z_next, forb, forb_dump;
-    //int ct; // used to read out cell_type
-
-    // is not used
-    N_refl=0;
-    forb_dump = 0;
-    cell_z_next = 0;
-    tri_next = 0;
-
-    if(N_refl){
-      printf("_");
-    }
-
-//    initial positions
-    tri = t_start;
-    cell_z = mesh_start;
-
-
-//    definition of the vectors without reflections
-    vec_x = (x_dest - x_pos);
-    vec_y = (y_dest - y_pos);
-    vec_z = (z_dest - z_pos);
-
-    norm = sqrt(vec_x*vec_x+vec_y*vec_y+vec_z*vec_z);
-
-    vec_x = vec_x/norm;
-    vec_y = vec_y/norm;
-    vec_z = vec_z/norm;
-
-//    now calculate the length to travel
-    distance = sqrt((x_dest - x_pos)*(x_dest - x_pos)+(y_dest - y_pos)*(y_dest - y_pos)+(z_dest - z_pos)*(z_dest - z_pos));
-    distance_total = distance;
-    // does this make sense?
-    length = distance;
-
-    forb = -1;
-
-            //if(t_start+mesh_start==0){
-            //  printf("\n");
-            //  printf("center_x[%d] %f\n",x_pos);
-            //  printf("center_y[%d] %f\n",y_pos);
-            //  printf("z_coord %f\n",z_pos);
-            //  printf("x_pos(dest) %f\n",x_dest);
-            //  printf("y_pos(dest) %f\n",y_dest);
-            //  printf("z_pos(dest) %f\n",z_dest);
-            //  printf("t_start %f\n",t_start);
-            //  printf("mesh_start %f\n",mesh_start);
-            //  printf("p_in[0] %f\n",p_in[0]);
-            //  printf("n_x[0] %f\n",n_x[0]);
-            //  printf("n_y[0] %f\n",n_y[0]);
-            //  printf("n_p[0] %d\n",n_p[0]);
-            //  printf("neighbors[0] %d \n", neighbors[0]);
-            //  printf("forbidden[0] %d \n", forbidden[0]);
-            //  printf("size_p %d\n",size_p);
-            //  printf("N_cells %d\n",N_cells);
-            //  printf("z_mesh %f\n",z_mesh);
-            //  printf("sigma_a %f\n", sigma_a);
-            //  printf("sigma_e %f\n", sigma_e);
-            //  printf("N_tot %f\n",N_tot);
-            //}
-//  mexPrintf("Propagation called");
-//    mexEvalString("drawnow;");
-
-//    the ray has to be set to be ALIVE before!
-//    now do the unlimited for loop - break!!!
-    for(;;)
-    {
-
-//    mexPrintf("Propagation for part called\n\n");
-//    mexEvalString("drawnow;");
-//        definition for decider
-//        0,1,2: int for the neighbors
-//        3: hor plane up
-//        4: hor plane down
-
-//        at first set the decider = -1;
-        decider = -1;
-        length = distance;
-
-
-
-//        mexPrintf("forb: %i\n",forb);
-//        mexEvalString("drawnow;");
-
-//        try the triangle faces
-//        remember the correlation between the normals and the points
-//        n1: p1-2, n2: p1-3, n3:p2-3
-//        the third coordinate (z) of the particpating points for the surfaces can be set to be z=0,
-//        as everything uses triangular "tubes/prisms", as well as n_z=0 in this case!
-        if (forb != 0){
-            nominator = (n_x[tri]*p_in[n_p[tri]] + n_y[tri]*p_in[n_p[tri]+size_p]) - (n_x[tri]*x_pos + n_y[tri]*y_pos);
-            denominator = n_x[tri]*vec_x + n_y[tri]*vec_y;
-            if (denominator != 0.0)
-            {
-                length_help = nominator/denominator;
-                if (length_help < length && length_help > 0.0)
-                {
-                    length = length_help;
-                    decider = 0;
-                    forb_dump = (forbidden[tri]);
-                }
-            }
-        }
-
-        if (forb != 1){
-            nominator = (n_x[tri+N_cells]*p_in[n_p[tri+N_cells]] + n_y[tri+N_cells]*p_in[n_p[tri+N_cells]+size_p]) - (n_x[tri+N_cells]*x_pos + n_y[tri+N_cells]*y_pos);
-            denominator = n_x[tri+N_cells]*vec_x + n_y[tri+N_cells]*vec_y;
-            if (denominator != 0.0)
-            {
-                length_help = nominator/denominator;
-                if (length_help < length && length_help > 0.0)
-                {
-                    length = length_help;
-                    decider = 1;
-                    forb_dump = (forbidden[tri+N_cells]);
-                }
-            }
-        }
-
-        if (forb !=2){
-            nominator = (n_x[tri+2*N_cells]*p_in[n_p[tri+2*N_cells]] + n_y[tri+2*N_cells]*p_in[n_p[tri+2*N_cells]+size_p]) - (n_x[tri+2*N_cells]*x_pos + n_y[tri+2*N_cells]*y_pos);
-            denominator = n_x[tri+2*N_cells]*vec_x + n_y[tri+2*N_cells]*vec_y;
-            if (denominator != 0.0)
-            {
-                length_help = nominator/denominator;
-                if (length_help < length && length_help > 0.0)
-                {
-                    length = length_help;
-                    decider = 2;
-                    forb_dump = (forbidden[tri+2*N_cells]);
-                }
-            }
-        }
-
-//        try the horizontal planes, which one is the shortest, n_x and n_y are zero!, n_z =1!
-//        at first the upper plane
-        if (forb != 3){
-            nominator = (cell_z+1)*z_mesh - z_pos;
-            denominator = vec_z;
-            if (denominator != 0.0)
-            {
-                length_help = nominator/denominator;
-                if (length_help < length && length_help > 0.0)
-                {
-                    length = length_help;
-                    decider = 3;
-                    forb_dump = 4; // you are not allowed to go down in the next step
-                }
-            }
-        }
-
-//        next is the lower plane
-        if (forb != 4){
-            nominator = (cell_z)*z_mesh - z_pos;
-            denominator = vec_z;
-
-            if (denominator != 0.0)
-            {
-                length_help = nominator/denominator;
-                if (length_help < length && length_help > 0.0)
-                {
-                    length = length_help;
-                    decider = 4;
-                    forb_dump = 3; // you are not allowed to go up in the next step
-                }
-            }
-        }
-
-        forb = forb_dump;
-
-
-//        now make a switch to differ the different cases
-        switch(decider){
-
-            case 0:
-//                this is the case for the intersection with the first choice triangle-surface
-                tri_next = neighbors[tri];
-                cell_z_next = cell_z;
-                break;
-
-            case 1:
-//                second triangle surface
-                tri_next = neighbors[tri+N_cells];
-                cell_z_next = cell_z;
-                break;
-
-            case 2:
-//                third triangle surface
-                tri_next = neighbors[tri+2*N_cells];
-                cell_z_next = cell_z;
-                break;
-
-            case 3:
-//                go one plane up
-                tri_next = tri;
-                cell_z_next = cell_z + 1;
-                break;
-
-            case 4:
-//                go one plane down
-                tri_next = tri;
-                cell_z_next = cell_z - 1;
-                break;
-
-            default:
-//                make an error statement
-                break;
-        }
-
-//        now we know where to go, let's make the integration
-//        take the beta_v[tri+cell_z*N_cells]
-
-//        at this position do the decision whether it is a gain part or cladding
-//        it might be absorbing or amplifying, for the cladding only absorbing
-//        a simple "if then"
-
-            gain = gain * exp(N_tot*(beta_v[tri+cell_z*N_cells]*(sigma_e + sigma_a)-sigma_a)*length);
-        //gain+=length;
-//        gain = LineIntegralMCRK4_S(3, tri, cell_z, gain, length);
-
-//        after integration make the propagation
-
-//        mexPrintf("Distance: %f, Length: %f\n",distance, length);
-//        mexPrintf("decider: %i, forbidden: %i\n",decider, forb);
-//        mexPrintf("vec_x: %f, vec_y: %f, vec_z: %f\n", vec_x, vec_y, vec_z);
-//        mexPrintf("current_x: %f current_y: %f current_z: %f\n", x_pos, y_pos, z_pos);
-//        mexPrintf("tri: %i, tri_next: %i, cell_z: %i, cell_next: %i\n", tri, tri_next, cell_z, cell_z_next);
-//        mexEvalString("drawnow;");
-//        str=mxCreateString("Press a key");
-//        mexCallMATLAB(1,&dump,1,&str,"input");
-//        str and dump should be defined to be a *mxArray and don't forget to kill them at the end
-
-        distance -= length;
-
-//        return 1;
-//
-
-        x_pos = x_pos + length*vec_x;
-        y_pos = y_pos + length*vec_y;
-        z_pos = z_pos + length*vec_z;
-
-        if (abs(distance)< SMALL_FOR_LOOPS)
-        {
-            ray_life = DEAD;
-            break;
-        }
-
-
-//        now set the next cell
-        tri = tri_next;
-        cell_z = cell_z_next;
-
-//        break;
-//        now we should make the integration routine
-    }
-
-    gain /= (distance_total*distance_total);
-
-    return gain;
-}
-
-//do the routine which calculates the importance factor and the amount of rays for each of the cells
-void importf(int point, int mesh_start, double *importance, int *N_rays, int N_reflections)
-{
-    int i_t, i_z, Rays_dump=0, rays_left, i_r, rand_t, rand_z;
-    double sum_phi=0.0, surf_tot=0.0;
-    double x_pos, y_pos, z_pos;
-    double prop;
-
-//    calculate the gain from the centers of each of the boxes to the observed point
-//    calculate the gain and make a "mapping"
-//    receipt: pick the point in the center of one cell,
-//    calculate the gain from this point to the observed point,
-//    estimate the inner part of the Phi_ASE - Integral,
-//    scale the amount of rays proportionally with it
-//    sum the amount of rays and scale it to Int=1, which gives the inverse weights
-//    the number of rays is determined via floor(), with ceil(), zero-redions could be added
-
-//    use the routine "propagation"!, test: no reflections, just exponential
-    x_pos = p_in[point];
-    y_pos = p_in[point+size_p];
-    z_pos = mesh_start * z_mesh;
-
-    for (i_t=0;i_t<N_cells;i_t++)
-    {
-
-        for (i_z=0;i_z<(mesh_z-1);i_z++) //remember the definition differences MatLab/C for indices
-        {
-//            at this point replace the following routine with propagation(...)
-//            later expand this with the beta/tau values...
-          //  if(i_z+i_t==0){
-          //    printf("\n");
-          //    printf("center_x[%d] %f\n",i_t,center_x[i_t]);
-          //    printf("center_y[%d] %f\n",i_t,center_y[i_t]);
-          //    printf("z_coord %f\n",z_mesh*(i_z+0.5));
-          //    printf("x_pos(dest) %f\n",x_pos);
-          //    printf("y_pos(dest) %f\n",y_pos);
-          //    printf("z_pos(dest) %f\n",z_pos);
-          //    printf("i_t %f\n",i_t);
-          //    printf("i_z %f\n",i_z);
-          //    printf("p_in[0] %f\n",p_in[0]);
-          //    printf("n_x[0] %f\n",n_x[0]);
-          //    printf("n_y[0] %f\n",n_y[0]);
-          //    printf("n_p[0] %d\n",n_p[0]);
-          //    printf("neighbors[0] %d \n", neighbors[0]);
-          //    printf("forbidden[0] %d \n", forbidden[0]);
-          //    printf("size_p %d\n",size_p);
-          //    printf("N_cells %d\n",N_cells);
-          //    printf("z_mesh %f\n",z_mesh);
-          //    printf("sigma_a %.20e\n", sigma_a);
-          //    printf("sigma_e %.20e\n", sigma_e);
-          //    printf("N_tot %f\n",N_tot);
-          //  }
-            prop = propagation(center_x[i_t], center_y[i_t], z_mesh*(i_z+0.5), x_pos, y_pos, z_pos, i_t, i_z, N_reflections);
-            importance[i_t + i_z*N_cells] = beta_v[i_t+i_z*N_cells]*(prop);
-            sum_phi += importance[i_t + i_z*N_cells];
-            if(i_z+i_t==0){
-          //    fprintf(stderr,"prop: %f beta_v: %f\n\n",prop, beta_v[i_t+i_z*N_cells]);
-            }
-
-        }
-        surf_tot += surface_new[i_t];
-    }
-
-//    now calculate the number of rays
-    for (i_t=0;i_t<N_cells;i_t++)
-    {
-        for (i_z=0;i_z<(mesh_z-1);i_z++) //remember the definition differences MatLab/C for indices
-        {
-//            this is the amount of the sampled rays out of the cells
-            N_rays[i_t + i_z*N_cells] = (int)(floor(importance[i_t + i_z*N_cells]/sum_phi*NumRays));
-
-            Rays_dump +=  N_rays[i_t + i_z*N_cells];
-        }
-    }
-
-    rays_left = NumRays-Rays_dump;
-//    distribute the remaining not distributed rays randomly
-    if ((rays_left)>0)
-    {
-      for (i_r=0;i_r<rays_left;i_r++)
-      {
-        rand_t = (int )(genrand_real3()*N_cells);
-        rand_z = (int )(genrand_real3()*(mesh_z-1));
-        N_rays[rand_t + rand_z*N_cells]++;
-      }
-    }
-
-//    now think about the mount of rays which would come out of this volume(surface)
-//    dividing this number with the new amount of rays gives the final importance weight for this area!
-    for (i_t=0;i_t<N_cells;i_t++)
-    {
-        for (i_z=0;i_z<(mesh_z-1);i_z++) //remember the definition differences MatLab/C for indices
-        {
-//            this is the amount of the sampled rays out of the cells
-            if (N_rays[i_t + i_z*N_cells]>0)
-            {
-                importance[i_t + i_z*N_cells] = NumRays*surface_new[i_t]/surf_tot/N_rays[i_t + i_z*N_cells];
-//                importance[i_t + i_z*N_cells] = NumRays*surface[i_t]/surf_tot;
-            }
-            else
-            {
-                importance[i_t + i_z*N_cells] = 0; // case of beta of this point == 0 e.g.
-            }
-        }
-    }
-}
