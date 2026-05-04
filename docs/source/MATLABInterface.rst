@@ -147,7 +147,8 @@ The following section describes all arguments of the MATLAB call.
 * Element type: ``int``
 * Size: ``numberOfTriangles``
 * Description:
-  Cladding type index for each triangle.
+  Prisms whose CellType matches ``claddingNumber`` are treated as part of the cladding region.
+  The gain contribution of these cells is scaled according to ``claddingAbsorption``.
 
 ``claddingNumber``
 ^^^^^^^^^^^^^^^^^^
@@ -155,7 +156,7 @@ The following section describes all arguments of the MATLAB call.
 * Type: ``unsigned``
 * Size: ``1``
 * Description:
-  Selects which cladding to use.
+  Selects the cells, which will be treated as being part of the cladding-region.
 
 ``claddingAbsorption``
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -163,7 +164,9 @@ The following section describes all arguments of the MATLAB call.
 * Type: ``float``
 * Size: ``1``
 * Description:
-  Absorption coefficient of the cladding.
+  Absorption coefficient of the cladding - only applied to cladding cells.
+  Positive values reduce ray-contribution, a value of ``0`` leaves them unchanged, and
+  negative values amplify them.
 
 ``useReflections``
 ^^^^^^^^^^^^^^^^^^

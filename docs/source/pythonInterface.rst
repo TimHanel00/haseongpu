@@ -209,6 +209,7 @@ The following section describes all arguments of the Python call.
 
   * flat
     * Size: ``numberOfTriangles * (numberOfLevels - 1)``
+    * Note: matches the number of prisms in the mesh
     * Structure::
 
          [layer0_triangle0, layer0_triangle1, ..., layer0_triangleN,
@@ -229,7 +230,8 @@ The following section describes all arguments of the Python call.
 * Container type: ``list`` or ``ndarray``
 * Element type: ``int``
 * Description:
-  Cladding type index for each triangle.
+  Prisms whose CellType matches ``claddingNumber`` are treated as part of the cladding region.
+  The gain contribution of these cells is scaled according to ``claddingAbsorption``.
 
 * Supported layout:
 
@@ -244,14 +246,16 @@ The following section describes all arguments of the Python call.
 
 * Type: ``unsigned``
 * Description:
-  Selects which cladding to use.
+  Selects the cells, which will be treated as being part of the cladding-region.
 
 ``claddingAbsorption``
 ^^^^^^^^^^^^^^^^^^^^^^
 
 * Type: ``float``
 * Description:
-  Absorption coefficient of the cladding.
+  Absorption coefficient of the cladding - only applied to cladding cells.
+  Positive values reduce ray-contribution, a value of ``0`` leaves them unchanged, and
+  negative values amplify them.
 
 ``useReflections``
 ^^^^^^^^^^^^^^^^^^
