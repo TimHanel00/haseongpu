@@ -1,7 +1,6 @@
 [build-system]
 requires = [
     "scikit-build-core>=0.10",
-    "pybind11>=3.0",
     "packaging>=23"
 ]
 

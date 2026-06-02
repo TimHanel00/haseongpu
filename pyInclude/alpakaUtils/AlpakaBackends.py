@@ -27,16 +27,8 @@ def _candidatePaths():
 
     for parent in moduleDir.parents:
         for name in _libraryNames():
-            yield parent / "build" / "python" / "HASEonGPU_Bindings" / name
+            yield parent / "build" / name
 
-    try:
-        import HASEonGPU_Bindings
-    except ImportError:
-        return
-
-    for packageDir in getattr(HASEonGPU_Bindings, "__path__", []):
-        for name in _libraryNames():
-            yield Path(packageDir) / name
 
 
 def _loadLibrary():

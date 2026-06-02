@@ -106,11 +106,6 @@ if(NOT DISABLE_MPI MATCHES "^(AUTO|ON|OFF)$")
     )
 endif()
 option(HASE_TESTING "Build unit tests" OFF)
-option(
-    HASE_ENABLE_PYTHON
-    "Build Python bindings - requires python dependency."
-    ON
-)
 option(HASE_BENCHMARK "Enable scoped PhiASE benchmark CSV output" OFF)
 
 set(HASE_CUDA_ARCHITECTURES native CACHE STRING "CUDA Architectures")
@@ -382,6 +377,9 @@ set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
 set(CMAKE_INSTALL_RPATH "$ORIGIN")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
+include(cmake/findOpenPmd.cmake)
+target_link_libraries(hase_core INTERFACE openPMD::openPMD)
+target_compile_definitions(hase_core INTERFACE HASE_ENABLE_OPENPMD)
 target_link_libraries(hase_core INTERFACE alpaka::alpaka)
 if(TARGET CUDA::cudart)
     target_link_libraries(hase_core INTERFACE CUDA::cudart)
@@ -399,6 +397,7 @@ list(
     REMOVE_ITEM
     HASE_RUNTIME_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/openpmd_main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/alpakaUtils/backendNamesLibrary.cpp"
 )
 add_library(hase STATIC ${HASE_RUNTIME_SOURCES})
@@ -420,25 +419,26 @@ endif()
 alpaka_finalize(hase)
 
 include(cmake/AlpakaBackendNames.cmake)
-add_executable(calcPhiASE "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-set_target_properties(
-    calcPhiASE
-    PROPERTIES
-        BUILD_RPATH_USE_ORIGIN ON
-        CUDA_SEPARABLE_COMPILATION ON
-        CUDA_ARCHITECTURES "${HASE_CUDA_ARCHITECTURES}"
-        INSTALL_RPATH "$ORIGIN"
-        INSTALL_RPATH_USE_LINK_PATH ON
-)
-target_link_libraries(calcPhiASE PRIVATE hase::hase)
-alpaka_finalize(calcPhiASE)
+if(HASE_BUILD_PhiAse)
+    add_executable(calcPhiASE "${CMAKE_CURRENT_SOURCE_DIR}/src/openpmd_main.cpp")
+    set_target_properties(
+        calcPhiASE
+        PROPERTIES
+            BUILD_RPATH_USE_ORIGIN ON
+            CUDA_SEPARABLE_COMPILATION ON
+            CUDA_ARCHITECTURES "${HASE_CUDA_ARCHITECTURES}"
+            INSTALL_RPATH "$ORIGIN"
+            INSTALL_RPATH_USE_LINK_PATH ON
+    )
+    target_link_libraries(calcPhiASE PRIVATE hase::hase)
+    if(TARGET hase_openpmd_python)
+        add_dependencies(calcPhiASE hase_openpmd_python)
+    endif()
+    alpaka_finalize(calcPhiASE)
+endif()
 
 # Testing
 if(HASE_TESTING)
     enable_testing()
     add_subdirectory(tests)
-    # Python
-endif()
-if(HASE_ENABLE_PYTHON)
-    include(cmake/pythonBindings.cmake)
 endif()

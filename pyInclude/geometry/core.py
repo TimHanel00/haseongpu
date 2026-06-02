@@ -11,7 +11,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import HASEonGPU_Bindings
 import numpy as np
 from .msh import Gmsh
 from .stl import from_stl
