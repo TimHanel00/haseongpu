@@ -72,10 +72,8 @@ Additionally they can be adjusted in a configuration yaml file if that setting i
    * 2 ranks per node and ``numDevices=4`` gives each rank two GPUs.
 
 ``nPerNode``
-   Controls the number of MPI ranks launched per node in wrapper paths that
-   call ``mpiexec``.  The legacy Python ``calcPhiASE(...)`` MPI path uses
-   ``mpiexec -npernode nPerNode`` and then passes ``--parallel-mode=mpi`` to
-   the ``calcPhiASE`` binary.
+   Controls the number of MPI ranks launched per node in Python wrapper paths
+   that call ``mpiexec`` for the ``calcPhiASE`` binary.
 
    ``nPerNode`` is a launcher setting, not a GPU count inside the C++ compute
    kernel.  After MPI has started the processes, the C++ executable detects the

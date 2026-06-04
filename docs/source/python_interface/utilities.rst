@@ -163,8 +163,7 @@ Backend Names
 
 ``AlpakaBackends`` can list backend names discovered from the installed
 HASEonGPU backend-name library.  Use these strings wherever the Python
-interface accepts a ``backend`` option, for example in ``PhiASE`` or the
-low-level ``calcPhiASE(...)`` call:
+interface accepts a ``backend`` option, for example in ``PhiASE``:
 
 .. code-block:: python
 

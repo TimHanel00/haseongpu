@@ -1,9 +1,10 @@
 PhiASE
 ======
 
-``PhiASE`` configures and runs the ASE calculation.  It behaves like a Python
-configuration class for the lower-level HASEonGPU host mesh, experiment
-parameters, compute parameters, backend selection, and execution mode.
+``PhiASE`` configures and runs the ASE calculation from domain-level Python
+objects: a ``GainMedium``, spectral data, and solver/backend settings. The
+low-level backend transport data is built internally and is not part of the
+frontend modeling interface.
 
 .. code-block:: python
 
@@ -38,10 +39,10 @@ ASE can be run once without a ``Simulation`` time loop:
        order="F",
    )
 
-``run(...)`` constructs the low-level host mesh from ``GainMedium``, creates
-the experiment and compute parameter objects, calls HASEonGPU, stores the raw
-result, and returns ``self``.  The returned ``result.phiAse`` values correspond
-to the ASE flux :math:`\Phi_i` described in the scientific background.
+``run(...)`` canonicalizes the domain objects for the openPMD transport, calls
+HASEonGPU, stores the raw result, and returns ``self``.  The returned
+``result.phiAse`` values correspond to the ASE flux :math:`\Phi_i` described
+in the scientific background.
 
 Sampling and Physics Settings
 -----------------------------
@@ -186,13 +187,13 @@ reproducible Monte Carlo sampling.
 Inspection After a Run
 ----------------------
 
-After ``run(...)``:
+After ``run(...)``, inspect the simulation result and the original domain
+objects rather than backend adapter containers:
 
 .. code-block:: python
 
-   phi_ase.hostMesh
-   phi_ase.experimentParameters
-   phi_ase.computeParameters
-   phi_ase.getResults()
+   result = phi_ase.getResults()
+   points = medium.getPoints()
+   prisms = medium.getPrisms()
 
 ``getResults()`` raises ``RuntimeError`` if the object has not been run yet.

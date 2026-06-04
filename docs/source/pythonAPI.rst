@@ -80,7 +80,6 @@ Lower-level compatibility helpers
    :toctree: generated
    :nosignatures:
 
-   calcPhiASE
    beta_int3Main
    integrateLaserPump
    runLaserPumpStep
@@ -105,4 +104,3 @@ inspect implementation-level helpers or extension points.
    simulation
    timeIntegration
    vtkWedge
-   calcPhiASE

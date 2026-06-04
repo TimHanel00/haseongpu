@@ -17,6 +17,15 @@ sys.path.insert(0, str(repoRoot))
 if buildPythonRoot.is_dir():
     sys.path.insert(0, str(buildPythonRoot))
 
+# A stale user-site editable install can register a meta-path finder for
+# HASEonGPU before pytest's local pythonpath is applied. Keep tests bound to
+# this checkout so imports do not depend on PYTHONPATH or user-site state.
+sys.meta_path = [
+    finder
+    for finder in sys.meta_path
+    if finder.__class__.__module__ != "_HASEonGPU_editable"
+]
+
 from HASEonGPU import GainMedium, Grid, MeshTopology, PhiASE, PumpProperties, SpectralDecomposition
 
 import numpy as np

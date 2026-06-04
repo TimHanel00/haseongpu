@@ -152,5 +152,8 @@ if(DEFINED openPMD_BINARY_DIR AND DEFINED openPMD_INSTALL_PYTHONDIR)
         "PYTHONPATH entry for the openPMD-api Python module built by HASE"
         FORCE
     )
-    message(STATUS "HASE openPMD Python module path: ${HASE_OPENPMD_PYTHONPATH}")
+    message(
+        STATUS
+        "HASE openPMD Python module path: ${HASE_OPENPMD_PYTHONPATH}"
+    )
 endif()

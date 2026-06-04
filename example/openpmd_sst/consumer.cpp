@@ -10,18 +10,12 @@
 namespace io = openPMD;
 
 template<typename T>
-std::vector<T> loadScalarMesh(
-    io::Series& series,
-    io::Iteration& iteration,
-    std::string const& recordName)
+std::vector<T> loadScalarMesh(io::Series& series, io::Iteration& iteration, std::string const& recordName)
 {
     auto component = iteration.meshes[recordName][io::MeshRecordComponent::SCALAR];
     auto extent = component.getExtent();
-    std::size_t elementCount = std::accumulate(
-        extent.begin(),
-        extent.end(),
-        std::size_t{1},
-        std::multiplies<std::size_t>{});
+    std::size_t elementCount
+        = std::accumulate(extent.begin(), extent.end(), std::size_t{1}, std::multiplies<std::size_t>{});
 
     auto chunk = component.loadChunk<T>();
     series.flush();
@@ -38,11 +32,8 @@ std::vector<T> loadMeshComponent(
 {
     auto component = iteration.meshes[recordName][componentName];
     auto extent = component.getExtent();
-    std::size_t elementCount = std::accumulate(
-        extent.begin(),
-        extent.end(),
-        std::size_t{1},
-        std::multiplies<std::size_t>{});
+    std::size_t elementCount
+        = std::accumulate(extent.begin(), extent.end(), std::size_t{1}, std::multiplies<std::size_t>{});
 
     auto chunk = component.loadChunk<T>();
     series.flush();

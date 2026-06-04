@@ -57,7 +57,6 @@ endif()
 find_package(Threads REQUIRED)
 
 # build options
-option(HASE_BUILD_PhiAse "Build the main calcPhiAse - HaseOnGPU Binary" ON)
 option(
     HASE_BUILD_RELEASE
     "Build release version; forces Release build type and release optimization options."
@@ -419,23 +418,21 @@ endif()
 alpaka_finalize(hase)
 
 include(cmake/AlpakaBackendNames.cmake)
-if(HASE_BUILD_PhiAse)
-    add_executable(calcPhiASE "${CMAKE_CURRENT_SOURCE_DIR}/src/openpmd_main.cpp")
-    set_target_properties(
-        calcPhiASE
-        PROPERTIES
-            BUILD_RPATH_USE_ORIGIN ON
-            CUDA_SEPARABLE_COMPILATION ON
-            CUDA_ARCHITECTURES "${HASE_CUDA_ARCHITECTURES}"
-            INSTALL_RPATH "$ORIGIN"
-            INSTALL_RPATH_USE_LINK_PATH ON
-    )
-    target_link_libraries(calcPhiASE PRIVATE hase::hase)
-    if(TARGET hase_openpmd_python)
-        add_dependencies(calcPhiASE hase_openpmd_python)
-    endif()
-    alpaka_finalize(calcPhiASE)
+add_executable(calcPhiASE "${CMAKE_CURRENT_SOURCE_DIR}/src/openpmd_main.cpp")
+set_target_properties(
+    calcPhiASE
+    PROPERTIES
+        BUILD_RPATH_USE_ORIGIN ON
+        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_ARCHITECTURES "${HASE_CUDA_ARCHITECTURES}"
+        INSTALL_RPATH "$ORIGIN"
+        INSTALL_RPATH_USE_LINK_PATH ON
+)
+target_link_libraries(calcPhiASE PRIVATE hase::hase)
+if(TARGET hase_openpmd_python)
+    add_dependencies(calcPhiASE hase_openpmd_python)
 endif()
+alpaka_finalize(calcPhiASE)
 
 # Testing
 if(HASE_TESTING)

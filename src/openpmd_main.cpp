@@ -1,6 +1,5 @@
-#include <openpmd/OpenPmdParser.hpp>
-
 #include <core/simulation.hpp>
+#include <openpmd/OpenPmdParser.hpp>
 
 #include <exception>
 #include <filesystem>
@@ -43,8 +42,9 @@ namespace
                 paths.output = std::string(*value);
                 continue;
             }
-            throw std::runtime_error("Unsupported argument '" + std::string(arg)
-                                     + "'. calcPhiASE only accepts --input-path and --output-path.");
+            throw std::runtime_error(
+                "Unsupported argument '" + std::string(arg)
+                + "'. calcPhiASE only accepts --input-path and --output-path.");
         }
 
         if(paths.input.empty())
@@ -57,7 +57,7 @@ namespace
         }
         return paths;
     }
-}
+} // namespace
 
 int main(int argc, char** argv)
 {

@@ -11,6 +11,8 @@ from HASEonGPU import (
     Grid,
     MeshTopology,
     PhiASE,
+    PrimitiveFieldSpec,
+    PrismSchema,
     PumpProperties,
     RungeKutta4,
     Simulation,
@@ -47,17 +49,39 @@ def main():
     # docs:end: topology
     # docs:start: gain-medium
     medium = GainMedium(topology=topology)
-    print(medium.get("betaCells").expectedShape)
-    medium.withPhysicalProperties(
-        betaCells=np.zeros(medium.get("betaCells").expectedShape),
-        claddingCellTypes=np.zeros(medium.get("claddingCellTypes").expectedShape, dtype=np.uint32),
-        refractiveIndices=[2, 1, 3, 4],
-        reflectivities=np.zeros(medium.get("reflectivities").expectedShape),
-        nTot=1.388e20 * 2.0, # Dotierungsdichte [1/cm^3]
-        crystalTFluo=9.41e-4, # fluorescence lifetime
-        claddingNumber=1,
-        claddingAbsorption=5.5, # [1/cm]
-    )
+    print("betaCells shape:", medium.get("betaCells").expectedShape)
+
+    for point in medium.getPoints():
+        point.betaCells = 0.0
+
+    for prism in medium.getPrisms():
+        prism.betaVolume = 0.0
+
+    for triangle in medium.getTriangles():
+        triangle.claddingCellTypes = 0
+        triangle.reflectivities = [0.0, 0.0]
+
+    medium.get("refractiveIndices").value = np.asarray([2.0, 1.0, 3.0, 4.0], dtype=np.float32)
+    medium.get("nTot").value = 1.388e20 * 2.0  # Doping density [1/cm^3]
+    medium.get("crystalTFluo").value = 9.41e-4  # Fluorescence lifetime [s]
+    medium.get("claddingNumber").value = 1
+    medium.get("claddingAbsorption").value = 5.5  # [1/cm]
+
+    class ThermalPrism(PrismSchema):
+        temperature = PrimitiveFieldSpec(
+            "temperature", "custom_temperature", np.float64, unit="K", backendRequired=False
+        )
+
+    medium.withPrimitiveSchema(ThermalPrism)
+    for prism in medium.getPrisms():
+        prism.temperature = 300.0
+
+    first_prism = next(iter(medium.getPrisms()))
+    print("prism fields:", first_prism.getFields())
+    for field in first_prism.getFields():
+        if field.name == "temperature":
+            field.value(305.0)
+    print("first prism temperature:", first_prism.temperature)
     # docs:end: gain-medium
     # docs:start: spectral-decomposition
     cross_sections_data = SpectralDecomposition(
@@ -67,6 +91,7 @@ def main():
         crossSectionEmission=[2.0e-20, 2.48e-20],
         resolution=2,
     )
+    print("spectral fields:", cross_sections_data.getFields())
     # docs:end: spectral-decomposition
     # docs:start: pump-properties
     pump = PumpProperties(

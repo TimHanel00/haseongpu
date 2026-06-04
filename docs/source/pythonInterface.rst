@@ -7,9 +7,7 @@ properties, pump propagation, ASE execution, and time stepping with the high-lev
 Python objects.
 
 For generated signatures, class members, and direct object lookup, use the
-:doc:`Python API Reference <pythonAPI>`.  The older low-level
-``calcPhiASE(...)`` interface is still supported and is documented separately in
-:doc:`pythonInterfaceLegacy`.
+:doc:`Python API Reference <pythonAPI>`.
 
 The current interface allows users to describe the physical problem using
 separate high-level abstraction objects. These objects define the
@@ -68,7 +66,6 @@ Concept Pages
    python_interface/phi_ase
    python_interface/simulation
    python_interface/utilities
-   pythonInterfaceLegacy
 
 Minimal Example Tutorial
 ------------------------
@@ -126,10 +123,8 @@ The shape of most arrays depends on the mesh, so the example asks the medium
 for the expected shape before allocating data.  For example,
 ``medium.get("betaCells").expectedShape`` returns
 ``(numberOfPoints, numberOfLevels)``.  ``reflectivities`` returns
-``(2, numberOfTriangles)`` because there is one value for the bottom surface
-and one for the top surface of every triangle.
-In general the data-layout is still in-line with the pythonInterfaceLegacy in :doc:`pythonInterfaceLegacy`.
-
+``(numberOfTriangles, 2)`` because every triangle has one value for the bottom surface
+and one value for the top surface.
 The properties in this minimal setup are:
 
 ``betaCells``
@@ -147,8 +142,8 @@ The properties in this minimal setup are:
    reflections are enabled.
 
 ``reflectivities``
-   Surface reflectivity per triangle.  Row 0 describes the bottom surface and
-   row 1 describes the top surface.
+   Surface reflectivity per triangle.  Column 0 describes the bottom surface and
+   column 1 describes the top surface.
 
 ``nTot``
    Active-ion concentration :math:`N_{\mathrm{tot}}` in the gain medium.  Pump
@@ -162,8 +157,8 @@ The properties in this minimal setup are:
    Select which triangle label is treated as cladding and how strongly that
    cladding absorbs.
 
-See :doc:`python_interface/gain_medium` and the low-level argument reference in
-:doc:`pythonInterfaceLegacy` for the exact layouts passed to HASEonGPU.
+See :doc:`python_interface/gain_medium` for the domain-level field shapes and
+layout rules used by the Python interface.
 
 Provide Absorption and Emission Spectra
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -264,8 +259,7 @@ the installed build:
    backend = AlpakaBackends.Host_Cpu_CpuSerial
 
 Pass one of these strings to ``PhiASE(..., backend=...)``.  The same backend
-names are used by the low-level ``calcPhiASE(...)`` interface and by the
-``--backend=`` option of the command-line binary.  See
+names are used by the ``--backend=`` option of the command-line binary.  See
 :doc:`Backend Selection <backendSelection>` for build-time backend selection,
 runtime backend naming, and troubleshooting the backend-name helper library.
 
