@@ -5,6 +5,7 @@ import pytest
 
 from pyInclude.openpmd import (
     HASE_SCHEMA_VERSION,
+    BaseSchema,
     PointSchema,
     PrimitiveFieldSpec,
     PrismSchema,
@@ -81,10 +82,29 @@ def testSchemaFieldsAreDerivedFromPrimitiveSchemas():
     prism_names = {spec.name for spec in primitiveFieldSpecs("prism")}
     point_names = {spec.name for spec in primitiveFieldSpecs("point")}
 
-    assert {"connectivity", "surface", "claddingCellType"} <= triangle_names
+    assert {"connectivity", "center", "normal", "surface", "claddingGroup"} <= triangle_names
+    assert {"cellCenterX", "cellCenterY", "cellNormalX", "cellNormalY", "claddingCellType"}.isdisjoint(triangle_names)
     assert "betaVolume" in prism_names
-    assert {"pointBeta", "phiAse", "mse", "totalRays", "dndtAse"} <= point_names
+    assert {"position", "pointBeta", "phiAse", "mse", "totalRays", "dndtAse"} <= point_names
     assert schemaFields["betaVolume"] in primitiveFieldSpecs("prism")
+
+
+def testPointSchemaShapeIsDefinedByPositionField():
+    schema = primitiveSchema("point")
+    position = fieldSpec("position")
+
+    assert schema.shapeField == "position"
+    assert schema.expectedShape(_context()) == (5,)
+    assert position.expectedShape(_context()) == (2, 5)
+    assert fieldSpec("points") is position
+
+
+def testRecordNameDefaultsToDerivedFieldName():
+    field = PrimitiveFieldSpec("thermalLoad", np.float64, unit="W")
+    explicit = PrimitiveFieldSpec("thermalLoad", "transport_thermal", np.float64, unit="W")
+
+    assert field.recordName == "thermal_load"
+    assert explicit.recordName == "transport_thermal"
 
 
 def testPrimitiveSchemaCanBeExtendedWithUserFieldSpec():
@@ -107,7 +127,31 @@ def testPrimitiveSchemaCanBeDeclaredByInheritance():
 
     fields = {spec.name: spec for spec in ThermalPrism.fieldSpecs()}
 
+    assert issubclass(ThermalPrism, BaseSchema)
     assert {"betaVolume", "temperature"} <= set(fields)
     assert fields["temperature"].entity == "cell_layer"
     assert fields["temperature"].expectedShape(_context()) == (2, 3)
     assert fields["temperature"].unit == "K"
+
+
+def testPrimitiveFieldAxesAreOptionalAndInheritParentSchemaShape():
+    class ThermalPrism(PrismSchema):
+        temperature = PrimitiveFieldSpec("temperature", np.float64, unit="K", backendRequired=False)
+
+    fields = {spec.name: spec for spec in ThermalPrism.fieldSpecs()}
+
+    assert fields["temperature"].recordName == "temperature"
+    assert fields["temperature"].axes == PrismSchema.axes
+    assert fields["temperature"].entity == "cell_layer"
+    assert fields["temperature"].expectedShape(_context()) == (2, 3)
+
+
+def testTriangleSchemaExposesMultidimensionalFieldsButKeepsBackendSpecs():
+    context = _context()
+    fields = {spec.name: spec for spec in TriangleSchema.fieldSpecs()}
+
+    assert fields["center"].expectedShape(context) == (2, 2)
+    assert fields["normal"].expectedShape(context) == (2, 3, 2)
+    assert fieldSpec("cellCenterX").expectedShape(context) == (2,)
+    assert fieldSpec("cellNormalY").expectedShape(context) == (2, 3)
+    assert fieldSpec("claddingCellType").expectedShape(context) == (2,)

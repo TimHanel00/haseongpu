@@ -6,12 +6,10 @@
 
 """Public Python convenience exports for HASEonGPU."""
 
-import HASEonGPU_Bindings
-
 __version__ = "2.0"
 
 from .alpakaUtils import AlpakaBackends
-from .openpmd import PointSchema, PrimitiveFieldSpec, PrismSchema, TriangleSchema, backendFlat
+from .openpmd import BaseGroup, BaseSchema, GroupFieldSpec, PointSchema, PrimitiveFieldSpec, PrismSchema, TriangleSchema, backendFlat
 from .geometry import GainMedium, GainMediumGeometry, Gmsh, Grid, MeshTopology, writeGainMediumVtk
 from .laser import CrossSectionData, LaserProperties, PumpProperties, SpectralDecomposition
 from .pumping import (

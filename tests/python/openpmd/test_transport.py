@@ -402,6 +402,123 @@ def test_python_writer_openpmd_cpp_parser_result_round_trip(contract_input, tmp_
 
 
 
+def _integration_enabled():
+    return os.environ.get("HASE_RUN_OPENPMD_INTEGRATION", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _cache_value(cache_path, name):
+    if cache_path is None or not cache_path.is_file():
+        return None
+    for line in cache_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if line.startswith(name + ":"):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def _build_dir_for_executable(executable):
+    path = Path(executable).resolve()
+    for parent in [path.parent, *path.parents]:
+        if (parent / "CMakeCache.txt").is_file():
+            return parent
+        if parent == Path.cwd().resolve():
+            break
+    return None
+
+
+def _target_uses_openpmd_main(build_dir):
+    if build_dir is None:
+        return False
+    for manifest in ("build.ninja", "Makefile", "compile_commands.json"):
+        path = build_dir / manifest
+        if path.is_file() and "src/openpmd_main.cpp" in path.read_text(encoding="utf-8", errors="ignore"):
+            return True
+    return False
+
+
+def _calc_phi_ase_candidates():
+    env = os.environ.get("HASE_OPENPMD_CALCPHIASE") or os.environ.get("HASE_CALCPHIASE")
+    if env:
+        yield Path(env)
+    root = Path(__file__).resolve().parents[3]
+    yield root / "cmake-build-debug" / "calcPhiASE"
+    yield root / "build" / "calcPhiASE"
+    yield root / "build" / "cp312-cp312-linux_x86_64" / "calcPhiASE"
+
+
+def _openpmd_calc_phi_ase_or_skip():
+    if not _integration_enabled():
+        pytest.skip("set HASE_RUN_OPENPMD_INTEGRATION=1 to run calcPhiASE round-trip integration tests")
+    for executable in _calc_phi_ase_candidates():
+        if executable.is_file() and os.access(executable, os.X_OK):
+            build_dir = _build_dir_for_executable(executable)
+            if _target_uses_openpmd_main(build_dir):
+                return executable.resolve(), build_dir
+    pytest.skip("no openPMD calcPhiASE binary found; build HASE_BUILD_PhiAse with src/openpmd_main.cpp")
+
+
+def _mpi_enabled_or_skip(build_dir):
+    cache = None if build_dir is None else build_dir / "CMakeCache.txt"
+    disable_mpi = _cache_value(cache, "DISABLE_MPI")
+    if disable_mpi == "ON":
+        pytest.skip("calcPhiASE was built with DISABLE_MPI=ON")
+    compile_commands = None if build_dir is None else build_dir / "compile_commands.json"
+    if compile_commands is not None and compile_commands.is_file():
+        commands = compile_commands.read_text(encoding="utf-8", errors="ignore")
+        if "src/openpmd_main.cpp" in commands and "-DDISABLE_MPI" in commands:
+            pytest.skip("calcPhiASE compile command defines DISABLE_MPI")
+    mpi_found = _cache_value(cache, "MPI_CXX_FOUND") or _cache_value(cache, "MPI_FOUND")
+    if mpi_found is not None and mpi_found.upper() not in {"TRUE", "ON", "1", "YES"}:
+        pytest.skip("calcPhiASE build did not find MPI")
+
+
+def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
+    executable, build_dir = _openpmd_calc_phi_ase_or_skip()
+    if parallel_mode == "mpi":
+        _mpi_enabled_or_skip(build_dir)
+
+    phi_ase = asymmetric_phi_ase()
+    phi_ase.parallelMode = parallel_mode
+    input_path = tmp_path / f"{parallel_mode}_input.bp"
+    output_path = tmp_path / f"{parallel_mode}_output.bp"
+
+    transport.writeInput(input_path, phi_ase, asymmetric_medium(), asymmetric_cross_sections())
+    completed = subprocess.run(
+        [str(executable), f"--input-path={input_path}", f"--output-path={output_path}"],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+    result = transport.read_result(output_path)
+    expected_size = asymmetric_topology().numberOfPoints * asymmetric_topology().levels
+    assert result.phiAse.shape == (expected_size,)
+    assert result.mse.shape == (expected_size,)
+    assert result.totalRays.shape == (expected_size,)
+    assert result.dndtAse.shape == (expected_size,)
+    assert np.all(np.isfinite(result.phiAse))
+    assert np.all(np.isfinite(result.mse))
+    assert np.all(result.totalRays >= 0)
+
+    io = _io()
+    series = io.Series(str(input_path), io.Access.read_only)
+    try:
+        assert series.iterations[0].get_attribute("parallel_mode") == parallel_mode
+    finally:
+        series.close()
+
+
+@pytest.mark.integration
+def test_calc_phi_ase_single_openpmd_round_trip(tmp_path):
+    _round_trip_calc_phi_ase(tmp_path, "single")
+
+
+@pytest.mark.integration
+def test_calc_phi_ase_mpi_openpmd_round_trip_when_mpi_enabled(tmp_path):
+    _round_trip_calc_phi_ase(tmp_path, "mpi")
+
+
 def test_writeInput_preserves_custom_fields(tmp_path):
     try:
         _io()

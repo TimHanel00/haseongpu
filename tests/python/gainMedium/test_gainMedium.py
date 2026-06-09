@@ -164,7 +164,7 @@ def testPrimitiveElementsAssignFieldsAndExposeMetadata():
     for prism in medium.getPrisms():
         prism.betaVolume = 0.5
     for triangle in medium.getTriangles():
-        triangle.claddingCellTypes = 7
+        triangle.claddingGroup = 7
         triangle.reflectivities = [0.1, 0.2]
 
     np.testing.assert_array_equal(
@@ -189,6 +189,27 @@ def testPrimitiveElementsAssignFieldsAndExposeMetadata():
     assert fields["betaVolume"].meta()["entity"] == "cell_layer"
     fields["betaVolume"].value(0.75)
     assert next(iter(medium.getPrisms())).betaVolume == 0.75
+
+
+def testMeshPrimitiveViewsExposeVectorFields():
+    topology = MeshTopology.fromGrid(Grid(xExtent=1.0, yExtent=1.0, zExtent=0.5, tileSizeZ=0.25))
+    medium = GainMedium(topology=topology)
+
+    point = next(iter(medium.getPoints()))
+    triangle = next(iter(medium.getTriangles()))
+
+    np.testing.assert_array_equal(point.position, topology.points[0])
+    np.testing.assert_array_equal(point.coordinates, topology.points[0])
+    assert triangle.connectivity.shape == (3,)
+    assert triangle.center.shape == (2,)
+    assert triangle.normal.shape == (3, 2)
+    assert triangle.neighbors.shape == (3,)
+    assert triangle.normalPoints.shape == (3,)
+    assert triangle.claddingGroup == triangle.claddingCellTypes
+
+    fields = {field.name: field for field in triangle.getFields()}
+    assert fields["center"].meta()["axes"] == ("cell", "coordinate")
+    assert fields["normal"].meta()["axes"] == ("cell", "local_side", "coordinate")
 
 
 def testPrimitiveSchemaCanBeRegisteredBeforeValuesAreAssigned():

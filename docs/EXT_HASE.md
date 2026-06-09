@@ -5,10 +5,11 @@ haseVersion = 0.1
 simulationType = laserCrystalASE
 geometryType = extrudedTriangularPrism
 
-This file is the single HASE/openPMD schema source. The Python frontend reads
-this document to construct built-in primitive schema classes, field specs,
-record names, units, and transport attribute names. It also documents how those
-Python names map onto the current openPMD transport consumed by the C++ backend.
+The built-in HASE schema is defined in Python in `pyInclude/openpmd/schema/`.
+This document describes that built-in design, its units, and how Python frontend
+primitive fields map onto the current openPMD transport consumed by the C++
+backend. It is documentation of the Python schema source, not an input parsed by
+the Python frontend.
 
 HASE does not write the openPMD-reserved `openPMDextension` attribute. The
 current HASE-owned marker is `haseOpenPMDextension = HASE`. If HASE later
@@ -21,8 +22,15 @@ extension marker without changing the record inventory below.
 
 The Python interface is primitive-oriented. User-facing HASE primitives are
 `points`, `triangles`, and `prisms`; each primitive schema is explicitly
-extensible. Users add scalar or vector fields to primitive schemas and address
-those fields by domain names in Python.
+extensible through normal Python inheritance from `BaseSchema`-derived classes
+such as `PointSchema`, `TriangleSchema`, and `PrismSchema`. Users add scalar or
+vector fields to primitive schemas and address those fields by domain names in
+Python.
+
+The built-in point schema is shaped by its multidimensional `position` field.
+The backend still serializes this field through the historical `vertices/{x,y}`
+record components; the legacy field lookup name `points` is kept as a
+compatibility alias for the same schema field.
 
 The Python layer owns primitive classes, domains, gain-medium fields, spectra,
 and solver settings. It must not expose backend adapter objects or require users
@@ -154,7 +162,7 @@ These values are serialized as iteration attributes for the current backend cont
 
 | primitive | field            | record             | dtype   | axes              | shape            | unit | unitSI | unitDimension | dynamic | backendRequired | userDefined | schemaRole |
 |-----------|------------------|--------------------|---------|-------------------|------------------|------|--------|---------------|---------|-----------------|-------------|------------|
-| point     | points           | vertices           | float64 | coordinate,point  | coordinate_point | m    | 1.0    | LENGTH        | false   | true            | false       | input      |
+| point     | position         | vertices           | float64 | coordinate,point  | coordinate_point | m    | 1.0    | LENGTH        | false   | true            | false       | input      |
 | point     | pointBeta        | point_beta         | float64 | point,level       |                  | 1    | 1.0    | DIMENSIONLESS | true    | true            | false       | input      |
 | point     | phiAse           | phi_ase            | float32 | point,level       |                  | cm^-2 s^-1 | 1.0e4 | PHOTON_FLUX   | true    | false           | false       | result     |
 | point     | mse              | mse                | float64 | point,level       |                  | 1    | 1.0    | DIMENSIONLESS | true    | false           | false       | result     |

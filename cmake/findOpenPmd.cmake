@@ -5,6 +5,20 @@ set(HASE_OPENPMD_GIT_TAG "0.17.0")
 set(HASE_ADIOS2_GIT_REPOSITORY "https://github.com/ornladios/ADIOS2.git")
 set(HASE_ADIOS2_GIT_TAG "v2.10.2")
 
+if(DEFINED openPMD_SUPERBUILD)
+    set(HASE_OPENPMD_SUPERBUILD_DEFAULT ${openPMD_SUPERBUILD})
+else()
+    set(HASE_OPENPMD_SUPERBUILD_DEFAULT ON)
+endif()
+option(HASE_OPENPMD_SUPERBUILD
+    "Allow openPMD-api to fetch/build its bundled helper dependencies"
+    ${HASE_OPENPMD_SUPERBUILD_DEFAULT}
+)
+option(HASE_OPENPMD_BUILD_PYTHON_BINDINGS
+    "Build openPMD-api Python bindings as part of the HASE CMake build"
+    OFF
+)
+
 message(STATUS "Fetching pinned ADIOS2 for the HASE openPMD transport")
 message(STATUS "Fetching pinned openPMD-api for the HASE openPMD transport")
 
@@ -32,12 +46,53 @@ set(ADIOS2_BUILD_TESTING
     "Disable ADIOS2 tests in the HASE superbuild"
     FORCE
 )
-set(ADIOS2_INSTALL_GENERATE_CONFIG
+set(BUILD_TESTING
     OFF
     CACHE BOOL
-    "Do not generate ADIOS2 install configs in the HASE superbuild"
+    "Disable third-party tests while configuring the HASE superbuild dependencies"
     FORCE
 )
+set(ADIOS2_INSTALL_GENERATE_CONFIG
+    ON
+    CACHE BOOL
+    "Generate ADIOS2 CMake configs required by openPMD's find_package(ADIOS2)"
+    FORCE
+)
+
+# Keep the ADIOS2 superbuild narrow. HASE's openPMD transport uses ADIOS2
+# BP/SST-style openPMD series and does not need HDF5, compression plugins,
+# remote/cloud transports, visualization hooks, or profiling infrastructure.
+foreach(HASE_ADIOS2_DISABLED_OPTION IN ITEMS
+    BZip2
+    Blosc2
+    Campaign
+    Catalyst
+    DAOS
+    DataMan
+    DataSpaces
+    Endian_Reverse
+    HDF5
+    HDF5_VOL
+    IME
+    LIBPRESSIO
+    MGARD
+    MHS
+    PNG
+    Profiling
+    SZ
+    Sodium
+    SysVShMem
+    UCX
+    ZFP
+    ZeroMQ
+)
+    set(ADIOS2_USE_${HASE_ADIOS2_DISABLED_OPTION}
+        OFF
+        CACHE STRING
+        "Disable unused ADIOS2 ${HASE_ADIOS2_DISABLED_OPTION} support in the HASE superbuild"
+        FORCE
+    )
+endforeach()
 if(MPI_FOUND)
     set(ADIOS2_USE_MPI
         ON
@@ -62,6 +117,14 @@ FetchContent_Declare(
     OVERRIDE_FIND_PACKAGE
 )
 FetchContent_MakeAvailable(ADIOS2)
+if(EXISTS "${ADIOS2_BINARY_DIR}/adios2-config.cmake")
+    set(ADIOS2_DIR
+        "${ADIOS2_BINARY_DIR}"
+        CACHE PATH
+        "ADIOS2 CMake config directory produced by the HASE FetchContent build"
+        FORCE
+    )
+endif()
 if(NOT DEFINED ADIOS2_VERSION OR "${ADIOS2_VERSION}" STREQUAL "")
     string(REGEX REPLACE "^v" "" ADIOS2_VERSION "${HASE_ADIOS2_GIT_TAG}")
     set(ADIOS2_VERSION
@@ -78,16 +141,42 @@ set(openPMD_USE_ADIOS2
     "Enable ADIOS2 backend for the HASE openPMD transport"
     FORCE
 )
-set(openPMD_USE_PYTHON
-    ON
+set(openPMD_USE_HDF5
+    OFF
     CACHE STRING
-    "Build openPMD-api Python bindings from the HASE CMake build"
+    "Disable HDF5 backend for the HASE openPMD transport"
     FORCE
 )
-set(openPMD_USE_INTERNAL_PYBIND11
-    ON
+set(openPMD_HAVE_PKGCONFIG
+    OFF
     CACHE BOOL
-    "Fetch pybind11 for openPMD-api Python bindings"
+    "Do not generate pkg-config metadata in the HASE superbuild"
+    FORCE
+)
+set(openPMD_USE_VERIFY
+    OFF
+    CACHE BOOL
+    "Disable openPMD internal VERIFY checks in the HASE superbuild"
+    FORCE
+)
+set(openPMD_SUPERBUILD
+    ${HASE_OPENPMD_SUPERBUILD}
+    CACHE BOOL
+    "Allow openPMD-api to fetch/build its bundled helper dependencies"
+    FORCE
+)
+foreach(HASE_OPENPMD_INTERNAL_DEP IN ITEMS CATCH JSON TOML11 PYBIND11)
+    set(openPMD_USE_INTERNAL_${HASE_OPENPMD_INTERNAL_DEP}
+        ${HASE_OPENPMD_SUPERBUILD}
+        CACHE BOOL
+        "Use openPMD-api bundled ${HASE_OPENPMD_INTERNAL_DEP} dependency"
+        FORCE
+    )
+endforeach()
+set(openPMD_USE_PYTHON
+    ${HASE_OPENPMD_BUILD_PYTHON_BINDINGS}
+    CACHE STRING
+    "Build openPMD-api Python bindings from the HASE CMake build"
     FORCE
 )
 set(openPMD_BUILD_TESTING
@@ -145,7 +234,7 @@ if(TARGET openPMD.py)
     add_custom_target(hase_openpmd_python DEPENDS openPMD.py)
 endif()
 
-if(DEFINED openPMD_BINARY_DIR AND DEFINED openPMD_INSTALL_PYTHONDIR)
+if(HASE_OPENPMD_BUILD_PYTHON_BINDINGS AND DEFINED openPMD_BINARY_DIR AND DEFINED openPMD_INSTALL_PYTHONDIR)
     set(HASE_OPENPMD_PYTHONPATH
         "${openPMD_BINARY_DIR}/${openPMD_INSTALL_PYTHONDIR}"
         CACHE PATH

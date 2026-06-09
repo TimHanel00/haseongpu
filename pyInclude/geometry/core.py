@@ -15,7 +15,7 @@ import warnings
 
 
 import numpy as np
-from ..openpmd import BackendFlatArray, FieldSpec, PrimitiveSchema, PrimitiveSchemaDefinition, schemaFields
+from ..openpmd import BackendFlatArray, FieldSpec, GroupFieldSpec, PrimitiveSchema, PrimitiveSchemaDefinition, schemaFields
 from .msh import Gmsh
 from .stl import from_stl
 from .vtk import gainMediumFromVtk, topologyFromVtk, writeGainMediumVtk
@@ -273,6 +273,9 @@ class PrimitiveElement:
     def getFields(self):
         return [PrimitiveElementField(self, name) for name in self._view.keys()]
 
+    def _applyGroup(self, group):
+        self._view._applyGroup(self.index, group)
+
 
 _MISSING_FIELD_VALUE = object()
 
@@ -305,6 +308,7 @@ class PrimitiveView:
         self.shape = tuple(shape)
         self._fields = dict(fields)
         self._metadata = dict(metadata or {})
+        self._groupAssignments = {}
 
     def keys(self):
         return self._fields.keys()
@@ -318,6 +322,43 @@ class PrimitiveView:
 
     def get(self, name):
         return self._fields[name]
+
+
+    def _applyGroup(self, index, group):
+        for spec, value in group.fieldItems():
+            self._assignGroupField(index, group, spec, value)
+
+    def _assignGroupField(self, index, group, spec: GroupFieldSpec, value):
+        name = spec.target
+        assignments = self._groupAssignments.setdefault(name, {})
+        existing = assignments.get(tuple(index))
+        if existing is not None and existing is not group._groupToken:
+            raise ValueError(
+                f"{self.name} element {tuple(index)} already belongs to a group assigning field '{name}'"
+            )
+
+        arr_value = np.asarray(value, dtype=spec.dtype)
+        if name not in self._fields:
+            field_shape = self.shape + tuple(arr_value.shape)
+            self._fields[name] = np.zeros(field_shape, dtype=np.dtype(spec.dtype))
+            self._metadata[name] = {
+                "name": name,
+                "entity": self.name,
+                "axes": (self.name,),
+                "dtype": str(np.dtype(spec.dtype)),
+                "unit": spec.unit,
+                "shape": field_shape,
+                "isSet": True,
+            }
+
+        field = self._fields[name]
+        expected = field[tuple(index)].shape if hasattr(field[tuple(index)], "shape") else ()
+        if tuple(arr_value.shape) != tuple(expected):
+            raise ValueError(
+                f"group field '{name}' value has shape {arr_value.shape}, expected {expected} for {self.name} element"
+            )
+        field[tuple(index)] = arr_value
+        assignments[tuple(index)] = group._groupToken
 
     def asDict(self):
         return dict(self._fields)
@@ -1283,23 +1324,27 @@ class GainMedium:
         }
 
     def getPoints(self):
+        position = np.asarray(self.topology.points, dtype=np.float64)
         fields = {
-            "coordinates": np.asarray(self.topology.points, dtype=np.float64),
+            "position": position,
+            "coordinates": position,
             "betaCells": self._fieldView("betaCells"),
             "dntdAse": self._fieldView("dntdAse"),
         }
         custom = self._customFieldViews(("point",), ("point", "level"))
         fields.update(custom)
+        position_meta = {
+            "name": "position",
+            "entity": "point_coordinate",
+            "axes": ("point", "coordinate"),
+            "dtype": str(np.dtype(np.float64)),
+            "unit": "m",
+            "shape": position.shape,
+            "isSet": True,
+        }
         metadata = {
-            "coordinates": {
-                "name": "coordinates",
-                "entity": "point",
-                "axes": ("point", "component"),
-                "dtype": str(np.dtype(np.float64)),
-                "unit": "m",
-                "shape": np.asarray(self.topology.points).shape,
-                "isSet": True,
-            },
+            "position": position_meta,
+            "coordinates": {**position_meta, "name": "coordinates"},
             "betaCells": self._propertyFieldMeta("betaCells", entity="point_level", axes=("point", "level")),
             "dntdAse": self._propertyFieldMeta("dntdAse", entity="point_level", axes=("point", "level")),
         }
@@ -1307,22 +1352,49 @@ class GainMedium:
         return PrimitiveView("point", (self.topology.numberOfPoints,), fields, metadata)
 
     def getTriangles(self):
+        derived = self.topology._topology()
+        center = np.column_stack((derived["triangleCenterX"], derived["triangleCenterY"])).astype(np.float64, copy=False)
+        normal = np.stack(
+            (
+                np.asarray(derived["triangleNormalsX"], dtype=np.float64).reshape((self.topology.numberOfTriangles, 3), order="F"),
+                np.asarray(derived["triangleNormalsY"], dtype=np.float64).reshape((self.topology.numberOfTriangles, 3), order="F"),
+            ),
+            axis=-1,
+        )
+        connectivity = np.asarray(self.topology.trianglePointIndices, dtype=np.uint32)
         fields = {
-            "pointIndices": np.asarray(self.topology.trianglePointIndices, dtype=np.uint32),
+            "connectivity": connectivity,
+            "pointIndices": connectivity,
+            "neighbors": np.asarray(derived["triangleNeighbors"], dtype=np.int32).reshape((self.topology.numberOfTriangles, 3), order="F"),
+            "forbiddenEdges": np.asarray(derived["forbiddenEdge"], dtype=np.int32).reshape((self.topology.numberOfTriangles, 3), order="F"),
+            "normalPoints": np.asarray(derived["triangleNormalPoint"], dtype=np.uint32).reshape((self.topology.numberOfTriangles, 3), order="F"),
+            "center": center,
+            "normal": normal,
+            "surface": np.asarray(derived["triangleSurfaces"], dtype=np.float32),
+            "claddingGroup": self._fieldView("claddingCellTypes"),
             "claddingCellTypes": self._fieldView("claddingCellTypes"),
             "reflectivities": self._fieldView("reflectivities"),
         }
         fields.update(self._customFieldViews(("cell",), ("cell", "local_vertex"), ("cell", "local_side")))
+        connectivity_meta = {
+            "name": "connectivity",
+            "entity": "cell_local_vertex",
+            "axes": ("cell", "local_vertex"),
+            "dtype": str(np.dtype(np.uint32)),
+            "unit": "1",
+            "shape": connectivity.shape,
+            "isSet": True,
+        }
         metadata = {
-            "pointIndices": {
-                "name": "pointIndices",
-                "entity": "cell_local_vertex",
-                "axes": ("cell", "local_vertex"),
-                "dtype": str(np.dtype(np.uint32)),
-                "unit": "1",
-                "shape": np.asarray(self.topology.trianglePointIndices).shape,
-                "isSet": True,
-            },
+            "connectivity": connectivity_meta,
+            "pointIndices": {**connectivity_meta, "name": "pointIndices"},
+            "neighbors": {"name": "neighbors", "entity": "cell_local_side", "axes": ("cell", "local_side"), "dtype": str(np.dtype(np.int32)), "unit": "1", "shape": fields["neighbors"].shape, "isSet": True},
+            "forbiddenEdges": {"name": "forbiddenEdges", "entity": "cell_local_side", "axes": ("cell", "local_side"), "dtype": str(np.dtype(np.int32)), "unit": "1", "shape": fields["forbiddenEdges"].shape, "isSet": True},
+            "normalPoints": {"name": "normalPoints", "entity": "cell_local_side", "axes": ("cell", "local_side"), "dtype": str(np.dtype(np.uint32)), "unit": "1", "shape": fields["normalPoints"].shape, "isSet": True},
+            "center": {"name": "center", "entity": "cell_coordinate", "axes": ("cell", "coordinate"), "dtype": str(np.dtype(np.float64)), "unit": "m", "shape": center.shape, "isSet": True},
+            "normal": {"name": "normal", "entity": "cell_local_side_coordinate", "axes": ("cell", "local_side", "coordinate"), "dtype": str(np.dtype(np.float64)), "unit": "1", "shape": normal.shape, "isSet": True},
+            "surface": {"name": "surface", "entity": "cell", "axes": ("cell",), "dtype": str(np.dtype(np.float32)), "unit": "m^2", "shape": fields["surface"].shape, "isSet": True},
+            "claddingGroup": {**self._propertyFieldMeta("claddingCellTypes", entity="cell", axes=("cell",)), "name": "claddingGroup"},
             "claddingCellTypes": self._propertyFieldMeta("claddingCellTypes", entity="cell", axes=("cell",)),
             "reflectivities": self._propertyFieldMeta("reflectivities", entity="cell_interface", axes=("cell", "interface")),
         }
