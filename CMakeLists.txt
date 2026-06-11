@@ -378,7 +378,12 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
 include(cmake/findOpenPmd.cmake)
 target_link_libraries(hase_core INTERFACE openPMD::openPMD)
-target_compile_definitions(hase_core INTERFACE HASE_ENABLE_OPENPMD)
+target_compile_definitions(
+    hase_core
+    INTERFACE
+        HASE_ENABLE_OPENPMD
+        HASE_OPENPMD_FILE_EXTENSION=\"${HASE_OPENPMD_FILE_EXTENSION}\"
+)
 target_link_libraries(hase_core INTERFACE alpaka::alpaka)
 if(TARGET CUDA::cudart)
     target_link_libraries(hase_core INTERFACE CUDA::cudart)
@@ -432,6 +437,11 @@ target_link_libraries(calcPhiASE PRIVATE hase::hase)
 if(TARGET hase_openpmd_python)
     add_dependencies(calcPhiASE hase_openpmd_python)
 endif()
+foreach(HASE_ADIOS2_RUNTIME_MODULE IN ITEMS cmselect cmsockets)
+    if(TARGET ${HASE_ADIOS2_RUNTIME_MODULE})
+        add_dependencies(calcPhiASE ${HASE_ADIOS2_RUNTIME_MODULE})
+    endif()
+endforeach()
 alpaka_finalize(calcPhiASE)
 
 # Testing

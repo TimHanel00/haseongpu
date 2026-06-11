@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,6 +42,99 @@ class _ComponentArrayField:
     axisLabels: list[str]
     context: object
     prefix: str = "core_"
+
+
+@dataclass(frozen=True)
+class _BackendSpec:
+    name: str
+    suffix: str
+    config: dict
+    streaming: bool = False
+
+
+ADIOS2_CONFIG = {"backend": "adios2"}
+HDF5_CONFIG = {"backend": "hdf5"}
+SST_CONFIG = {
+    "backend": "adios2",
+    "adios2": {
+        "engine": {
+            "parameters": {
+                "DataTransport": "WAN",
+                "OpenTimeoutSecs": "600",
+                "QueueFullPolicy": "Discard",
+            }
+        }
+    },
+}
+
+OPENPMD_BACKENDS = {
+    "adios": _BackendSpec("adios", ".bp", ADIOS2_CONFIG),
+    "adios-sst": _BackendSpec("adios-sst", ".sst", SST_CONFIG, streaming=True),
+    "bp": _BackendSpec("bp", ".bp", {}),
+    "hdf5": _BackendSpec("hdf5", ".h5", HDF5_CONFIG),
+}
+
+
+def _normalize_backend(backend=None):
+    value = backend if backend is not None else os.environ.get("HASE_OPENPMD_BACKEND", "bp")
+    normalized = str(value).strip().lower()
+    if normalized == "sst":
+        normalized = "adios-sst"
+    if normalized not in OPENPMD_BACKENDS:
+        allowed = ", ".join(sorted(OPENPMD_BACKENDS))
+        raise ValueError(f"unsupported openPMD backend '{value}'; expected one of: {allowed}")
+    return normalized
+
+
+def _backend_spec(backend=None):
+    return OPENPMD_BACKENDS[_normalize_backend(backend)]
+
+
+def _truthy(value):
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _artifact_root():
+    explicit = os.environ.get("HASE_OPENPMD_ARTIFACT_DIR")
+    if explicit:
+        return Path(explicit)
+    if _truthy(os.environ.get("HASE_OPENPMD_KEEP_ARTIFACTS", "")):
+        return Path.cwd() / "hase-openpmd-artifacts"
+    return None
+
+
+def _safe_artifact_name(value):
+    allowed = []
+    for char in str(value):
+        allowed.append(char if char.isalnum() or char in {"-", "_", "."} else "-")
+    return "".join(allowed).strip(".-_") or "transport"
+
+
+def _artifact_run_id():
+    explicit = os.environ.get("HASE_OPENPMD_ARTIFACT_RUN_ID")
+    if explicit:
+        return _safe_artifact_name(explicit)
+    prefix = _safe_artifact_name(os.environ.get("HASE_OPENPMD_ARTIFACT_PREFIX", "transport"))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{prefix}-{stamp}-{os.getpid()}"
+
+
+def _write_openpmd_handle(handle_path: Path, series_path: Path):
+    handle_path.write_text(series_path.name + "\n", encoding="utf-8")
+
+
+def _write_artifact_manifest(path: Path, *, backend, input_path, output_path, input_handle, output_handle, status, return_code=None):
+    lines = [
+        f"backend={backend}",
+        f"status={status}",
+        f"input={input_path}",
+        f"inputHandle={input_handle}",
+        f"output={output_path}",
+        f"outputHandle={output_handle}",
+    ]
+    if return_code is not None:
+        lines.append(f"returnCode={return_code}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _fieldContext(gainMedium):
@@ -130,21 +227,14 @@ def _dimensionless_dimension():
     return {}
 
 
-SST_CONFIG = {
-    "adios2": {
-        "engine": {
-            "parameters": {
-                "DataTransport": "WAN",
-                "OpenTimeoutSecs": "600",
-                "QueueFullPolicy": "Discard",
-            }
-        }
-    }
-}
-
-
-def _series_config(path: Path):
-    return SST_CONFIG if path.suffix == ".sst" else {}
+def _series_config(path: Path, backend=None):
+    if backend is not None:
+        return _backend_spec(backend).config
+    if path.suffix == ".sst":
+        return SST_CONFIG
+    if path.suffix == ".h5":
+        return HDF5_CONFIG
+    return {}
 
 
 def _io():
@@ -157,6 +247,31 @@ def _io():
             "the CMake-built calcPhiASE/openPMD stack."
         ) from exc
     return io
+
+
+def _ensure_backend_available(backend):
+    spec = _backend_spec(backend)
+    io = _io()
+    variants = getattr(io, "variants", {})
+    extensions = set(getattr(io, "file_extensions", []))
+
+    if spec.name == "hdf5":
+        if not variants.get("hdf5", False):
+            raise RuntimeError(
+                "openPMD backend 'hdf5' requires openPMD-api built with HDF5 support"
+            )
+    else:
+        if not variants.get("adios2", False):
+            raise RuntimeError(
+                f"openPMD backend '{spec.name}' requires openPMD-api built with ADIOS2 support"
+            )
+
+    extension = spec.suffix.lstrip(".")
+    if extension not in extensions:
+        raise RuntimeError(
+            f"openPMD backend '{spec.name}' requires file extension '{extension}' "
+            f"but this openPMD-api build reports: {sorted(extensions)}"
+        )
 
 
 def _candidate_python_paths(executable: Path):
@@ -180,8 +295,8 @@ def _prefer_matching_openpmd_api(executable: Path):
             except ValueError:
                 pass
         raise RuntimeError(
-            "ADIOS2-SST requires the Python writer and C++ reader to use the same "
-            "openPMD-api/ADIOS2 build. Restart Python with the CMake-built "
+            "The openPMD transport requires the Python writer and C++ reader to use the same "
+            "openPMD-api build. Restart Python with the CMake-built "
             "openPMD module first on PYTHONPATH, e.g. "
             f"PYTHONPATH={next(_candidate_python_paths(executable), '<openpmd-python-path>')}:$PYTHONPATH"
         )
@@ -281,15 +396,41 @@ def _loadScalar(series, iteration, name, dtype):
     return np.array(chunk, dtype=dtype, copy=True).reshape(-1)
 
 
+def _build_dir_for_executable(executable: Path):
+    path = Path(executable).resolve()
+    for parent in [path.parent, *path.parents]:
+        if (parent / "CMakeCache.txt").is_file():
+            return parent
+        if parent == Path.cwd().resolve():
+            break
+    return None
+
+
+def _target_uses_openpmd_main(build_dir):
+    if build_dir is None:
+        return True
+    manifests = [build_dir / name for name in ("build.ninja", "Makefile", "compile_commands.json")]
+    existing = [path for path in manifests if path.is_file()]
+    if not existing:
+        return True
+    return any("src/openpmd_main.cpp" in path.read_text(encoding="utf-8", errors="ignore") for path in existing)
+
+
+def _is_openpmd_calc_phi_ase(executable: Path):
+    return executable.is_file() and _target_uses_openpmd_main(_build_dir_for_executable(executable))
+
+
 def findCalcPhiAse():
     env = os.environ.get("HASE_CALCPHIASE")
     if env:
         path = Path(env)
-        if path.is_file():
+        if _is_openpmd_calc_phi_ase(path):
             return path
+        raise RuntimeError(f"HASE_CALCPHIASE does not point to an openPMD calcPhiASE binary: {path}")
 
     root = Path(__file__).resolve().parents[2]
     candidates = [
+        root / "build" / "ci" / "calcPhiASE",
         root / "build" / "calcPhiASE",
         root / "cmake-build-debug" / "calcPhiASE",
     ]
@@ -297,20 +438,22 @@ def findCalcPhiAse():
         candidates.append(build_dir / "calcPhiASE")
 
     for candidate in candidates:
-        if candidate.is_file():
+        if _is_openpmd_calc_phi_ase(candidate):
             return candidate
 
     raise FileNotFoundError(
-        "Could not find calcPhiASE in the HASE build tree. Build the standard "
-        "HASE target or set HASE_CALCPHIASE."
+        "Could not find an openPMD calcPhiASE binary in the HASE build tree. "
+        "Build HASE_BUILD_PhiAse with src/openpmd_main.cpp or set HASE_CALCPHIASE."
     )
 
 
 
-def writeInput(path, phiAse, gainMedium, crossSections):
+def writeInput(path, phiAse, gainMedium, crossSections, *, backend=None):
     path = Path(path)
+    if backend is not None:
+        _ensure_backend_available(backend)
     io = _io()
-    series = io.Series(str(path), _access("create_linear"), _series_config(path))
+    series = io.Series(str(path), _access("create_linear"), _series_config(path, backend))
     series.set_software("HASEonGPU-openPMD-python-frontend")
     for name, value in haseExtensionAttributes.items():
         series.set_attribute(name, value)
@@ -374,21 +517,67 @@ def read_result(path) -> Result:
 
 
 
-def _runOpenPmdAndExecuteHaseBinary(phiAse, gainMedium, crossSections, *, transport="sst"):
-    suffix = ".sst" if transport == "sst" else ".bp"
-    with tempfile.TemporaryDirectory(prefix="hase-openpmd-") as tmp:
+def _runOpenPmdAndExecuteHaseBinary(phiAse, gainMedium, crossSections, *, transport=None):
+    spec = _backend_spec(transport)
+    artifact_root = _artifact_root()
+    workspace = tempfile.TemporaryDirectory(prefix="hase-openpmd-") if artifact_root is None else contextlib.nullcontext(artifact_root)
+    with workspace as tmp:
         tmp_path = Path(tmp)
-        input_path = tmp_path / ("input" + suffix)
-        output_path = tmp_path / ("output" + suffix)
+        if artifact_root is not None:
+            tmp_path.mkdir(parents=True, exist_ok=True)
+            artifact_id = _artifact_run_id()
+            input_path = tmp_path / f"{artifact_id}-input{spec.suffix}"
+            output_path = tmp_path / f"{artifact_id}-output{spec.suffix}"
+            input_handle = tmp_path / f"{artifact_id}-input.pmd"
+            output_handle = tmp_path / f"{artifact_id}-output.pmd"
+            manifest_path = tmp_path / f"{artifact_id}-manifest.txt"
+            _write_openpmd_handle(input_handle, input_path)
+            _write_openpmd_handle(output_handle, output_path)
+            _write_artifact_manifest(
+                manifest_path,
+                backend=spec.name,
+                input_path=input_path,
+                output_path=output_path,
+                input_handle=input_handle,
+                output_handle=output_handle,
+                status="created",
+            )
+        else:
+            input_path = tmp_path / ("input" + spec.suffix)
+            output_path = tmp_path / ("output" + spec.suffix)
+            manifest_path = None
+            input_handle = None
+            output_handle = None
         executable_path = findCalcPhiAse()
-        if transport == "sst":
-            _prefer_matching_openpmd_api(executable_path)
+        _ensure_backend_available(spec.name)
         executable = str(executable_path)
-        if transport == "sst":
-            proc = subprocess.Popen([executable, f"--input-path={input_path}", f"--output-path={output_path}"], stderr=subprocess.PIPE, text=True)
+        if spec.streaming:
+            proc = subprocess.Popen(
+                [executable, f"--input-path={input_path}", f"--output-path={output_path}"],
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            result_queue = queue.Queue(maxsize=1)
+
+            def read_streaming_result():
+                try:
+                    result_queue.put((True, read_result(output_path)))
+                except BaseException as exc:
+                    result_queue.put((False, exc))
+
+            reader = threading.Thread(target=read_streaming_result, daemon=True)
+            reader.start()
             try:
-                writeInput(input_path, phiAse, gainMedium, crossSections)
-                result = read_result(output_path)
+                writeInput(input_path, phiAse, gainMedium, crossSections, backend=spec.name)
+                try:
+                    ok, payload = result_queue.get(timeout=30)
+                except queue.Empty as exc:
+                    proc.kill()
+                    raise TimeoutError(f"Timed out waiting for openPMD backend '{spec.name}' result stream") from exc
+                if ok:
+                    result = payload
+                else:
+                    raise payload
             finally:
                 try:
                     return_code = proc.wait(timeout=30)
@@ -397,7 +586,7 @@ def _runOpenPmdAndExecuteHaseBinary(phiAse, gainMedium, crossSections, *, transp
                     return_code = proc.wait()
             stderr = "" if proc.stderr is None else proc.stderr.read()
         else:
-            writeInput(input_path, phiAse, gainMedium, crossSections)
+            writeInput(input_path, phiAse, gainMedium, crossSections, backend=spec.name)
             completed = subprocess.run(
                 [executable, f"--input-path={input_path}", f"--output-path={output_path}"],
                 check=False,
@@ -409,11 +598,22 @@ def _runOpenPmdAndExecuteHaseBinary(phiAse, gainMedium, crossSections, *, transp
             if return_code == 0:
                 result = read_result(output_path)
 
+        if manifest_path is not None:
+            _write_artifact_manifest(
+                manifest_path,
+                backend=spec.name,
+                input_path=input_path,
+                output_path=output_path,
+                input_handle=input_handle,
+                output_handle=output_handle,
+                status="completed" if return_code == 0 else "failed",
+                return_code=return_code,
+            )
         if return_code != 0:
             detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
             raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
         return result
 
 
-def runPhiASE(phiAse, gainMedium, crossSections, *, transport="sst"):
+def runPhiASE(phiAse, gainMedium, crossSections, *, transport=None):
     return _runOpenPmdAndExecuteHaseBinary(phiAse, gainMedium, crossSections, transport=transport)

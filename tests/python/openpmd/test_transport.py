@@ -1,5 +1,6 @@
 import os
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -108,6 +109,65 @@ def asymmetric_phi_ase():
     )
 
 
+def launch_smoke_topology():
+    points = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
+    triangles = np.array([[0, 1, 2]], dtype=np.uint32)
+    return MeshTopology(points, triangles, levels=2, thickness=1.0)
+
+
+def launch_smoke_medium():
+    topology = launch_smoke_topology()
+    return GainMedium(topology).withPhysicalProperties(
+        betaVolume=backendFlat(np.array([0.0], dtype=np.float64)),
+        betaCells=backendFlat(np.zeros(topology.numberOfPoints * topology.levels, dtype=np.float64)),
+        claddingCellTypes=np.array([0], dtype=np.uint32),
+        refractiveIndices=np.array([1.5, 1.0, 1.5, 1.0], dtype=np.float32),
+        reflectivities=backendFlat(np.array([0.0, 0.0], dtype=np.float32)),
+        nTot=1.0,
+        crystalTFluo=1.0,
+        claddingNumber=99,
+        claddingAbsorption=0.0,
+    )
+
+
+def launch_smoke_cross_sections():
+    return CrossSectionData(
+        wavelengthsAbsorption=np.array([900e-9], dtype=np.float64),
+        crossSectionAbsorption=np.array([0.0], dtype=np.float64),
+        wavelengthsEmission=np.array([1000e-9], dtype=np.float64),
+        crossSectionEmission=np.array([0.0], dtype=np.float64),
+        resolution=1,
+    )
+
+
+def launch_smoke_phi_ase():
+    cross_sections = launch_smoke_cross_sections()
+    return PhiASE(
+        crossSections=cross_sections,
+        minRaysPerSample=1,
+        maxRaysPerSample=1,
+        mseThreshold=0.25,
+        repetitions=1,
+        adaptiveSteps=1,
+        useReflections=False,
+        backend="Host_Cpu_CpuSerial",
+        parallelMode="single",
+        numDevices=1,
+        minSampleRange=0,
+        maxSampleRange=0,
+        rngSeed=1234,
+    )
+
+
+def _file_backend_for_tests():
+    backend = os.environ.get("HASE_OPENPMD_BACKEND", "bp").strip().lower()
+    return "hdf5" if backend == "hdf5" else "bp"
+
+
+def _file_suffix_for_tests():
+    return transport._backend_spec(_file_backend_for_tests()).suffix
+
+
 def asymmetric_mesh():
     medium = asymmetric_medium()
     topology = medium.topology
@@ -178,8 +238,14 @@ def _scalar_record_values(mesh):
 
 @pytest.fixture
 def contract_input(tmp_path):
-    output = tmp_path / "contract.bp"
-    transport.writeInput(output, asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
+    output = tmp_path / ("contract" + _file_suffix_for_tests())
+    transport.writeInput(
+        output,
+        asymmetric_phi_ase(),
+        asymmetric_medium(),
+        asymmetric_cross_sections(),
+        backend=_file_backend_for_tests(),
+    )
     return output
 
 
@@ -284,6 +350,20 @@ def test_layout_helpers_define_exact_backend_flat_contract():
         assert primitiveView(backendFlat(values), spec, context).shape == spec.expectedShape(context)
 
 
+def test_openpmd_backend_names_map_to_expected_suffixes_and_configs(monkeypatch):
+    assert transport._backend_spec("bp").suffix == ".bp"
+    assert transport._backend_spec("adios").config == {"backend": "adios2"}
+    assert transport._backend_spec("adios-sst").suffix == ".sst"
+    assert transport._backend_spec("adios-sst").streaming is True
+    assert transport._backend_spec("hdf5").config == {"backend": "hdf5"}
+
+    monkeypatch.setenv("HASE_OPENPMD_BACKEND", "hdf5")
+    assert transport._backend_spec().name == "hdf5"
+
+    with pytest.raises(ValueError, match="unsupported openPMD backend"):
+        transport._backend_spec("unsupported")
+
+
 def test_layout_helpers_reject_accidental_transpose_views():
     mesh = asymmetric_mesh()
     spec = fieldSpec("betaVolume")
@@ -354,7 +434,7 @@ def test_writeInput_openpmd_contains_exact_values_order_shape_dtype_units_and_me
 
 
 def test_python_writer_openpmd_cpp_parser_result_round_trip(contract_input, tmp_path):
-    output = tmp_path / "round_trip_result.bp"
+    output = tmp_path / ("round_trip_result" + _file_suffix_for_tests())
     env = os.environ.copy()
     env["HASE_OPENPMD_PYTHON_CONTRACT_INPUT"] = str(contract_input)
     env["HASE_OPENPMD_PYTHON_CONTRACT_OUTPUT"] = str(output)
@@ -404,6 +484,14 @@ def test_python_writer_openpmd_cpp_parser_result_round_trip(contract_input, tmp_
 
 def _integration_enabled():
     return os.environ.get("HASE_RUN_OPENPMD_INTEGRATION", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _integration_backend_values():
+    raw = os.environ.get("HASE_OPENPMD_INTEGRATION_BACKENDS")
+    if raw:
+        return [backend.strip() for backend in raw.split(",") if backend.strip()]
+    backend = os.environ.get("HASE_OPENPMD_BACKEND")
+    return [backend] if backend else ["bp"]
 
 
 def _cache_value(cache_path, name):
@@ -478,10 +566,16 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
 
     phi_ase = asymmetric_phi_ase()
     phi_ase.parallelMode = parallel_mode
-    input_path = tmp_path / f"{parallel_mode}_input.bp"
-    output_path = tmp_path / f"{parallel_mode}_output.bp"
+    input_path = tmp_path / f"{parallel_mode}_input{_file_suffix_for_tests()}"
+    output_path = tmp_path / f"{parallel_mode}_output{_file_suffix_for_tests()}"
 
-    transport.writeInput(input_path, phi_ase, asymmetric_medium(), asymmetric_cross_sections())
+    transport.writeInput(
+        input_path,
+        phi_ase,
+        asymmetric_medium(),
+        asymmetric_cross_sections(),
+        backend=_file_backend_for_tests(),
+    )
     completed = subprocess.run(
         [str(executable), f"--input-path={input_path}", f"--output-path={output_path}"],
         check=False,
@@ -507,6 +601,29 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
         assert series.iterations[0].get_attribute("parallel_mode") == parallel_mode
     finally:
         series.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("openpmd_backend", _integration_backend_values())
+def test_python_api_launches_configured_openpmd_backend_once(monkeypatch, openpmd_backend):
+    if not _integration_enabled():
+        pytest.skip("set HASE_RUN_OPENPMD_INTEGRATION=1 to run calcPhiASE round-trip integration tests")
+
+    executable, _ = _openpmd_calc_phi_ase_or_skip()
+    monkeypatch.setenv("HASE_CALCPHIASE", str(executable))
+    monkeypatch.setenv("HASE_OPENPMD_BACKEND", openpmd_backend)
+    phi_ase = launch_smoke_phi_ase()
+    phi_ase.run(gainMedium=launch_smoke_medium(), crossSections=launch_smoke_cross_sections())
+    result = phi_ase.getResults()
+
+    expected_size = launch_smoke_topology().numberOfPoints * launch_smoke_topology().levels
+    assert result.phiAse.shape == (expected_size,)
+    assert result.mse.shape == (expected_size,)
+    assert result.totalRays.shape == (expected_size,)
+    assert result.dndtAse.shape == (expected_size,)
+    assert np.all(np.isfinite(result.phiAse))
+    assert np.all(np.isfinite(result.mse))
+    assert np.all(result.totalRays >= 0)
 
 
 @pytest.mark.integration
@@ -538,9 +655,15 @@ def test_writeInput_preserves_custom_fields(tmp_path):
     )
     medium = asymmetric_medium().withPrimitiveSchema(ThermalPrism, temperature=values)
     assert next(iter(medium.getPrisms())).temperature == pytest.approx(300.0)
-    output = tmp_path / "custom.bp"
+    output = tmp_path / ("custom" + _file_suffix_for_tests())
 
-    transport.writeInput(output, asymmetric_phi_ase(), medium, asymmetric_cross_sections())
+    transport.writeInput(
+        output,
+        asymmetric_phi_ase(),
+        medium,
+        asymmetric_cross_sections(),
+        backend=_file_backend_for_tests(),
+    )
 
     io = _io()
     series = io.Series(str(output), io.Access.read_only)

@@ -34,6 +34,7 @@ from HASEonGPU import (  # noqa: E402
     Simulation,
     vtkWedge
 )
+from pyInclude.openpmd.paraview import writeParaviewState  # noqa: E402
 def printState(state):
     print(
         f"step={state.step:03d} "
@@ -94,10 +95,10 @@ def laserPumpCladdingMedium(numberOfLevels=10, thickness=None, cladAbsorption =5
         betaVolume=np.zeros((topology.numberOfTriangles, topology.levels - 1), dtype=np.float64),
         claddingCellTypes=np.zeros(topology.numberOfTriangles, dtype=np.uint32),
         refractiveIndices=np.asarray([1.83, 1.0, 1.83, 1.0], dtype=np.float32),
-        reflectivities=np.zeros((2, topology.numberOfTriangles), dtype=np.float32),
-        nTot=2.76e20,
-        crystalTFluo=9.5e-4,
-        claddingNumber=1,
+        reflectivities=np.zeros((topology.numberOfTriangles, 2), dtype=np.float32),
+        nTot = 2.76e20,
+        crystalTFluo = 9.5e-4,
+        claddingNumber = 1,
         claddingAbsorption=cladAbsorption,
     )
 
@@ -107,6 +108,7 @@ def runExample(
     backend="UseConfig",
     timeSlices=150,
     vtkOutputDir=scriptDir,
+    openPmdOutputDir=None,
     **AseOverride,
 ):
     vtkOutputDir = Path(vtkOutputDir)
@@ -119,7 +121,7 @@ def runExample(
         crossSectionAbsorption=np.loadtxt(materialDir / "sigma_a.txt"),
         wavelengthsEmission=np.loadtxt(materialDir / "lambda_e.txt"),
         crossSectionEmission=np.loadtxt(materialDir / "sigma_e.txt"),
-        resolution=1000,
+        resolution=np.loadtxt(materialDir / "lambda_a.txt").size,
     )
 
     pumpCrossSections = CrossSectionData.monochromatic(
@@ -172,6 +174,8 @@ def runExample(
 
     simulation.onStep(printState)
     simulation.onStep(writeVtkFields, vtkOutputDir, absorption)
+    if openPmdOutputDir is not None:
+        simulation.onStep(writeParaviewState, openPmdOutputDir, absorption)
     simulation.runSteps(timeSlices) # adjust this by number of steps
     return simulation.getResults()[-1] # return the last phiASE as array to confirm shape.
 
@@ -182,6 +186,7 @@ def main(argv=None):
     parser.add_argument("--timeSteps", type=int, default=150)
     parser.add_argument("--phi-ase-config", type=Path, default=defaultPhiAseConfigPath)
     parser.add_argument("--vtk-output-dir", type=Path, default=scriptDir)
+    parser.add_argument("--openpmd-output-dir", type=Path, default=None)
     args = parser.parse_args(argv)
 
     state = runExample(
@@ -189,6 +194,7 @@ def main(argv=None):
         args.backend,
         timeSlices=args.timeSteps,
         vtkOutputDir=args.vtk_output_dir,
+        openPmdOutputDir=args.openpmd_output_dir,
     )
     print(f"phiAse shape: {state.phiAse.shape}")
     print(f"betaCells shape: {state.betaCells.shape}")

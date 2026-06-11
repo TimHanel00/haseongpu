@@ -1,5 +1,7 @@
 include_guard(GLOBAL)
 
+include("${CMAKE_CURRENT_LIST_DIR}/OpenPmdBackend.cmake")
+
 set(HASE_OPENPMD_GIT_REPOSITORY "https://github.com/openPMD/openPMD-api.git")
 set(HASE_OPENPMD_GIT_TAG "0.17.0")
 set(HASE_ADIOS2_GIT_REPOSITORY "https://github.com/ornladios/ADIOS2.git")
@@ -10,141 +12,149 @@ if(DEFINED openPMD_SUPERBUILD)
 else()
     set(HASE_OPENPMD_SUPERBUILD_DEFAULT ON)
 endif()
-option(HASE_OPENPMD_SUPERBUILD
+option(
+    HASE_OPENPMD_SUPERBUILD
     "Allow openPMD-api to fetch/build its bundled helper dependencies"
     ${HASE_OPENPMD_SUPERBUILD_DEFAULT}
 )
-option(HASE_OPENPMD_BUILD_PYTHON_BINDINGS
+option(
+    HASE_OPENPMD_BUILD_PYTHON_BINDINGS
     "Build openPMD-api Python bindings as part of the HASE CMake build"
     OFF
 )
 
-message(STATUS "Fetching pinned ADIOS2 for the HASE openPMD transport")
 message(STATUS "Fetching pinned openPMD-api for the HASE openPMD transport")
 
-set(ADIOS2_USE_Fortran
-    OFF
-    CACHE BOOL
-    "Disable ADIOS2 Fortran bindings in the HASE superbuild"
-    FORCE
-)
-set(ADIOS2_USE_Python
-    OFF
-    CACHE BOOL
-    "Disable ADIOS2 Python bindings in the HASE superbuild"
-    FORCE
-)
-set(ADIOS2_BUILD_EXAMPLES
-    OFF
-    CACHE BOOL
-    "Disable ADIOS2 examples in the HASE superbuild"
-    FORCE
-)
-set(ADIOS2_BUILD_TESTING
-    OFF
-    CACHE BOOL
-    "Disable ADIOS2 tests in the HASE superbuild"
-    FORCE
-)
-set(BUILD_TESTING
-    OFF
-    CACHE BOOL
-    "Disable third-party tests while configuring the HASE superbuild dependencies"
-    FORCE
-)
-set(ADIOS2_INSTALL_GENERATE_CONFIG
-    ON
-    CACHE BOOL
-    "Generate ADIOS2 CMake configs required by openPMD's find_package(ADIOS2)"
-    FORCE
-)
+include(FetchContent)
 
-# Keep the ADIOS2 superbuild narrow. HASE's openPMD transport uses ADIOS2
-# BP/SST-style openPMD series and does not need HDF5, compression plugins,
-# remote/cloud transports, visualization hooks, or profiling infrastructure.
-foreach(HASE_ADIOS2_DISABLED_OPTION IN ITEMS
-    BZip2
-    Blosc2
-    Campaign
-    Catalyst
-    DAOS
-    DataMan
-    DataSpaces
-    Endian_Reverse
-    HDF5
-    HDF5_VOL
-    IME
-    LIBPRESSIO
-    MGARD
-    MHS
-    PNG
-    Profiling
-    SZ
-    Sodium
-    SysVShMem
-    UCX
-    ZFP
-    ZeroMQ
-)
-    set(ADIOS2_USE_${HASE_ADIOS2_DISABLED_OPTION}
+if(HASE_OPENPMD_USE_ADIOS2)
+    message(STATUS "Fetching pinned ADIOS2 for the HASE openPMD transport")
+    set(ADIOS2_USE_Fortran
         OFF
-        CACHE STRING
-        "Disable unused ADIOS2 ${HASE_ADIOS2_DISABLED_OPTION} support in the HASE superbuild"
+        CACHE BOOL
+        "Disable ADIOS2 Fortran bindings in the HASE superbuild"
         FORCE
     )
-endforeach()
-if(MPI_FOUND)
-    set(ADIOS2_USE_MPI
+    set(ADIOS2_USE_Python
+        OFF
+        CACHE BOOL
+        "Disable ADIOS2 Python bindings in the HASE superbuild"
+        FORCE
+    )
+    set(ADIOS2_BUILD_EXAMPLES
+        OFF
+        CACHE BOOL
+        "Disable ADIOS2 examples in the HASE superbuild"
+        FORCE
+    )
+    set(ADIOS2_BUILD_TESTING
+        OFF
+        CACHE BOOL
+        "Disable ADIOS2 tests in the HASE superbuild"
+        FORCE
+    )
+    set(BUILD_TESTING
+        OFF
+        CACHE BOOL
+        "Disable third-party tests while configuring the HASE superbuild dependencies"
+        FORCE
+    )
+    set(ADIOS2_INSTALL_GENERATE_CONFIG
         ON
         CACHE BOOL
-        "Enable MPI in ADIOS2 when HASE MPI is available"
+        "Generate ADIOS2 CMake configs required by openPMD's find_package(ADIOS2)"
         FORCE
     )
-else()
-    set(ADIOS2_USE_MPI
-        OFF
-        CACHE BOOL
-        "Disable MPI in ADIOS2 when HASE MPI is unavailable"
-        FORCE
-    )
-endif()
 
-include(FetchContent)
-FetchContent_Declare(
-    ADIOS2
-    GIT_REPOSITORY "${HASE_ADIOS2_GIT_REPOSITORY}"
-    GIT_TAG "${HASE_ADIOS2_GIT_TAG}"
-    OVERRIDE_FIND_PACKAGE
-)
-FetchContent_MakeAvailable(ADIOS2)
-if(EXISTS "${ADIOS2_BINARY_DIR}/adios2-config.cmake")
-    set(ADIOS2_DIR
-        "${ADIOS2_BINARY_DIR}"
-        CACHE PATH
-        "ADIOS2 CMake config directory produced by the HASE FetchContent build"
-        FORCE
+    # Keep the ADIOS2 superbuild narrow. HASE's openPMD transport uses ADIOS2
+    # BP/SST-style openPMD series and does not need HDF5, compression plugins,
+    # remote/cloud transports, visualization hooks, or profiling infrastructure.
+    foreach(
+        HASE_ADIOS2_DISABLED_OPTION
+        IN
+        ITEMS
+            BZip2
+            Blosc2
+            Campaign
+            Catalyst
+            DAOS
+            DataMan
+            DataSpaces
+            Endian_Reverse
+            HDF5
+            HDF5_VOL
+            IME
+            LIBPRESSIO
+            MGARD
+            MHS
+            PNG
+            Profiling
+            SZ
+            Sodium
+            SysVShMem
+            UCX
+            ZFP
+            ZeroMQ
     )
-endif()
-if(NOT DEFINED ADIOS2_VERSION OR "${ADIOS2_VERSION}" STREQUAL "")
-    string(REGEX REPLACE "^v" "" ADIOS2_VERSION "${HASE_ADIOS2_GIT_TAG}")
-    set(ADIOS2_VERSION
-        "${ADIOS2_VERSION}"
-        CACHE STRING
-        "ADIOS2 version provided by the HASE FetchContent build"
-        FORCE
+        set(ADIOS2_USE_${HASE_ADIOS2_DISABLED_OPTION}
+            OFF
+            CACHE STRING
+            "Disable unused ADIOS2 ${HASE_ADIOS2_DISABLED_OPTION} support in the HASE superbuild"
+            FORCE
+        )
+    endforeach()
+    if(MPI_FOUND)
+        set(ADIOS2_USE_MPI
+            ON
+            CACHE BOOL
+            "Enable MPI in ADIOS2 when HASE MPI is available"
+            FORCE
+        )
+    else()
+        set(ADIOS2_USE_MPI
+            OFF
+            CACHE BOOL
+            "Disable MPI in ADIOS2 when HASE MPI is unavailable"
+            FORCE
+        )
+    endif()
+
+    FetchContent_Declare(
+        ADIOS2
+        GIT_REPOSITORY "${HASE_ADIOS2_GIT_REPOSITORY}"
+        GIT_TAG "${HASE_ADIOS2_GIT_TAG}"
+        OVERRIDE_FIND_PACKAGE
     )
+    FetchContent_MakeAvailable(ADIOS2)
+    if(EXISTS "${ADIOS2_BINARY_DIR}/adios2-config.cmake")
+        set(ADIOS2_DIR
+            "${ADIOS2_BINARY_DIR}"
+            CACHE PATH
+            "ADIOS2 CMake config directory produced by the HASE FetchContent build"
+            FORCE
+        )
+    endif()
+    if(NOT DEFINED ADIOS2_VERSION OR "${ADIOS2_VERSION}" STREQUAL "")
+        string(REGEX REPLACE "^v" "" ADIOS2_VERSION "${HASE_ADIOS2_GIT_TAG}")
+        set(ADIOS2_VERSION
+            "${ADIOS2_VERSION}"
+            CACHE STRING
+            "ADIOS2 version provided by the HASE FetchContent build"
+            FORCE
+        )
+    endif()
 endif()
 
 set(openPMD_USE_ADIOS2
-    ON
+    ${HASE_OPENPMD_USE_ADIOS2}
     CACHE STRING
     "Enable ADIOS2 backend for the HASE openPMD transport"
     FORCE
 )
 set(openPMD_USE_HDF5
-    OFF
+    ${HASE_OPENPMD_USE_HDF5}
     CACHE STRING
-    "Disable HDF5 backend for the HASE openPMD transport"
+    "Enable HDF5 backend for the HASE openPMD transport"
     FORCE
 )
 set(openPMD_HAVE_PKGCONFIG
@@ -234,7 +244,11 @@ if(TARGET openPMD.py)
     add_custom_target(hase_openpmd_python DEPENDS openPMD.py)
 endif()
 
-if(HASE_OPENPMD_BUILD_PYTHON_BINDINGS AND DEFINED openPMD_BINARY_DIR AND DEFINED openPMD_INSTALL_PYTHONDIR)
+if(
+    HASE_OPENPMD_BUILD_PYTHON_BINDINGS
+    AND DEFINED openPMD_BINARY_DIR
+    AND DEFINED openPMD_INSTALL_PYTHONDIR
+)
     set(HASE_OPENPMD_PYTHONPATH
         "${openPMD_BINARY_DIR}/${openPMD_INSTALL_PYTHONDIR}"
         CACHE PATH
