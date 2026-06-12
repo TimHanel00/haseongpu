@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include <alpakaUtils/DevBundle.hpp>
 #include <core/mesh.hpp>
 #include <kernels/detail/importanceSampling.hpp>
 
@@ -72,8 +73,10 @@ namespace hase::kernels
         ALPAKA_ASSERT((
             [&]
             {
-                auto validateMeshFrameSpec
-                    = alpaka::onHost::getFrameSpec(queue.getDevice(), devBundle.executor, deviceMesh.numberOfSamples);
+                auto validateMeshFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+                    queue.getDevice(),
+                    devBundle.executor,
+                    alpaka::Vec{deviceMesh.numberOfSamples});
                 queue.enqueue(
                     validateMeshFrameSpec,
                     alpaka::KernelBundle{hase::kernels::ValidateMeshKernel{}, deviceMesh, sample_i});
@@ -86,10 +89,10 @@ namespace hase::kernels
         alpaka::concepts::IMdSpan auto preImportanceSpan = preImportance.getMdSpan();
         alpaka::concepts::IMdSpan auto droppedRaysSpan = droppedRays.getMdSpan();
         alpaka::concepts::IMdSpan auto infiniteRaySnapshotsSpan = infiniteRaySnapshots.getMdSpan();
-        auto propagateFrameSpec = alpaka::onHost::getFrameSpec(
+        auto propagateFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
             queue.getDevice(),
             devBundle.executor,
-            static_cast<uint32_t>(reflectionSlices * deviceMesh.numberOfPrisms));
+            alpaka::Vec{static_cast<uint32_t>(reflectionSlices * deviceMesh.numberOfPrisms)});
         queue.enqueue(
             propagateFrameSpec,
             alpaka::KernelBundle{
@@ -147,7 +150,10 @@ namespace hase::kernels
         }
         alpaka::onHost::inclusiveScan(queue, devBundle.executor, importance, preImportance);
 
-        auto const drawFrameSpec = alpaka::onHost::getFrameSpec(devBundle.device, devBundle.executor, raysPerSample);
+        auto const drawFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+            devBundle.device,
+            devBundle.executor,
+            alpaka::Vec{raysPerSample});
         auto const drawThreadLocalStridingIndex = threadLocalStridingRNG;
         queue.enqueue(
             drawFrameSpec,

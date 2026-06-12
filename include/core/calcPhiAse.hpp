@@ -277,10 +277,10 @@ namespace hase::core
                     alpaka::onHost::fill(queue, dDroppedRays, 0u, Vec1D{1});
                     alpaka::onHost::fill(queue, dGainOfRay, double{0}, alpaka::Vec{experiment.maxRaysPerSample});
 
-                    auto frameSpec = alpaka::onHost::getFrameSpec(
+                    auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
                         devBundle.device,
                         devBundle.executor,
-                        static_cast<unsigned int>(*raysPerSampleIter));
+                        alpaka::Vec{static_cast<unsigned int>(*raysPerSampleIter)});
                     auto const threadLocalStridingIndex = threadLocalStridingRNG;
                     if(experiment.useReflections)
                     {
