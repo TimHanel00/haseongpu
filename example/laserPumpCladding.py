@@ -73,23 +73,17 @@ def prePumpInitialState(simulation):
 
 
 def laserPumpCladdingMedium(numberOfLevels=10, thickness=None, cladAbsorption =5.5):
-    from scipy.io import loadmat
+    materialPath = scriptDir / "data" / "pt.vtk"
+    topology = MeshTopology.fromVtk(materialPath)
 
-    materialPath = scriptDir / "legacy" / "pt.mat"
-    thickness = 0.7 / (numberOfLevels - 1) if thickness is None else thickness
-    material = loadmat(materialPath)
-    points = np.asarray(material["p"], dtype=np.float64)
-    triangles = np.asarray(material["t"], dtype=np.int64) - 1
-    if np.any(triangles < 0):
-        raise ValueError(f"{materialPath} contains non-MATLAB-style triangle indices")
-
-    topology = MeshTopology(
-        points=points[:, :2],
-        trianglePointIndices=triangles.astype(np.uint32),
-        levels=numberOfLevels,
-        thickness=thickness,
-        metadata={"source": str(materialPath), "format": "matlab-pt"},
-    )
+    if numberOfLevels is not None and topology.levels != numberOfLevels:
+        raise ValueError(
+            f"{materialPath} contains {topology.levels} levels, expected {numberOfLevels}"
+        )
+    if thickness is not None and not np.isclose(topology.thickness, thickness):
+        raise ValueError(
+            f"{materialPath} has thickness {topology.thickness}, expected {thickness}"
+        )
     return GainMedium(topology=topology).withPhysicalProperties(
         betaCells=np.zeros((topology.numberOfPoints, topology.levels), dtype=np.float64),
         betaVolume=np.zeros((topology.numberOfTriangles, topology.levels - 1), dtype=np.float64),
@@ -187,7 +181,18 @@ def main(argv=None):
     parser.add_argument("--phi-ase-config", type=Path, default=defaultPhiAseConfigPath)
     parser.add_argument("--vtk-output-dir", type=Path, default=scriptDir)
     parser.add_argument("--openpmd-output-dir", type=Path, default=None)
+    parser.add_argument("--min-sample-range", type=int, default=None)
+    parser.add_argument("--max-sample-range", type=int, default=None)
+    parser.add_argument("--rng-seed", type=int, default=None)
     args = parser.parse_args(argv)
+
+    aseOverrides = {}
+    if args.min_sample_range is not None:
+        aseOverrides["minSampleRange"] = args.min_sample_range
+    if args.max_sample_range is not None:
+        aseOverrides["maxSampleRange"] = args.max_sample_range
+    if args.rng_seed is not None:
+        aseOverrides["rngSeed"] = args.rng_seed
 
     state = runExample(
         args.phi_ase_config,
@@ -195,6 +200,7 @@ def main(argv=None):
         timeSlices=args.timeSteps,
         vtkOutputDir=args.vtk_output_dir,
         openPmdOutputDir=args.openpmd_output_dir,
+        **aseOverrides,
     )
     print(f"phiAse shape: {state.phiAse.shape}")
     print(f"betaCells shape: {state.betaCells.shape}")

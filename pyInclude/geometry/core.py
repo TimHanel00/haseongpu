@@ -926,17 +926,22 @@ class MeshTopology:
         return gmsh.topology(numberOfLevels=numberOfLevels, thickness=thickness)
 
     @classmethod
+    def fromVtk(cls, filename, *, numberOfLevels=None, thickness=None):
+        """Load topology from a legacy VTK wedge file."""
+        topology = topologyFromVtk(filename, cls)
+        if numberOfLevels is not None:
+            topology.numberOfLevels(numberOfLevels)
+        if thickness is not None:
+            topology.withThickness(thickness)
+        return topology
+
+    @classmethod
     def fromFile(cls, filename, format=None, numberOfLevels=None, thickness=None):
         """Load supported mesh formats: legacy VTK, planar STL, or gmsh."""
         path = Path(filename)
         mesh_format = (format or path.suffix.lstrip(".")).lower()
         if mesh_format in {"vtk", "legacy-vtk"}:
-            topology = topologyFromVtk(path, cls)
-            if numberOfLevels is not None:
-                topology.numberOfLevels(numberOfLevels)
-            if thickness is not None:
-                topology.withThickness(thickness)
-            return topology
+            return cls.fromVtk(path, numberOfLevels=numberOfLevels, thickness=thickness)
         if mesh_format in {"stl", "ascii-stl", "binary-stl", "dea/stl", "dae/stl"}:
             points, triangles = from_stl(path)
             return cls(

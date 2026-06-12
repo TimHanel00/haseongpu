@@ -1,3 +1,0 @@
-add_executable(hase_openpmd_sst_consumer consumer.cpp)
-target_link_libraries(hase_openpmd_sst_consumer PRIVATE openPMD::openPMD)
-target_compile_features(hase_openpmd_sst_consumer PRIVATE cxx_std_17)

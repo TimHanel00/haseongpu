@@ -11,7 +11,7 @@ import numpy as np
 
 
 repoRoot = Path(__file__).resolve().parents[3]
-exampleDir = repoRoot / "example" / "python_example"
+exampleDir = repoRoot / "example"
 sys.path.insert(0, str(exampleDir))
 import laserPumpCladding  # noqa: E402
 
