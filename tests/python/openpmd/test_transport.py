@@ -13,7 +13,6 @@ from pyInclude.openpmd import HASE_SCHEMA_VERSION, PrimitiveFieldSpec, PrismSche
 from pyInclude.simulation import PhiASE
 
 
-pytest.importorskip("pyInclude.openpmd.transport")
 
 
 MESH_FIELD_VALUES = {
@@ -161,7 +160,9 @@ def launch_smoke_phi_ase():
 
 def _file_backend_for_tests():
     backend = os.environ.get("HASE_OPENPMD_BACKEND", "bp").strip().lower()
-    return "hdf5" if backend == "hdf5" else "bp"
+    if backend in {"hdf5", "adios"}:
+        return backend
+    return "bp"
 
 
 def _file_suffix_for_tests():
@@ -192,6 +193,29 @@ def asymmetric_mesh():
         refractiveIndices=medium.get("refractiveIndices").value,
         reflectivities=medium.get("reflectivities").value,
     )
+
+
+def _field_context():
+    topology = asymmetric_topology()
+    return SimpleNamespace(
+        numberOfPoints=topology.numberOfPoints,
+        numberOfTriangles=topology.numberOfTriangles,
+        numberOfLevels=int(topology.levels),
+    )
+
+
+def _transport_scalar_record_values():
+    return {
+        "beta_volume": MESH_FIELD_VALUES["betaVolume"],
+        "point_beta": MESH_FIELD_VALUES["pointBeta"],
+        "cladding_cell_type": MESH_FIELD_VALUES["claddingCellType"],
+        "refractive_index": MESH_FIELD_VALUES["refractiveIndex"],
+        "reflectivity": MESH_FIELD_VALUES["reflectivity"],
+        "lambda_absorption": SPECTRAL_FIELD_VALUES["lambdaAbsorption"],
+        "lambda_emission": SPECTRAL_FIELD_VALUES["lambdaEmission"],
+        "sigma_absorption": SPECTRAL_FIELD_VALUES["sigmaAbsorption"],
+        "sigma_emission": SPECTRAL_FIELD_VALUES["sigmaEmission"],
+    }
 
 
 def _mesh_field_values(mesh):
@@ -239,13 +263,8 @@ def _scalar_record_values(mesh):
 @pytest.fixture
 def contract_input(tmp_path):
     output = tmp_path / ("contract" + _file_suffix_for_tests())
-    transport.writeInput(
-        output,
-        asymmetric_phi_ase(),
-        asymmetric_medium(),
-        asymmetric_cross_sections(),
-        backend=_file_backend_for_tests(),
-    )
+    with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
+        writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
     return output
 
 
@@ -328,7 +347,7 @@ def _assert_hase_metadata(record, spec, context):
 def _context_for_spec(spec_name):
     if spec_name in SPECTRAL_FIELD_VALUES:
         return spectralContext(SPECTRAL_FIELD_VALUES[spec_name])
-    return asymmetric_mesh()
+    return _field_context()
 
 
 def test_layout_helpers_define_exact_backend_flat_contract():
@@ -355,13 +374,75 @@ def test_openpmd_backend_names_map_to_expected_suffixes_and_configs(monkeypatch)
     assert transport._backend_spec("adios").config == {"backend": "adios2"}
     assert transport._backend_spec("adios-sst").suffix == ".sst"
     assert transport._backend_spec("adios-sst").streaming is True
+    assert transport._backend_spec("adiossst").name == "adios-sst"
     assert transport._backend_spec("hdf5").config == {"backend": "hdf5"}
 
     monkeypatch.setenv("HASE_OPENPMD_BACKEND", "hdf5")
     assert transport._backend_spec().name == "hdf5"
+    assert _file_backend_for_tests() == "hdf5"
+    monkeypatch.setenv("HASE_OPENPMD_BACKEND", "adios")
+    assert _file_backend_for_tests() == "adios"
+    monkeypatch.setenv("HASE_OPENPMD_BACKEND", "adiossst")
+    assert transport._backend_spec().name == "adios-sst"
+    assert _file_backend_for_tests() == "bp"
 
     with pytest.raises(ValueError, match="unsupported openPMD backend"):
         transport._backend_spec("unsupported")
+
+
+def test_run_phi_ase_uses_openpmd_session_manager(monkeypatch):
+    result = object()
+    events = []
+
+    class FakeSession:
+        def __init__(self, *, transport=None):
+            events.append(("init", transport))
+
+        def __enter__(self):
+            events.append(("enter",))
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append(("exit", exc_type))
+            return False
+
+        def run(self, phi_ase, gain_medium, cross_sections):
+            events.append(("run", phi_ase, gain_medium, cross_sections))
+            return result
+
+    monkeypatch.setattr(transport, "OpenPmdPhiAseSession", FakeSession)
+    phi_ase = object()
+    medium = object()
+    cross_sections = object()
+
+    assert transport.runPhiASE(phi_ase, medium, cross_sections, transport="bp") is result
+    assert events == [
+        ("init", "bp"),
+        ("enter",),
+        ("run", phi_ase, medium, cross_sections),
+        ("exit", None),
+    ]
+
+
+def test_openpmd_session_assigns_monotonic_request_iterations(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(transport, "findCalcPhiAse", lambda: Path("calcPhiASE"))
+    monkeypatch.setattr(transport, "_ensure_backend_available", lambda backend: None)
+
+    def fake_run_file_iteration(self, iteration_index, phi_ase, gain_medium, cross_sections):
+        calls.append((iteration_index, phi_ase, gain_medium, cross_sections))
+        return SimpleNamespace(iteration=iteration_index)
+
+    monkeypatch.setattr(transport.OpenPmdPhiAseSession, "_run_file_iteration", fake_run_file_iteration)
+
+    with transport.OpenPmdPhiAseSession(transport="bp") as session:
+        first = session.run("phi0", "medium0", "cross0")
+        second = session.run("phi1", "medium1", "cross1")
+
+    assert first.iteration == 0
+    assert second.iteration == 1
+    assert calls == [(0, "phi0", "medium0", "cross0"), (1, "phi1", "medium1", "cross1")]
 
 
 def test_layout_helpers_reject_accidental_transpose_views():
@@ -373,14 +454,13 @@ def test_layout_helpers_reject_accidental_transpose_views():
         backendFlatArray(transposed_same_size, spec, mesh)
 
 
-def test_writeInput_openpmd_contains_exact_values_order_shape_dtype_units_and_metadata(contract_input):
+def test_openpmd_input_series_contains_exact_values_order_shape_dtype_units_and_metadata(contract_input):
     io = _io()
     series = io.Series(str(contract_input), io.Access.read_only)
     for name, value in haseExtensionAttributes.items():
         assert series.get_attribute(name) == value
     assert series.get_attribute("haseSchemaVersion") == HASE_SCHEMA_VERSION
     iteration = series.iterations[0]
-    mesh = asymmetric_mesh()
 
     assert iteration.get_attribute("number_of_points") == 5
     assert iteration.get_attribute("number_of_cells") == 3
@@ -391,39 +471,69 @@ def test_writeInput_openpmd_contains_exact_values_order_shape_dtype_units_and_me
     assert iteration.get_attribute("spectral_resolution") == 3
     assert iteration.get_attribute("rng_seed") == 1234
 
-    vertices = iteration.meshes["core_vertices"]
-    assert vertices.get_attribute("haseSchemaVersion") == HASE_SCHEMA_VERSION
-    assert vertices.get_attribute("haseEntity") == "coordinate_point"
-    assert _attribute_list(vertices.get_attribute("haseAxes")) == ["coordinate", "point"]
-    assert _attribute_list(vertices.get_attribute("hasePrimitiveShape")) == [2, 5]
-    assert vertices.get_attribute("haseUnit") == "m"
-    assert vertices.unit_dimension[io.Unit_Dimension.L] == 1.0
-    np.testing.assert_array_equal(_read_component(series, vertices["x"]), MESH_FIELD_VALUES["points"][:5])
-    np.testing.assert_array_equal(_read_component(series, vertices["y"]), MESH_FIELD_VALUES["points"][5:])
+    canonical_context = transport._canonical_topology_context(asymmetric_topology())
+    points = iteration.meshes["core_points"]
+    assert points.get_attribute("haseSchemaVersion") == HASE_SCHEMA_VERSION
+    assert points.get_attribute("haseEntity") == "coordinate_mesh_point"
+    assert _attribute_list(points.get_attribute("haseAxes")) == ["coordinate", "mesh_point"]
+    assert _attribute_list(points.get_attribute("hasePrimitiveShape")) == [3, 30]
+    assert points.get_attribute("haseUnit") == "m"
+    assert points.unit_dimension[io.Unit_Dimension.L] == 1.0
+    components = transport._canonical_point_components(asymmetric_topology())
+    np.testing.assert_array_equal(_read_component(series, points["x"]), components["x"])
+    np.testing.assert_array_equal(_read_component(series, points["y"]), components["y"])
+    np.testing.assert_array_equal(_read_component(series, points["z"]), components["z"])
     series.flush()
 
-    cell_center = iteration.meshes["core_cell_center"]
-    np.testing.assert_array_equal(_read_component(series, cell_center["x"]), np.asarray(mesh.triangleCenterX))
-    np.testing.assert_array_equal(_read_component(series, cell_center["y"]), np.asarray(mesh.triangleCenterY))
-    assert cell_center.get_attribute("haseSchemaVersion") == HASE_SCHEMA_VERSION
-    assert cell_center.get_attribute("haseEntity") == "cell"
-    assert _attribute_list(cell_center.get_attribute("haseAxes")) == ["cell"]
-    assert cell_center.get_attribute("haseLayoutOrder") == "backendFlat"
-    assert _attribute_list(cell_center.get_attribute("hasePrimitiveShape")) == [3]
-    assert cell_center.get_attribute("haseStatic") is True
-    assert cell_center.get_attribute("haseDynamic") is False
-    assert cell_center.get_attribute("haseBackendRequired") is True
-    assert cell_center.get_attribute("haseUnit") == "m"
-    assert list(cell_center.axis_labels) == ["cell"]
-    assert cell_center.unit_dimension[io.Unit_Dimension.L] == 1.0
-    series.flush()
+    canonical_scalars = {
+        "cells_connectivity": (transport.CANONICAL_CONNECTIVITY_SPEC, transport._canonical_cell_connectivity(asymmetric_topology())),
+        "cells_offsets": (
+            transport.CANONICAL_OFFSETS_SPEC,
+            np.arange(canonical_context.numberOfPrisms + 1, dtype=np.uint32) * np.uint32(6),
+        ),
+        "cells_types": (
+            transport.CANONICAL_CELL_TYPES_SPEC,
+            np.full(canonical_context.numberOfPrisms, 13, dtype=np.uint32),
+        ),
+    }
+    for record_name, (spec, expected) in canonical_scalars.items():
+        record = iteration.meshes["core_" + record_name]
+        values = _read_scalar(series, iteration, "core_" + record_name)
+        np.testing.assert_array_equal(values, expected.astype(spec.dtypeObject, copy=False))
+        _assert_hase_metadata(record, spec, canonical_context)
 
-    for record_name, spec_name in SCALAR_RECORD_SPECS.items():
+    for removed_record in [
+        "core_vertices",
+        "core_connectivity",
+        "core_neighbors",
+        "core_forbidden_edges",
+        "core_normal_points",
+        "core_cell_center",
+        "core_cell_normal_x",
+        "core_cell_normal_y",
+        "core_surface",
+    ]:
+        assert removed_record not in iteration.meshes
+
+    present_specs = {
+        name: spec_name
+        for name, spec_name in SCALAR_RECORD_SPECS.items()
+        if name not in {
+            "connectivity",
+            "neighbors",
+            "forbidden_edges",
+            "normal_points",
+            "cell_normal_x",
+            "cell_normal_y",
+            "surface",
+        }
+    }
+    for record_name, spec_name in present_specs.items():
         spec = fieldSpec(spec_name)
         context = _context_for_spec(spec_name)
         record = iteration.meshes["core_" + record_name]
         values = _read_scalar(series, iteration, "core_" + record_name)
-        expected = _scalar_record_values(mesh)[record_name].astype(spec.dtypeObject, copy=False)
+        expected = _transport_scalar_record_values()[record_name].astype(spec.dtypeObject, copy=False)
         assert values.shape == (expected.size,)
         assert values.dtype == spec.dtypeObject
         np.testing.assert_array_equal(values, expected)
@@ -432,17 +542,54 @@ def test_writeInput_openpmd_contains_exact_values_order_shape_dtype_units_and_me
     series.close()
 
 
+def _parser_validation_candidates():
+    env = os.environ.get("HASE_OPENPMD_PARSER_VALIDATION")
+    if env:
+        yield Path(env)
+    root = Path(__file__).resolve().parents[3]
+    build_dir = os.environ.get("BUILD_DIR")
+    if build_dir:
+        yield root / build_dir / "tests" / "tests_openpmdParserValidation"
+    yield from sorted(root.glob("build/cp*/tests/tests_openpmdParserValidation"))
+    yield root / "build" / "ci" / "tests" / "tests_openpmdParserValidation"
+    yield root / "build" / "tests" / "tests_openpmdParserValidation"
+    yield root / "cmake-build-debug" / "tests" / "tests_openpmdParserValidation"
+
+
+def _parser_validation_binary():
+    for helper in _parser_validation_candidates():
+        if helper.is_file() and os.access(helper, os.X_OK):
+            return helper
+    pytest.fail("no openPMD parser validation binary found; build tests_openpmdParserValidation")
+
+
+def test_openpmd_input_series_omits_static_topology_after_first_iteration(tmp_path):
+    output = tmp_path / ("dynamic_split" + _file_suffix_for_tests())
+    with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
+        writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
+        writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
+
+    series = _io().Series(str(output), _io().Access.read_only)
+    first = series.iterations[0]
+    second = series.iterations[1]
+    assert first.get_attribute("haseStaticUpdate") is True
+    assert second.get_attribute("haseStaticUpdate") is False
+    assert "core_points" in first.meshes
+    assert "core_cells_connectivity" in first.meshes
+    assert "core_points" not in second.meshes
+    assert "core_cells_connectivity" not in second.meshes
+    assert sorted(second.meshes) == ["core_beta_volume", "core_point_beta"]
+    series.close()
+
 
 def test_python_writer_openpmd_cpp_parser_result_round_trip(contract_input, tmp_path):
     output = tmp_path / ("round_trip_result" + _file_suffix_for_tests())
     env = os.environ.copy()
     env["HASE_OPENPMD_PYTHON_CONTRACT_INPUT"] = str(contract_input)
     env["HASE_OPENPMD_PYTHON_CONTRACT_OUTPUT"] = str(output)
-    helper = "cmake-build-debug/tests/tests_openpmdParserValidation"
-    if not os.path.exists(helper):
-        helper = "build/tests/tests_openpmdParserValidation"
+    helper = _parser_validation_binary()
     completed = subprocess.run(
-        [helper, "openPMD parser round-trips a Python writer contract input"],
+        [str(helper), "openPMD parser round-trips a Python writer contract input"],
         check=False,
         text=True,
         capture_output=True,
@@ -481,13 +628,8 @@ def test_python_writer_openpmd_cpp_parser_result_round_trip(contract_input, tmp_
     series.close()
 
 
-
-def _integration_enabled():
-    return os.environ.get("HASE_RUN_OPENPMD_INTEGRATION", "").lower() in {"1", "true", "yes", "on"}
-
-
-def _integration_backend_values():
-    raw = os.environ.get("HASE_OPENPMD_INTEGRATION_BACKENDS")
+def _openpmd_backend_values():
+    raw = os.environ.get("HASE_OPENPMD_TEST_BACKENDS")
     if raw:
         return [backend.strip() for backend in raw.split(",") if backend.strip()]
     backend = os.environ.get("HASE_OPENPMD_BACKEND")
@@ -528,54 +670,87 @@ def _calc_phi_ase_candidates():
     if env:
         yield Path(env)
     root = Path(__file__).resolve().parents[3]
-    yield root / "cmake-build-debug" / "calcPhiASE"
+    yield root / "build" / "ci" / "calcPhiASE"
     yield root / "build" / "calcPhiASE"
     yield root / "build" / "cp312-cp312-linux_x86_64" / "calcPhiASE"
+    for build_dir in root.glob("build/*"):
+        yield build_dir / "calcPhiASE"
+    yield root / "cmake-build-debug" / "calcPhiASE"
 
 
-def _openpmd_calc_phi_ase_or_skip():
-    if not _integration_enabled():
-        pytest.skip("set HASE_RUN_OPENPMD_INTEGRATION=1 to run calcPhiASE round-trip integration tests")
+def _openpmd_transport_sources():
+    root = Path(__file__).resolve().parents[3]
+    yield root / "src" / "openpmd_main.cpp"
+    yield root / "src" / "openpmd" / "OpenPmdParser.cpp"
+    yield root / "include" / "openpmd" / "OpenPmdParser.hpp"
+
+
+def _is_current_openpmd_calc_phi_ase(executable):
+    build_dir = _build_dir_for_executable(executable)
+    if not _target_uses_openpmd_main(build_dir):
+        return False
+    executable_mtime = executable.stat().st_mtime
+    return all(
+        source.stat().st_mtime <= executable_mtime
+        for source in _openpmd_transport_sources()
+        if source.is_file()
+    )
+
+
+def _openpmd_calc_phi_ase():
     for executable in _calc_phi_ase_candidates():
-        if executable.is_file() and os.access(executable, os.X_OK):
-            build_dir = _build_dir_for_executable(executable)
-            if _target_uses_openpmd_main(build_dir):
-                return executable.resolve(), build_dir
-    pytest.skip("no openPMD calcPhiASE binary found; build HASE_BUILD_PhiAse with src/openpmd_main.cpp")
+        if (
+            executable.is_file()
+            and os.access(executable, os.X_OK)
+            and _is_current_openpmd_calc_phi_ase(executable)
+        ):
+            return executable.resolve(), _build_dir_for_executable(executable)
+    pytest.fail("no current openPMD calcPhiASE binary found; build HASE_BUILD_PhiAse with src/openpmd_main.cpp")
 
 
-def _mpi_enabled_or_skip(build_dir):
+def _mpi_enabled(build_dir):
     cache = None if build_dir is None else build_dir / "CMakeCache.txt"
-    disable_mpi = _cache_value(cache, "DISABLE_MPI")
-    if disable_mpi == "ON":
-        pytest.skip("calcPhiASE was built with DISABLE_MPI=ON")
+    if _cache_value(cache, "DISABLE_MPI") == "ON":
+        return False
     compile_commands = None if build_dir is None else build_dir / "compile_commands.json"
     if compile_commands is not None and compile_commands.is_file():
         commands = compile_commands.read_text(encoding="utf-8", errors="ignore")
         if "src/openpmd_main.cpp" in commands and "-DDISABLE_MPI" in commands:
-            pytest.skip("calcPhiASE compile command defines DISABLE_MPI")
+            return False
     mpi_found = _cache_value(cache, "MPI_CXX_FOUND") or _cache_value(cache, "MPI_FOUND")
-    if mpi_found is not None and mpi_found.upper() not in {"TRUE", "ON", "1", "YES"}:
-        pytest.skip("calcPhiASE build did not find MPI")
+    return mpi_found is None or mpi_found.upper() in {"TRUE", "ON", "1", "YES"}
+
+
+def _assert_mpi_mode_rejected_by_non_mpi_build(tmp_path, executable):
+    phi_ase = launch_smoke_phi_ase()
+    phi_ase.parallelMode = "mpi"
+    input_path = tmp_path / f"mpi_input{_file_suffix_for_tests()}"
+    output_path = tmp_path / f"mpi_output{_file_suffix_for_tests()}"
+
+    with transport.OpenPmdInputSeries(input_path, backend=_file_backend_for_tests()) as writer:
+        writer.write(phi_ase, launch_smoke_medium(), launch_smoke_cross_sections())
+    completed = subprocess.run(
+        [str(executable), f"--input-path={input_path}", f"--output-path={output_path}"],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    assert completed.returncode != 0
 
 
 def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
-    executable, build_dir = _openpmd_calc_phi_ase_or_skip()
-    if parallel_mode == "mpi":
-        _mpi_enabled_or_skip(build_dir)
+    executable, build_dir = _openpmd_calc_phi_ase()
+    if parallel_mode == "mpi" and not _mpi_enabled(build_dir):
+        return _assert_mpi_mode_rejected_by_non_mpi_build(tmp_path, executable)
 
-    phi_ase = asymmetric_phi_ase()
+    phi_ase = launch_smoke_phi_ase()
     phi_ase.parallelMode = parallel_mode
     input_path = tmp_path / f"{parallel_mode}_input{_file_suffix_for_tests()}"
     output_path = tmp_path / f"{parallel_mode}_output{_file_suffix_for_tests()}"
 
-    transport.writeInput(
-        input_path,
-        phi_ase,
-        asymmetric_medium(),
-        asymmetric_cross_sections(),
-        backend=_file_backend_for_tests(),
-    )
+    with transport.OpenPmdInputSeries(input_path, backend=_file_backend_for_tests()) as writer:
+        writer.write(phi_ase, launch_smoke_medium(), launch_smoke_cross_sections())
     completed = subprocess.run(
         [str(executable), f"--input-path={input_path}", f"--output-path={output_path}"],
         check=False,
@@ -586,7 +761,7 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
     result = transport.read_result(output_path)
-    expected_size = asymmetric_topology().numberOfPoints * asymmetric_topology().levels
+    expected_size = launch_smoke_topology().numberOfPoints * launch_smoke_topology().levels
     assert result.phiAse.shape == (expected_size,)
     assert result.mse.shape == (expected_size,)
     assert result.totalRays.shape == (expected_size,)
@@ -604,12 +779,9 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("openpmd_backend", _integration_backend_values())
+@pytest.mark.parametrize("openpmd_backend", _openpmd_backend_values())
 def test_python_api_launches_configured_openpmd_backend_once(monkeypatch, openpmd_backend):
-    if not _integration_enabled():
-        pytest.skip("set HASE_RUN_OPENPMD_INTEGRATION=1 to run calcPhiASE round-trip integration tests")
-
-    executable, _ = _openpmd_calc_phi_ase_or_skip()
+    executable, _ = _openpmd_calc_phi_ase()
     monkeypatch.setenv("HASE_CALCPHIASE", str(executable))
     monkeypatch.setenv("HASE_OPENPMD_BACKEND", openpmd_backend)
     phi_ase = launch_smoke_phi_ase()
@@ -636,11 +808,11 @@ def test_calc_phi_ase_mpi_openpmd_round_trip_when_mpi_enabled(tmp_path):
     _round_trip_calc_phi_ase(tmp_path, "mpi")
 
 
-def test_writeInput_preserves_custom_fields(tmp_path):
+def test_openpmd_input_series_preserves_custom_fields(tmp_path):
     try:
         _io()
     except ImportError as exc:
-        pytest.skip(str(exc))
+        pytest.fail(str(exc))
 
     class ThermalPrism(PrismSchema):
         temperature = PrimitiveFieldSpec("temperature", "custom_temperature", np.float64, unit="K", backendRequired=False)
@@ -657,13 +829,8 @@ def test_writeInput_preserves_custom_fields(tmp_path):
     assert next(iter(medium.getPrisms())).temperature == pytest.approx(300.0)
     output = tmp_path / ("custom" + _file_suffix_for_tests())
 
-    transport.writeInput(
-        output,
-        asymmetric_phi_ase(),
-        medium,
-        asymmetric_cross_sections(),
-        backend=_file_backend_for_tests(),
-    )
+    with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
+        writer.write(asymmetric_phi_ase(), medium, asymmetric_cross_sections())
 
     io = _io()
     series = io.Series(str(output), io.Access.read_only)

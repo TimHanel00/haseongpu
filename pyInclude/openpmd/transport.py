@@ -19,6 +19,42 @@ from . import HASE_SCHEMA_VERSION, FieldSpec, backendFlatArray, fieldSpec, flatE
 from ..structures import Result
 
 
+CANONICAL_POINTS_SPEC = FieldSpec(
+    "canonicalPoints",
+    "points",
+    ("coordinate", "mesh_point"),
+    np.float64,
+    lambda context: (3, context.numberOfMeshPoints),
+    unit="m",
+    unitDimension=(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    backendRequired=False,
+)
+CANONICAL_CONNECTIVITY_SPEC = FieldSpec(
+    "canonicalConnectivity",
+    "cells_connectivity",
+    ("cell", "local_vertex"),
+    np.uint32,
+    lambda context: (context.numberOfPrisms, 6),
+    backendRequired=False,
+)
+CANONICAL_OFFSETS_SPEC = FieldSpec(
+    "canonicalOffsets",
+    "cells_offsets",
+    ("cell_offset",),
+    np.uint32,
+    lambda context: (context.numberOfPrisms + 1,),
+    backendRequired=False,
+)
+CANONICAL_CELL_TYPES_SPEC = FieldSpec(
+    "canonicalCellTypes",
+    "cells_types",
+    ("cell",),
+    np.uint32,
+    lambda context: (context.numberOfPrisms,),
+    backendRequired=False,
+)
+DYNAMIC_FIELD_NAMES = {"betaVolume", "pointBeta"}
+
 
 @dataclass(frozen=True)
 class _AttributeField:
@@ -78,7 +114,7 @@ OPENPMD_BACKENDS = {
 def _normalize_backend(backend=None):
     value = backend if backend is not None else os.environ.get("HASE_OPENPMD_BACKEND", "bp")
     normalized = str(value).strip().lower()
-    if normalized == "sst":
+    if normalized in {"sst", "adiossst"}:
         normalized = "adios-sst"
     if normalized not in OPENPMD_BACKENDS:
         allowed = ", ".join(sorted(OPENPMD_BACKENDS))
@@ -177,11 +213,13 @@ def _attributeValues(phiAse, gainMedium, crossSections):
     values.update(phiAse.openPmdAttributes(numberOfSamples=number_of_samples))
     return values
 
-def _arrayFields(gainMedium, crossSections):
+def _arrayFields(gainMedium, crossSections, *, include_static=True):
     context = _fieldContext(gainMedium)
-    yield from _fieldsFromDomain(gainMedium.topology.openPmdFields(context))
-    yield from _fieldsFromDomain(gainMedium.openPmdFields(context))
-    yield from _fieldsFromDomain(crossSections.openPmdFields(spectralContext))
+    for field in _fieldsFromDomain(gainMedium.openPmdFields(context)):
+        if include_static or field.spec.name in DYNAMIC_FIELD_NAMES:
+            yield field
+    if include_static:
+        yield from _fieldsFromDomain(crossSections.openPmdFields(spectralContext))
 
 
 def _fieldsFromDomain(fields):
@@ -326,14 +364,24 @@ def _as_array(values, dtype, shape=None, order="C"):
     return np.ascontiguousarray(arr)
 
 
-def _reset_scalar_record(record, data, axis_labels, unit_dimension=None, unit_si=1.0, grid_unit_si=1.0):
+def _reset_scalar_record(
+    record,
+    data,
+    axis_labels,
+    unit_dimension=None,
+    unit_si=1.0,
+    grid_unit_si=1.0,
+    grid_spacing=None,
+    grid_global_offset=None,
+    geometry_parameters="topology=unstructured_triangular_prism",
+):
     io = _io()
     record.set_attribute("geometry", "other")
-    record.set_attribute("geometryParameters", "topology=unstructured_triangular_prism")
+    record.set_attribute("geometryParameters", geometry_parameters)
     record.set_attribute("dataOrder", "C")
     record.axis_labels = axis_labels
-    record.grid_spacing = [1.0] * data.ndim
-    record.grid_global_offset = [0.0] * data.ndim
+    record.grid_spacing = [1.0] * data.ndim if grid_spacing is None else list(grid_spacing)
+    record.grid_global_offset = [0.0] * data.ndim if grid_global_offset is None else list(grid_global_offset)
     record.grid_unit_SI = float(grid_unit_si)
     record.unit_dimension = _dimensionless_dimension() if unit_dimension is None else unit_dimension
     component = record[io.Mesh_Record_Component.SCALAR]
@@ -387,6 +435,79 @@ def _resetComponent(record, component_name, data, axis_labels, unit_dimension, u
     component.reset_dataset(io.Dataset(data.dtype, data.shape))
     component.store_chunk(data)
 
+
+def _canonical_topology_context(topology):
+    topology._require_levels()
+    return SimpleNamespace(
+        numberOfMeshPoints=topology.numberOfPoints * int(topology.levels),
+        numberOfPrisms=topology.numberOfTriangles * (int(topology.levels) - 1),
+    )
+
+
+def _canonical_point_components(topology):
+    points = np.asarray(topology.points, dtype=np.float64)
+    z_values = topology.levelCoordinates()
+    return {
+        "x": np.tile(points[:, 0], z_values.size),
+        "y": np.tile(points[:, 1], z_values.size),
+        "z": np.repeat(z_values, topology.numberOfPoints),
+    }
+
+
+def _canonical_cell_connectivity(topology):
+    triangles = np.asarray(topology.trianglePointIndices, dtype=np.uint32)
+    rows = []
+    for level in range(int(topology.levels) - 1):
+        lower = level * topology.numberOfPoints
+        upper = (level + 1) * topology.numberOfPoints
+        for tri in triangles:
+            ids = [int(vertex) for vertex in tri]
+            rows.append([
+                ids[0] + lower,
+                ids[1] + lower,
+                ids[2] + lower,
+                ids[0] + upper,
+                ids[1] + upper,
+                ids[2] + upper,
+            ])
+    return np.asarray(rows, dtype=np.uint32).reshape(-1)
+
+
+def _write_canonical_static_topology(iteration, gainMedium):
+    topology = gainMedium.topology
+    context = _canonical_topology_context(topology)
+    record = iteration.meshes["core_" + CANONICAL_POINTS_SPEC.recordName]
+    for component_name, values in _canonical_point_components(topology).items():
+        _resetComponent(
+            record,
+            component_name,
+            np.ascontiguousarray(values),
+            ["mesh_point"],
+            _unit_dimension(_io(), CANONICAL_POINTS_SPEC.unitDimension),
+            CANONICAL_POINTS_SPEC.unitSI,
+        )
+    _record_metadata(record, CANONICAL_POINTS_SPEC)
+    record.set_attribute("hasePrimitiveShape", list(CANONICAL_POINTS_SPEC.expectedShape(context)))
+
+    connectivity = _canonical_cell_connectivity(topology)
+    _resetFlatField(
+        iteration.meshes["core_" + CANONICAL_CONNECTIVITY_SPEC.recordName],
+        CANONICAL_CONNECTIVITY_SPEC,
+        connectivity,
+        context,
+    )
+    _resetFlatField(
+        iteration.meshes["core_" + CANONICAL_OFFSETS_SPEC.recordName],
+        CANONICAL_OFFSETS_SPEC,
+        np.arange(context.numberOfPrisms + 1, dtype=np.uint32) * np.uint32(6),
+        context,
+    )
+    _resetFlatField(
+        iteration.meshes["core_" + CANONICAL_CELL_TYPES_SPEC.recordName],
+        CANONICAL_CELL_TYPES_SPEC,
+        np.full(context.numberOfPrisms, 13, dtype=np.uint32),
+        context,
+    )
 
 def _loadScalar(series, iteration, name, dtype):
     io = _io()
@@ -448,18 +569,17 @@ def findCalcPhiAse():
 
 
 
-def writeInput(path, phiAse, gainMedium, crossSections, *, backend=None):
-    path = Path(path)
-    if backend is not None:
-        _ensure_backend_available(backend)
-    io = _io()
-    series = io.Series(str(path), _access("create_linear"), _series_config(path, backend))
+def _open_input_series(path, *, backend=None):
+    series = _io().Series(str(path), _access("create_linear"), _series_config(path, backend))
     series.set_software("HASEonGPU-openPMD-python-frontend")
     for name, value in haseExtensionAttributes.items():
         series.set_attribute(name, value)
     series.set_attribute("haseSchemaVersion", HASE_SCHEMA_VERSION)
+    return series
 
-    iteration = series.snapshots()[0]
+
+def _write_input_iteration(series, iteration_index, phiAse, gainMedium, crossSections, *, include_static=True):
+    iteration = series.snapshots()[int(iteration_index)]
     iteration.time = 0.0
     iteration.dt = 1.0
     iteration.time_unit_SI = 1.0
@@ -467,11 +587,51 @@ def writeInput(path, phiAse, gainMedium, crossSections, *, backend=None):
     for field in _attributeFields(phiAse, gainMedium, crossSections):
         iteration.set_attribute(field.name, field.value)
 
-    for field in _arrayFields(gainMedium, crossSections):
+    if include_static:
+        iteration.set_attribute("haseStaticUpdate", True)
+        _write_canonical_static_topology(iteration, gainMedium)
+    else:
+        iteration.set_attribute("haseStaticUpdate", False)
+
+    for field in _arrayFields(gainMedium, crossSections, include_static=include_static):
         _writeArrayField(iteration, field)
 
     iteration.close()
-    series.close()
+
+
+class OpenPmdInputSeries:
+    """Context manager for writing HASE input iterations to one openPMD series."""
+
+    def __init__(self, path, *, backend=None):
+        self.path = Path(path)
+        self.backend = backend
+        self._series = None
+        self._next_iteration = 0
+
+    def __enter__(self):
+        if self.backend is not None:
+            _ensure_backend_available(self.backend)
+        self._series = _open_input_series(self.path, backend=self.backend)
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+        return False
+
+    def write(self, phiAse, gainMedium, crossSections, *, iteration_index=None, include_static=None):
+        if self._series is None:
+            raise RuntimeError("OpenPmdInputSeries must be used as a context manager before writing")
+        index = self._next_iteration if iteration_index is None else int(iteration_index)
+        write_static = (index == 0) if include_static is None else bool(include_static)
+        _write_input_iteration(self._series, index, phiAse, gainMedium, crossSections, include_static=write_static)
+        self._series.flush()
+        self._next_iteration = max(self._next_iteration, index + 1)
+        return index
+
+    def close(self):
+        if self._series is not None:
+            self._series.close()
+            self._series = None
 
 
 
@@ -501,119 +661,295 @@ def _writeArrayField(iteration, field):
     )
 
 
-def read_result(path) -> Result:
+def _iteration_index(iteration, fallback=None):
+    for name in ("iteration_index", "iterationIndex"):
+        if hasattr(iteration, name):
+            return int(getattr(iteration, name))
+    return fallback
+
+
+def _read_result_iteration(series, iteration, *, fallback_index=None) -> tuple[int | None, Result]:
+    iteration_index = _iteration_index(iteration, fallback_index)
+    prefix = "core_result_"
+    values = {
+        spec.name: _loadScalar(series, iteration, prefix + spec.recordName, spec.dtypeObject)
+        for spec in resultFieldSpecs()
+    }
+    iteration.close()
+    return iteration_index, Result(**values)
+
+
+def read_result(path, *, expected_iteration_index=0) -> Result:
     path = Path(path)
     series = _io().Series(str(path), _access("read_linear"), _series_config(path))
-    for iteration in series.read_iterations():
-        prefix = "core_result_"
-        values = {
-            spec.name: _loadScalar(series, iteration, prefix + spec.recordName, spec.dtypeObject)
-            for spec in resultFieldSpecs()
-        }
-        iteration.close()
+    for fallback_index, iteration in enumerate(series.read_iterations()):
+        iteration_index, result = _read_result_iteration(series, iteration, fallback_index=fallback_index)
         series.close()
-        return Result(**values)
+        if iteration_index is not None and iteration_index != expected_iteration_index:
+            raise RuntimeError(
+                f"Expected result iteration {expected_iteration_index} in {path}, got {iteration_index}"
+            )
+        return result
+    series.close()
     raise RuntimeError(f"No result iteration was available in {path}")
 
 
+class OpenPmdPhiAseSession:
+    """Run PhiASE requests through openPMD and wait for matching result iterations."""
 
-def _runOpenPmdAndExecuteHaseBinary(phiAse, gainMedium, crossSections, *, transport=None):
-    spec = _backend_spec(transport)
-    artifact_root = _artifact_root()
-    workspace = tempfile.TemporaryDirectory(prefix="hase-openpmd-") if artifact_root is None else contextlib.nullcontext(artifact_root)
-    with workspace as tmp:
-        tmp_path = Path(tmp)
-        if artifact_root is not None:
-            tmp_path.mkdir(parents=True, exist_ok=True)
-            artifact_id = _artifact_run_id()
-            input_path = tmp_path / f"{artifact_id}-input{spec.suffix}"
-            output_path = tmp_path / f"{artifact_id}-output{spec.suffix}"
-            input_handle = tmp_path / f"{artifact_id}-input.pmd"
-            output_handle = tmp_path / f"{artifact_id}-output.pmd"
-            manifest_path = tmp_path / f"{artifact_id}-manifest.txt"
+    def __init__(self, *, transport=None, timeout=30, command_prefix=None, workspace_dir=None):
+        self.spec = _backend_spec(transport)
+        self.timeout = timeout
+        self.command_prefix = [] if command_prefix is None else list(command_prefix)
+        self.workspace_dir = None if workspace_dir is None else Path(workspace_dir)
+        self._workspace = None
+        self._tmp_path = None
+        self._manifest_path = None
+        self._input_handle = None
+        self._output_handle = None
+        self._input_path = None
+        self._output_path = None
+        self._executable = None
+        self._proc = None
+        self._input_series = None
+        self._result_queue = None
+        self._reader = None
+        self._pending_results = {}
+        self._next_iteration = 0
+        self._entered = False
+
+    def __enter__(self):
+        artifact_root = _artifact_root()
+        if artifact_root is None and self.workspace_dir is not None:
+            self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        self._workspace = (
+            tempfile.TemporaryDirectory(prefix="hase-openpmd-", dir=self.workspace_dir)
+            if artifact_root is None
+            else contextlib.nullcontext(artifact_root)
+        )
+        tmp = self._workspace.__enter__()
+        self._tmp_path = Path(tmp)
+        self._tmp_path.mkdir(parents=True, exist_ok=True)
+        self._executable = findCalcPhiAse()
+        _ensure_backend_available(self.spec.name)
+
+        artifact_id = _artifact_run_id() if artifact_root is not None else None
+        if self.spec.streaming:
+            stem = f"{artifact_id}-" if artifact_id else ""
+            self._input_path = self._tmp_path / f"{stem}input{self.spec.suffix}"
+            self._output_path = self._tmp_path / f"{stem}output{self.spec.suffix}"
+            self._manifest_path = None if artifact_root is None else self._tmp_path / f"{artifact_id}-manifest.txt"
+            self._input_handle = None if artifact_root is None else self._tmp_path / f"{artifact_id}-input.pmd"
+            self._output_handle = None if artifact_root is None else self._tmp_path / f"{artifact_id}-output.pmd"
+            self._write_handles_and_manifest(status="created")
+            self._start_streaming_backend()
+
+        self._entered = True
+        return self
+
+    def _calc_phi_ase_command(self, input_path, output_path):
+        return [
+            *self.command_prefix,
+            str(self._executable),
+            f"--input-path={input_path}",
+            f"--output-path={output_path}",
+        ]
+
+    def __exit__(self, exc_type, exc, traceback):
+        close_error = None
+        try:
+            self.close()
+        except BaseException as error:
+            close_error = error
+        finally:
+            self._entered = False
+            if self._workspace is not None:
+                self._workspace.__exit__(exc_type, exc, traceback)
+                self._workspace = None
+        if exc_type is None and close_error is not None:
+            raise close_error
+        return False
+
+    def run(self, phiAse, gainMedium, crossSections):
+        if not self._entered:
+            raise RuntimeError("OpenPmdPhiAseSession must be used as a context manager before running")
+        iteration_index = self._next_iteration
+        if self.spec.streaming:
+            result = self._run_streaming_iteration(iteration_index, phiAse, gainMedium, crossSections)
+        else:
+            result = self._run_file_iteration(iteration_index, phiAse, gainMedium, crossSections)
+        self._next_iteration += 1
+        return result
+
+    def close(self):
+        if self._input_series is not None:
+            self._input_series.close()
+            self._input_series = None
+        if self._proc is None:
+            return
+
+        try:
+            return_code = self._proc.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            return_code = self._proc.wait()
+        stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
+        self._proc = None
+        self._write_handles_and_manifest(status="completed" if return_code == 0 else "failed", return_code=return_code)
+        if return_code != 0:
+            detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
+            raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
+
+    def _paths_for_file_iteration(self, iteration_index):
+        artifact_root = _artifact_root()
+        artifact_id = _artifact_run_id() if artifact_root is not None else None
+        if artifact_id is None:
+            if iteration_index == 0:
+                return self._tmp_path / ("input" + self.spec.suffix), self._tmp_path / ("output" + self.spec.suffix), None
+            return (
+                self._tmp_path / f"input-{iteration_index}{self.spec.suffix}",
+                self._tmp_path / f"output-{iteration_index}{self.spec.suffix}",
+                None,
+            )
+        stem = f"{artifact_id}-{iteration_index}"
+        return (
+            self._tmp_path / f"{stem}-input{self.spec.suffix}",
+            self._tmp_path / f"{stem}-output{self.spec.suffix}",
+            self._tmp_path / f"{stem}-manifest.txt",
+        )
+
+    def _run_file_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
+        input_path, output_path, manifest_path = self._paths_for_file_iteration(iteration_index)
+        input_handle = None
+        output_handle = None
+        if manifest_path is not None:
+            input_handle = manifest_path.with_name(manifest_path.stem + "-input.pmd")
+            output_handle = manifest_path.with_name(manifest_path.stem + "-output.pmd")
             _write_openpmd_handle(input_handle, input_path)
             _write_openpmd_handle(output_handle, output_path)
             _write_artifact_manifest(
                 manifest_path,
-                backend=spec.name,
+                backend=self.spec.name,
                 input_path=input_path,
                 output_path=output_path,
                 input_handle=input_handle,
                 output_handle=output_handle,
                 status="created",
             )
-        else:
-            input_path = tmp_path / ("input" + spec.suffix)
-            output_path = tmp_path / ("output" + spec.suffix)
-            manifest_path = None
-            input_handle = None
-            output_handle = None
-        executable_path = findCalcPhiAse()
-        _ensure_backend_available(spec.name)
-        executable = str(executable_path)
-        if spec.streaming:
-            proc = subprocess.Popen(
-                [executable, f"--input-path={input_path}", f"--output-path={output_path}"],
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            result_queue = queue.Queue(maxsize=1)
 
-            def read_streaming_result():
-                try:
-                    result_queue.put((True, read_result(output_path)))
-                except BaseException as exc:
-                    result_queue.put((False, exc))
-
-            reader = threading.Thread(target=read_streaming_result, daemon=True)
-            reader.start()
-            try:
-                writeInput(input_path, phiAse, gainMedium, crossSections, backend=spec.name)
-                try:
-                    ok, payload = result_queue.get(timeout=30)
-                except queue.Empty as exc:
-                    proc.kill()
-                    raise TimeoutError(f"Timed out waiting for openPMD backend '{spec.name}' result stream") from exc
-                if ok:
-                    result = payload
-                else:
-                    raise payload
-            finally:
-                try:
-                    return_code = proc.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    return_code = proc.wait()
-            stderr = "" if proc.stderr is None else proc.stderr.read()
-        else:
-            writeInput(input_path, phiAse, gainMedium, crossSections, backend=spec.name)
-            completed = subprocess.run(
-                [executable, f"--input-path={input_path}", f"--output-path={output_path}"],
-                check=False,
-                text=True,
-                capture_output=True,
-            )
-            return_code = completed.returncode
-            stderr = completed.stderr
-            if return_code == 0:
-                result = read_result(output_path)
-
+        with OpenPmdInputSeries(input_path, backend=self.spec.name) as writer:
+            writer.write(phiAse, gainMedium, crossSections, iteration_index=iteration_index, include_static=True)
+        completed = subprocess.run(
+            self._calc_phi_ase_command(input_path, output_path),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
         if manifest_path is not None:
             _write_artifact_manifest(
                 manifest_path,
-                backend=spec.name,
+                backend=self.spec.name,
                 input_path=input_path,
                 output_path=output_path,
                 input_handle=input_handle,
                 output_handle=output_handle,
-                status="completed" if return_code == 0 else "failed",
-                return_code=return_code,
+                status="completed" if completed.returncode == 0 else "failed",
+                return_code=completed.returncode,
             )
-        if return_code != 0:
-            detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
-            raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
-        return result
+        if completed.returncode != 0:
+            detail = f": {completed.stderr.strip()}" if completed.stderr and completed.stderr.strip() else ""
+            raise RuntimeError(f"calcPhiASE failed with return code {completed.returncode}{detail}")
+        return read_result(output_path, expected_iteration_index=iteration_index)
+
+    def _write_handles_and_manifest(self, *, status, return_code=None):
+        if self._manifest_path is None:
+            return
+        _write_openpmd_handle(self._input_handle, self._input_path)
+        _write_openpmd_handle(self._output_handle, self._output_path)
+        _write_artifact_manifest(
+            self._manifest_path,
+            backend=self.spec.name,
+            input_path=self._input_path,
+            output_path=self._output_path,
+            input_handle=self._input_handle,
+            output_handle=self._output_handle,
+            status=status,
+            return_code=return_code,
+        )
+
+    def _start_streaming_backend(self):
+        self._proc = subprocess.Popen(
+            self._calc_phi_ase_command(self._input_path, self._output_path),
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self._result_queue = queue.Queue()
+        self._reader = threading.Thread(target=self._read_streaming_results, daemon=True)
+        self._reader.start()
+        self._input_series = _open_input_series(self._input_path, backend=self.spec.name)
+
+    def _read_streaming_results(self):
+        try:
+            series = _io().Series(str(self._output_path), _access("read_linear"), _series_config(self._output_path))
+            for fallback_index, iteration in enumerate(series.read_iterations()):
+                self._result_queue.put((True, _read_result_iteration(series, iteration, fallback_index=fallback_index)))
+            series.close()
+        except BaseException as exc:
+            self._result_queue.put((False, exc))
+
+    def _run_streaming_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
+        _write_input_iteration(self._input_series, iteration_index, phiAse, gainMedium, crossSections, include_static=(iteration_index == 0))
+        self._input_series.flush()
+        return self._wait_for_result(iteration_index)
+
+    def _wait_for_result(self, expected_iteration_index):
+        if expected_iteration_index in self._pending_results:
+            return self._pending_results.pop(expected_iteration_index)
+        while True:
+            if self._proc is not None and self._proc.poll() not in (None, 0):
+                stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
+                detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
+                raise RuntimeError(f"calcPhiASE failed with return code {self._proc.returncode}{detail}")
+            try:
+                ok, payload = self._result_queue.get(timeout=self.timeout)
+            except queue.Empty as exc:
+                if self._proc is not None:
+                    self._proc.kill()
+                raise TimeoutError(
+                    f"Timed out waiting for openPMD backend '{self.spec.name}' result iteration "
+                    f"{expected_iteration_index}"
+                ) from exc
+            if not ok:
+                raise payload
+            iteration_index, result = payload
+            if iteration_index is None or iteration_index == expected_iteration_index:
+                return result
+            self._pending_results[iteration_index] = result
 
 
-def runPhiASE(phiAse, gainMedium, crossSections, *, transport=None):
-    return _runOpenPmdAndExecuteHaseBinary(phiAse, gainMedium, crossSections, transport=transport)
+def _runOpenPmdAndExecuteHaseBinary(
+    phiAse,
+    gainMedium,
+    crossSections,
+    *,
+    transport=None,
+    command_prefix=None,
+    workspace_dir=None,
+):
+    kwargs = {"transport": transport}
+    if command_prefix is not None:
+        kwargs["command_prefix"] = command_prefix
+    if workspace_dir is not None:
+        kwargs["workspace_dir"] = workspace_dir
+    with OpenPmdPhiAseSession(**kwargs) as session:
+        return session.run(phiAse, gainMedium, crossSections)
+
+def runPhiASE(phiAse, gainMedium, crossSections, *, transport=None, command_prefix=None, workspace_dir=None):
+    return _runOpenPmdAndExecuteHaseBinary(
+        phiAse,
+        gainMedium,
+        crossSections,
+        transport=transport,
+        command_prefix=command_prefix,
+        workspace_dir=workspace_dir,
+    )
