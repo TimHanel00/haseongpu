@@ -262,7 +262,7 @@ namespace hase::kernels
             gain *= gainTmp;
 
             assert(length >= 0);
-            distanceRemaining = (distanceRemaining - length > 0) ? distanceRemaining - length : 0;
+            distanceRemaining -= length;
 
             // Calc nextTriangle, nextForbiddenEdge and nextLevel
             if(nextEdge != -1)
