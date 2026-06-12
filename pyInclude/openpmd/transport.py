@@ -94,6 +94,7 @@ SST_CONFIG = {
     "backend": "adios2",
     "adios2": {
         "engine": {
+            "type": "sst",
             "parameters": {
                 "DataTransport": "WAN",
                 "OpenTimeoutSecs": "600",
@@ -106,16 +107,13 @@ SST_CONFIG = {
 OPENPMD_BACKENDS = {
     "adios": _BackendSpec("adios", ".bp", ADIOS2_CONFIG),
     "adios-sst": _BackendSpec("adios-sst", ".sst", SST_CONFIG, streaming=True),
-    "bp": _BackendSpec("bp", ".bp", {}),
     "hdf5": _BackendSpec("hdf5", ".h5", HDF5_CONFIG),
 }
 
 
 def _normalize_backend(backend=None):
-    value = backend if backend is not None else os.environ.get("HASE_OPENPMD_BACKEND", "bp")
+    value = backend if backend is not None else os.environ.get("HASE_OPENPMD_BACKEND", "adios")
     normalized = str(value).strip().lower()
-    if normalized in {"sst", "adiossst"}:
-        normalized = "adios-sst"
     if normalized not in OPENPMD_BACKENDS:
         allowed = ", ".join(sorted(OPENPMD_BACKENDS))
         raise ValueError(f"unsupported openPMD backend '{value}'; expected one of: {allowed}")
@@ -382,6 +380,9 @@ def _reset_scalar_record(
     record.set_attribute("geometryParameters", geometry_parameters)
     record.set_attribute("dataOrder", "C")
     record.axis_labels = axis_labels
+    # ADIOS2 SST may not preserve openPMD axisLabels on streamed mesh records.
+    # Keep the canonical axisLabels property, plus a scalar fallback for readers.
+    record.set_attribute("haseAxisLabelsString", ",".join(axis_labels))
     record.grid_spacing = [1.0] * data.ndim if grid_spacing is None else list(grid_spacing)
     record.grid_global_offset = [0.0] * data.ndim if grid_global_offset is None else list(grid_global_offset)
     record.grid_unit_SI = float(grid_unit_si)
@@ -397,6 +398,9 @@ def _record_metadata(record, spec: FieldSpec):
     record.set_attribute("haseSchemaVersion", HASE_SCHEMA_VERSION)
     record.set_attribute("haseEntity", spec.entity)
     record.set_attribute("haseAxes", list(spec.axes))
+    # ADIOS2 SST has been observed to stream string-list attributes as an empty
+    # scalar string. Keep haseAxes canonical, plus a scalar fallback.
+    record.set_attribute("haseAxesString", ",".join(spec.axes))
     record.set_attribute("haseLayoutOrder", "backendFlat")
     record.set_attribute("haseStatic", not spec.dynamic)
     record.set_attribute("haseDynamic", spec.dynamic)
@@ -427,6 +431,9 @@ def _resetComponent(record, component_name, data, axis_labels, unit_dimension, u
     record.set_attribute("geometryParameters", "topology=unstructured_triangular_prism")
     record.set_attribute("dataOrder", "C")
     record.axis_labels = axis_labels
+    # ADIOS2 SST may not preserve openPMD axisLabels on streamed mesh records.
+    # Keep the canonical axisLabels property, plus a scalar fallback for readers.
+    record.set_attribute("haseAxisLabelsString", ",".join(axis_labels))
     record.grid_spacing = [1.0] * data.ndim
     record.grid_global_offset = [0.0] * data.ndim
     record.grid_unit_SI = 1.0
@@ -543,6 +550,26 @@ def _is_openpmd_calc_phi_ase(executable: Path):
     return executable.is_file() and _target_uses_openpmd_main(_build_dir_for_executable(executable))
 
 
+def _installed_calc_phi_ase_candidates():
+    try:
+        import HASEonGPU_Bindings
+    except ImportError:
+        return []
+
+    return [Path(path) / "calcPhiASE" for path in HASEonGPU_Bindings.__path__]
+
+
+def _build_dir_candidates(root: Path):
+    env = os.environ.get("BUILD_DIR")
+    if env:
+        yield Path(env) if Path(env).is_absolute() else root / env
+
+    yield from sorted(root.glob("build/cp*"))
+    yield root / "build"
+    yield root / "build" / "ci"
+    yield root / "cmake-build-debug"
+
+
 def findCalcPhiAse():
     env = os.environ.get("HASE_CALCPHIASE")
     if env:
@@ -552,12 +579,9 @@ def findCalcPhiAse():
         raise RuntimeError(f"HASE_CALCPHIASE does not point to an openPMD calcPhiASE binary: {path}")
 
     root = Path(__file__).resolve().parents[2]
-    candidates = [
-        root / "build" / "ci" / "calcPhiASE",
-        root / "build" / "calcPhiASE",
-        root / "cmake-build-debug" / "calcPhiASE",
-    ]
-    for build_dir in root.glob("build/*"):
+    candidates = list(_installed_calc_phi_ase_candidates())
+    for build_dir in _build_dir_candidates(root):
+        candidates.append(build_dir / "python" / "HASEonGPU_Bindings" / "calcPhiASE")
         candidates.append(build_dir / "calcPhiASE")
 
     for candidate in candidates:
@@ -565,8 +589,8 @@ def findCalcPhiAse():
             return candidate
 
     raise FileNotFoundError(
-        "Could not find an openPMD calcPhiASE binary in the HASE build tree. "
-        "Build HASE_BUILD_PhiAse with src/openpmd_main.cpp or set HASE_CALCPHIASE."
+        "Could not find an openPMD calcPhiASE binary in the installed package or HASE build tree. "
+        "Build the Python package or set HASE_CALCPHIASE."
     )
 
 
@@ -885,10 +909,14 @@ class OpenPmdPhiAseSession:
             stderr=subprocess.PIPE,
             text=True,
         )
+        self._input_series = _open_input_series(self._input_path, backend=self.spec.name)
         self._result_queue = queue.Queue()
+
+    def _start_result_reader(self):
+        if self._reader is not None:
+            return
         self._reader = threading.Thread(target=self._read_streaming_results, daemon=True)
         self._reader.start()
-        self._input_series = _open_input_series(self._input_path, backend=self.spec.name)
 
     def _read_streaming_results(self):
         try:
@@ -902,6 +930,7 @@ class OpenPmdPhiAseSession:
     def _run_streaming_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
         _write_input_iteration(self._input_series, iteration_index, phiAse, gainMedium, crossSections, include_static=(iteration_index == 0))
         self._input_series.flush()
+        self._start_result_reader()
         return self._wait_for_result(iteration_index)
 
     def _wait_for_result(self, expected_iteration_index):
@@ -915,11 +944,16 @@ class OpenPmdPhiAseSession:
             try:
                 ok, payload = self._result_queue.get(timeout=self.timeout)
             except queue.Empty as exc:
+                stderr = ""
                 if self._proc is not None:
                     self._proc.kill()
+                    self._proc.wait()
+                    if self._proc.stderr is not None:
+                        stderr = self._proc.stderr.read()
+                detail = f"; backend stderr: {stderr.strip()}" if stderr and stderr.strip() else ""
                 raise TimeoutError(
                     f"Timed out waiting for openPMD backend '{self.spec.name}' result iteration "
-                    f"{expected_iteration_index}"
+                    f"{expected_iteration_index}{detail}"
                 ) from exc
             if not ok:
                 raise payload

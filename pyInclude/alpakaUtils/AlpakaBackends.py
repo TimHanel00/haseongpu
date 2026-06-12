@@ -8,6 +8,7 @@
 
 import ctypes
 import ctypes.util
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -20,15 +21,29 @@ def _libraryNames():
     return ("libHaseAlpakaBackendNames.so",)
 
 
+def _bindingPackageDirs():
+    spec = importlib.util.find_spec("HASEonGPU_Bindings")
+    if spec is None or spec.submodule_search_locations is None:
+        return ()
+    return tuple(Path(path) for path in spec.submodule_search_locations)
+
+
 def _candidatePaths():
+    for packageDir in _bindingPackageDirs():
+        for name in _libraryNames():
+            yield packageDir / name
+
     moduleDir = Path(__file__).resolve().parent
     for name in _libraryNames():
         yield moduleDir / name
 
     for parent in moduleDir.parents:
         for name in _libraryNames():
+            for buildDir in sorted((parent / "build").glob("cp*")):
+                yield buildDir / "python" / "HASEonGPU_Bindings" / name
+                yield buildDir / name
+            yield parent / "build" / "python" / "HASEonGPU_Bindings" / name
             yield parent / "build" / name
-
 
 
 def _loadLibrary():

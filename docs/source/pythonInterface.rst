@@ -71,12 +71,12 @@ Minimal Example Tutorial
 ------------------------
 
 The Python interface guide is built around the objects that appear in a physical ASE
-simulation.  First describe the crystal geometry.  Then attach material and
+simulation. First describe the crystal geometry.  Then attach material and
 state data to that geometry.  Then describe the spectra and pump.  Finally,
 configure the ASE solver and let ``Simulation`` advance the system in time.
 
-The code snippets in this section are taken from the minimal new-interface
-example so that the tutorial code and the runnable example stay in sync.  The
+The code snippets in this section are taken from the minimal Python example so
+that the tutorial code and the runnable example stay in sync.  The
 snippets are included by named code markers instead of fixed line numbers, so
 the documentation follows the example when code is moved inside the file.
 
@@ -84,12 +84,12 @@ Describe the Crystal Geometry
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 In order to simulate laser pump and ASE behavior, HASEonGPU first needs a
-geometry for the laser crystal.  The new interface calls this geometry a
+geometry for the laser crystal. The Python interface calls this geometry a
 :doc:`python_interface/topology`: it contains the transverse mesh, the triangle
 connectivity, and the z-levels that are used to extrude the 2D mesh into prism
 cells.
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: topology
    :end-before: # docs:end: topology
@@ -114,7 +114,7 @@ adds what the crystal is made of and what state it is currently in.  This is
 where the population inversion, cladding, surface data, doping density, and
 fluorescence lifetime are assigned.
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: gain-medium
    :end-before: # docs:end: gain-medium
@@ -170,7 +170,7 @@ the absorption and emission spectra, :math:`\sigma_a(\lambda)` and
 :math:`\sigma_e(\lambda)`, to compute wavelength-dependent amplification and
 loss. This enables mult-chromatic ASE calculation.
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: spectral-decomposition
    :end-before: # docs:end: spectral-decomposition
@@ -189,7 +189,7 @@ The pump defines how energy is deposited into ``betaCells``
 super-Gaussian beam with wavelength :math:`\lambda`, intensity :math:`I`,
 radii, and exponent.  It uses the same spectral data object created above.
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: pump-properties
    :end-before: # docs:end: pump-properties
@@ -206,7 +206,7 @@ reflection, and returns the beta distribution :math:`\beta` after pumping.
 
 The example passes a custom solver to show the extension point:
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: custom-pump-solver
    :end-before: # docs:end: custom-pump-solver
@@ -224,9 +224,9 @@ At this point the geometry, material state, spectra, and pump are known.  The
 remaining question is how the ASE calculation should be executed.
 To answer that question, the interface provides a ``PhiASE`` object, which is a configuration object for the HASEonGPU ASE
 c++ backend, which sets sampling limits, adaptive convergence settings, reflection handling,
-backend name, and parallel execution mode.
+compute backend name, and parallel execution mode.
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: phi-ase
    :end-before: # docs:end: phi-ase
@@ -238,11 +238,14 @@ sampling can increase the accuracy of the Monte Carlo integration.
 ``useReflections`` enables the surface reflection model that
 uses ``reflectivities`` from the gain medium.
 
-``backend``, ``parallelMode``, and ``numDevices`` describe how HASEonGPU should
-run.  When ``phi_ase.run(...)`` is called, ``PhiASE`` builds the low-level host
-mesh and compute parameter objects and forwards them to the compiled
-HASEonGPU implementation.  ``PhiASE`` can also be used to execute a one-shot ASE call without a time loop.
-This is shown in :doc:`python_interface/phi_ase`.  Generated signatures and member lists are available in the :doc:`Python API Reference <pythonAPI>`.
+``backend``, ``parallelMode``, and ``numDevices`` describe the compute
+configuration written into the openPMD input metadata. When
+``phi_ase.run(...)`` is called, ``PhiASE`` serializes the domain objects
+through the openPMD transport, runs the compiled ``calcPhiASE`` backend, and
+reads the result records back into Python. ``PhiASE`` can also be used for a
+one-shot ASE call without a time loop. This is shown in
+:doc:`python_interface/phi_ase`. Generated signatures and member lists are
+available in the :doc:`Python API Reference <pythonAPI>`.
 
 The backend value is a runtime selection string, not a fixed Python enum.
 The minimal example uses ``"Host_Cpu_CpuSerial"`` because that backend is
@@ -262,7 +265,8 @@ Pass one of these strings to ``PhiASE(..., backend=...)``.  The same backend
 names are written into the openPMD metadata consumed by the command-line
 binary.  See :doc:`Backend Selection <backendSelection>` for build-time backend
 selection, runtime backend naming, and troubleshooting the backend-name helper
-library.
+library. See :doc:`openPMD Transport <openpmdTransport>` for the storage backend
+and schema contract used between Python and C++.
 
 Assemble the Time Simulation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -273,7 +277,7 @@ combines pump gain, ASE depletion, and fluorescence decay into a derivative
 called ``dndtASE`` (:math:`d\beta/dt`), and advances ``betaCells`` with the
 selected time integration method.
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: simulation
    :end-before: # docs:end: simulation
@@ -325,7 +329,7 @@ backend, MPI, and output settings should stay in a small run configuration.
      backend: Host_Cpu_CpuSerial
      parallel_mode: single
      numDevices: 1
-     write_vtk: false
+     write_vtk: false  # must remain false for the openPMD transport
 
 .. code-block:: python
 
@@ -360,7 +364,7 @@ of accepted keys and command-line helper support.
 Inspect Results
 ^^^^^^^^^^^^^^^
 
-.. literalinclude:: ../../example/python_example/minimalExampleNewInterface.py
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: results
    :end-before: # docs:end: results

@@ -236,6 +236,7 @@ TEMPLATE_LIST_TEST_CASE(
 
     hase::kernels::importanceSamplingPropagation(
         devBundle,
+        queue,
         0u,
         reflectionSlices,
         deviceMesh.toView(),
@@ -253,6 +254,7 @@ TEMPLATE_LIST_TEST_CASE(
     unsigned rngStride = 0u;
     unsigned const distributedRays = hase::kernels::importanceSamplingDistribution(
         devBundle,
+        queue,
         reflectionSlices,
         deviceMesh.toView(),
         raysPerSample,
@@ -309,6 +311,7 @@ TEMPLATE_LIST_TEST_CASE("importance sampling distribution skips zero total pre-i
     unsigned rngStride = 0u;
     unsigned const distributedRays = hase::kernels::importanceSamplingDistribution(
         devBundle,
+        queue,
         reflectionSlices,
         deviceMesh.toView(),
         raysPerSample,

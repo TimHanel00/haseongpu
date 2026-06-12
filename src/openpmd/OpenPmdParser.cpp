@@ -51,10 +51,13 @@ namespace
 
     constexpr char const* OPENPMD_SST_CONFIG = R"(
 {
+  "backend": "adios2",
   "adios2": {
     "engine": {
+      "type": "sst",
       "parameters": {
         "DataTransport": "WAN",
+        "OpenTimeoutSecs": "600",
         "QueueFullPolicy": "Discard"
       }
     }
@@ -155,6 +158,54 @@ namespace
         }
     }
 
+    std::vector<std::string> splitAxesString(std::string const& value)
+    {
+        std::vector<std::string> axes;
+        std::stringstream stream(value);
+        std::string axis;
+        while(std::getline(stream, axis, ','))
+        {
+            if(!axis.empty())
+            {
+                axes.push_back(axis);
+            }
+        }
+        return axes;
+    }
+
+    void validateAxesAttribute(
+        std::string const& name,
+        io::Attributable const& obj,
+        std::vector<std::string> const& expected)
+    {
+        if(obj.containsAttribute("haseAxes"))
+        {
+            try
+            {
+                if(attribute<std::vector<std::string>>(obj, "haseAxes") == expected)
+                {
+                    return;
+                }
+            }
+            catch(std::exception const&)
+            {
+            }
+        }
+
+        if(obj.containsAttribute("haseAxesString"))
+        {
+            // SST can carry Python string-list attributes as an empty scalar
+            // string. Accept the scalar fallback while keeping haseAxes as the
+            // canonical metadata for file-backed backends.
+            if(splitAxesString(attribute<std::string>(obj, "haseAxesString")) == expected)
+            {
+                return;
+            }
+        }
+
+        validationError(name, "attribute 'haseAxes' mismatch");
+    }
+
     void validateHaseMetadata(
         std::string const& name,
         io::Mesh const& record,
@@ -166,7 +217,7 @@ namespace
     {
         validateAttribute(name, record, "haseSchemaVersion", std::string{HASE_SCHEMA_VERSION});
         validateAttribute(name, record, "haseEntity", entityFromAxes(axes));
-        validateAttribute(name, record, "haseAxes", axes);
+        validateAxesAttribute(name, record, axes);
         validateAttribute(name, record, "haseLayoutOrder", std::string{"backendFlat"});
         validateAttribute(name, record, "hasePrimitiveShape", primitiveShape);
         validateAttribute(name, record, "haseStatic", !dynamic);
@@ -178,6 +229,19 @@ namespace
     void validateAxisLabels(std::string const& name, io::Mesh const& record, std::vector<std::string> const& expected)
     {
         auto const actual = record.axisLabels();
+        if(actual == expected)
+        {
+            return;
+        }
+        if(record.containsAttribute("haseAxisLabelsString"))
+        {
+            // SST can drop openPMD axisLabels on streamed mesh records. Accept
+            // the scalar fallback while keeping axisLabels canonical elsewhere.
+            if(splitAxesString(attribute<std::string>(record, "haseAxisLabelsString")) == expected)
+            {
+                return;
+            }
+        }
         if(actual != expected)
         {
             validationError(

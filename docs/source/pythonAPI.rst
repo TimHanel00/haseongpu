@@ -57,8 +57,8 @@ Simulation and time integration
    Midpoint
    RungeKutta4
 
-Pump solvers and utilities
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+Pump solvers, schema helpers, and utilities
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autosummary::
    :toctree: generated
@@ -70,11 +70,17 @@ Pump solvers and utilities
    Constants
    LegacyGridDataBetaVolumeMapper
    AlpakaBackends
+   BaseSchema
+   PointSchema
+   TriangleSchema
+   PrismSchema
+   PrimitiveFieldSpec
+   backendFlat
    vtkWedge
    writeGainMediumVtk
 
-Lower-level compatibility helpers
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Compatibility helpers
+^^^^^^^^^^^^^^^^^^^^^
 
 .. autosummary::
    :toctree: generated
@@ -87,8 +93,8 @@ Lower-level compatibility helpers
 Module Summaries
 ----------------
 
-These modules back the public API.  They are documented for users who need to
-inspect implementation-level helpers or extension points.
+These modules back the public API. They are documented for users who need to
+inspect implementation helpers or extension points.
 
 .. currentmodule:: pyInclude
 

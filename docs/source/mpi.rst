@@ -46,8 +46,7 @@ physical GPUs.
 
 Important Settings
 ------------------
-These settings can be used in the pythonLegacy path or as arguments for the phiASE object.
-Additionally they can be adjusted in a configuration yaml file if that setting is enabled.
+These settings can be written through ``PhiASE`` configuration and are serialized into the openPMD compute metadata. The MPI process topology is controlled by how ``calcPhiASE`` is launched, for example with ``mpiexec`` or a scheduler.
 
 ``parallelMode``
    Selects the execution path.
@@ -72,8 +71,8 @@ Additionally they can be adjusted in a configuration yaml file if that setting i
    * 2 ranks per node and ``numDevices=4`` gives each rank two GPUs.
 
 ``nPerNode``
-   Controls the number of MPI ranks launched per node in Python wrapper paths
-   that call ``mpiexec`` for the ``calcPhiASE`` binary.
+   Controls the number of MPI ranks launched per node in Python helper paths
+   that explicitly call ``mpiexec`` for the ``calcPhiASE`` binary.
 
    ``nPerNode`` is a launcher setting, not a GPU count inside the C++ compute
    kernel.  After MPI has started the processes, the C++ executable detects the

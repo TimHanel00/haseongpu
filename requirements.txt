@@ -1,10 +1,1 @@
-pytest
-scikit-build-core
-gmsh
-numpy
-scipy
-numba
-vtk
-matplotlib
-pyyaml
-openpmd-api==0.17.0
+-e .[dev]

@@ -1,6 +1,6 @@
 :doc:`<- Back to Getting Started <gettingStarted>`
 
-:doc:`<- Back to Binaray Interface <binaryInterface>`
+:doc:`<- Back to Binary Interface <binaryInterface>`
 
 Compilation
 ===========
@@ -20,10 +20,8 @@ Clone the repository and build HASEonGPU with CMake:
 
    git clone https://github.com/computationalradiationphysics/haseongpu.git
    cd haseongpu
-   mkdir build
-   cd build
-   cmake ..
-   cmake --build .
+   cmake -S . -B build
+   cmake --build build
 
 After compilation, the ``calcPhiASE`` binary is available under:
 
@@ -40,15 +38,15 @@ Minimal default build:
 
 .. code-block:: bash
 
-   cmake ..
-   cmake --build .
+   cmake -S . -B build
+   cmake --build build
 
 Build with MPI support:
 
 .. code-block:: bash
 
-   cmake .. -DDISABLE_MPI=OFF
-   cmake --build .
+   cmake -S . -B build -DDISABLE_MPI=OFF
+   cmake --build build
 
 CMake Options
 -------------
@@ -60,13 +58,13 @@ The following CMake variables control important build options.
 
 * Default: ``AUTO``
 * Description:
-  Enabling allows compilation without requiring MPI or BoostMPI as a dependency.
+  Controls whether MPI support is required, disabled, or auto-detected.
 
 * Values:
 
-  * ``AUTO``: CMAKE tries to detect whether MPI exists and sets this knob in correspondence
-  * ``OFF``: MPI support remains - dependencies are required
-  * ``ON``: MPI support is disabled
+  * ``AUTO``: try to find MPI and continue without MPI if it is unavailable
+  * ``OFF``: require MPI support; configuration fails if MPI is missing
+  * ``ON``: disable MPI support
 
 ``HASE_CUDA_ARCHITECTURES``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -88,10 +86,9 @@ For reproducible builds on different systems, specifying the CUDA architecture i
 
 * Default: ``ON``
 * Description:
-
-  If python as a dependency is missing on your system this knob can be turned off in order to use HASEonGPU from the command-line only.
-  For normal Python installation and usage, please refer to :doc:`Python Interface Guide <pythonInterface>`.
-
+  Controls whether the Python extension and package helpers are built. Turn
+  this off only for command-line-only C++ builds. For normal Python
+  installation and usage, see :doc:`Python Interface Guide <pythonInterface>`.
 
 * Values:
 
@@ -186,6 +183,44 @@ For redistributable wheels or binaries, configure with:
          -Dalpaka_DEP_TBB=OFF \
          -Dalpaka_EXEC_CpuSerial=OFF
 
+
+``HASE_OPENPMD_BACKEND``
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+* Default: ``adios``
+* Description:
+  Selects the openPMD storage backend used for the HASE transport build and
+  parser validation defaults. This is separate from the alpaka compute backend
+  selected at runtime by ``PhiASE.backend`` or openPMD ``backend`` metadata.
+
+* Values:
+
+  * ``adios``: ADIOS2-backed ``.bp`` series
+  * ``adios-sst``: ADIOS2 SST streaming ``.sst`` series
+  * ``hdf5``: HDF5 ``.h5`` series
+
+For normal local validation, prefer ``adios`` or ``hdf5``. SST requires concurrent
+producer/consumer behavior and is easy to leave waiting if only one side is
+started. See :doc:`openpmdTransport` for runtime transport options.
+
+``HASE_OPENPMD_SUPERBUILD``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* Default: ``ON`` unless inherited from ``openPMD_SUPERBUILD``
+* Description:
+  Allows the pinned openPMD-api build to fetch or build its helper
+  dependencies. Disable this only when the required openPMD dependencies are
+  provided externally.
+
+``HASE_OPENPMD_BUILD_PYTHON_BINDINGS``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* Default: ``OFF``
+* Description:
+  Builds the openPMD-api Python bindings as part of the HASE CMake build. The
+  Python package normally depends on ``openpmd-api==0.17.0`` instead, so this
+  option is mainly useful when the Python writer must use the exact openPMD-api
+  module produced by the local CMake build.
 
 ``HASE_TESTING``
 ^^^^^^^^^^^^^^^^

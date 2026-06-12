@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <openPMD/openPMD.hpp>
 #include <openpmd/OpenPmdParser.hpp>
@@ -16,13 +17,16 @@ namespace
 #ifndef HASE_OPENPMD_FILE_EXTENSION
 #    define HASE_OPENPMD_FILE_EXTENSION "bp"
 #endif
+#ifndef HASE_OPENPMD_TEST_FILE_EXTENSION
+#    define HASE_OPENPMD_TEST_FILE_EXTENSION HASE_OPENPMD_FILE_EXTENSION
+#endif
 
     constexpr char const* HASE_SCHEMA_VERSION = "0.1";
 
     std::filesystem::path testPath(std::string const& name)
     {
-        auto path
-            = std::filesystem::temp_directory_path() / ("hase_openpmd_" + name + "." + HASE_OPENPMD_FILE_EXTENSION);
+        auto path = std::filesystem::temp_directory_path()
+                    / ("hase_openpmd_" + name + "." + HASE_OPENPMD_TEST_FILE_EXTENSION);
         std::filesystem::remove_all(path);
         return path;
     }
@@ -39,6 +43,15 @@ namespace
             entity += axis;
         }
         return entity;
+    }
+
+    void requireNear(std::vector<double> const& actual, std::vector<double> const& expected)
+    {
+        REQUIRE(actual.size() == expected.size());
+        for(std::size_t i = 0; i < actual.size(); ++i)
+        {
+            CHECK(actual[i] == Catch::Approx(expected[i]).epsilon(1e-14));
+        }
     }
 
     void setMetadata(
@@ -121,7 +134,8 @@ namespace
         std::string const& name,
         std::function<void(io::Series&, io::Iteration&)> mutate = {},
         bool betaVolumeAsFloat = false,
-        bool pointBetaTransposed = false)
+        bool pointBetaTransposed = false,
+        bool betaVolumeBadExtent = false)
     {
         auto path = testPath(name);
         io::Series series(path.string(), io::Access::CREATE_LINEAR, "{}");
@@ -191,6 +205,10 @@ namespace
         if(betaVolumeAsFloat)
         {
             writeScalar<float>(series, iteration, "core_beta_volume", {0.1f}, {"cell", "layer"}, {1u, 1u}, true);
+        }
+        else if(betaVolumeBadExtent)
+        {
+            writeScalar<double>(series, iteration, "core_beta_volume", {0.1, 0.2}, {"cell", "layer"}, {1u, 1u}, true);
         }
         else
         {
@@ -611,19 +629,7 @@ TEST_CASE("openPMD parser rejects malformed fields before HostMesh construction"
 {
     SECTION("extent")
     {
-        auto const path = writeParserInput(
-            "bad_extent",
-            [](io::Series& series, io::Iteration& iteration)
-            {
-                writeScalar<double>(
-                    series,
-                    iteration,
-                    "core_beta_volume",
-                    {0.1, 0.2},
-                    {"cell", "layer"},
-                    {1u, 1u},
-                    true);
-            });
+        auto const path = writeParserInput("bad_extent", {}, false, false, true);
         auto const error = parserError(path);
         REQUIRE(error.find("openPMD validation error for 'core_beta_volume'") != std::string::npos);
         REQUIRE(error.find("extent mismatch") != std::string::npos);
@@ -794,10 +800,10 @@ TEST_CASE("openPMD parser round-trips a Python writer contract input", "[openpmd
     REQUIRE(context.mesh.forbiddenEdge == std::vector<int>{-1, -1, 2, -1, -1, 2, 0, 1, -1});
     REQUIRE(context.mesh.triangleNormalPoint == std::vector<unsigned>{0u, 2u, 0u, 1u, 3u, 2u, 2u, 4u, 4u});
     REQUIRE(context.mesh.points == std::vector<double>{0.0, 1.5, 0.25, 2.25, -0.75, 0.0, -0.5, 1.25, 2.5, 3.75});
-    REQUIRE(
-        context.mesh.triangleCenterX
-        == std::vector<double>{0.58333333333333337, 0.58333333333333337, -0.16666666666666666});
-    REQUIRE(context.mesh.triangleCenterY == std::vector<double>{0.25, 2.5, 1.66666666666666674});
+    requireNear(
+        context.mesh.triangleCenterX,
+        std::vector<double>{0.58333333333333337, 0.58333333333333337, -0.16666666666666666});
+    requireNear(context.mesh.triangleCenterY, std::vector<double>{0.25, 2.5, 1.66666666666666674});
     REQUIRE(
         context.mesh.betaVolume
         == std::vector<

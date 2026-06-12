@@ -7,20 +7,13 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import numpy as np
 
 
 scriptDir = Path(__file__).resolve().parent
-repoRoot = scriptDir.parents[1]
-buildPythonRoot = repoRoot / "build" / "python"
 defaultPhiAseConfigPath = scriptDir / "config/phiASE.yaml"
-
-sys.path.insert(0, str(repoRoot))
-if buildPythonRoot.is_dir():
-    sys.path.insert(0, str(buildPythonRoot))
 
 from HASEonGPU import (  # noqa: E402
     BetaIntegrationGaussianSolver,

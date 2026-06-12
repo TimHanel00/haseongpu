@@ -1,5 +1,8 @@
 import os
 import subprocess
+import sys
+import textwrap
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -159,10 +162,10 @@ def launch_smoke_phi_ase():
 
 
 def _file_backend_for_tests():
-    backend = os.environ.get("HASE_OPENPMD_BACKEND", "bp").strip().lower()
+    backend = os.environ.get("HASE_OPENPMD_BACKEND", "adios").strip().lower()
     if backend in {"hdf5", "adios"}:
         return backend
-    return "bp"
+    return "adios"
 
 
 def _file_suffix_for_tests():
@@ -300,6 +303,7 @@ def _record_metadata(record, spec):
         "schema": record.get_attribute("haseSchemaVersion"),
         "entity": record.get_attribute("haseEntity"),
         "axes": _attribute_list(record.get_attribute("haseAxes")),
+        "axes_string": record.get_attribute("haseAxesString"),
         "layout": record.get_attribute("haseLayoutOrder"),
         "primitive_shape": _attribute_list(record.get_attribute("hasePrimitiveShape")),
         "static": record.get_attribute("haseStatic"),
@@ -307,6 +311,7 @@ def _record_metadata(record, spec):
         "backend_required": record.get_attribute("haseBackendRequired"),
         "unit": record.get_attribute("haseUnit"),
         "axis_labels": list(record.axis_labels),
+        "axis_labels_string": record.get_attribute("haseAxisLabelsString"),
         "unit_si": record[_io().Mesh_Record_Component.SCALAR].unit_SI,
     }
 
@@ -332,6 +337,7 @@ def _assert_hase_metadata(record, spec, context):
         "schema": HASE_SCHEMA_VERSION,
         "entity": spec.entity,
         "axes": list(spec.axes),
+        "axes_string": ",".join(spec.axes),
         "layout": "backendFlat",
         "primitive_shape": list(spec.expectedShape(context)),
         "static": not spec.dynamic,
@@ -339,6 +345,7 @@ def _assert_hase_metadata(record, spec, context):
         "backend_required": spec.backendRequired,
         "unit": spec.unit,
         "axis_labels": ["flatIndex"],
+        "axis_labels_string": "flatIndex",
         "unit_si": spec.unitSI,
     }
     assert _unit_dimension_values(record, _io()) == spec.unitDimension
@@ -370,11 +377,11 @@ def test_layout_helpers_define_exact_backend_flat_contract():
 
 
 def test_openpmd_backend_names_map_to_expected_suffixes_and_configs(monkeypatch):
-    assert transport._backend_spec("bp").suffix == ".bp"
+    assert transport._backend_spec("adios").suffix == ".bp"
     assert transport._backend_spec("adios").config == {"backend": "adios2"}
     assert transport._backend_spec("adios-sst").suffix == ".sst"
+    assert transport._backend_spec("adios-sst").config["adios2"]["engine"]["type"] == "sst"
     assert transport._backend_spec("adios-sst").streaming is True
-    assert transport._backend_spec("adiossst").name == "adios-sst"
     assert transport._backend_spec("hdf5").config == {"backend": "hdf5"}
 
     monkeypatch.setenv("HASE_OPENPMD_BACKEND", "hdf5")
@@ -382,12 +389,113 @@ def test_openpmd_backend_names_map_to_expected_suffixes_and_configs(monkeypatch)
     assert _file_backend_for_tests() == "hdf5"
     monkeypatch.setenv("HASE_OPENPMD_BACKEND", "adios")
     assert _file_backend_for_tests() == "adios"
-    monkeypatch.setenv("HASE_OPENPMD_BACKEND", "adiossst")
+    monkeypatch.setenv("HASE_OPENPMD_BACKEND", "adios-sst")
     assert transport._backend_spec().name == "adios-sst"
-    assert _file_backend_for_tests() == "bp"
+    assert _file_backend_for_tests() == "adios"
 
-    with pytest.raises(ValueError, match="unsupported openPMD backend"):
-        transport._backend_spec("unsupported")
+    for backend in ("bp", "unsupported"):
+        with pytest.raises(ValueError, match="unsupported openPMD backend"):
+            transport._backend_spec(backend)
+
+
+@pytest.mark.integration
+def test_adios_sst_python_pair_publishes_one_iteration(tmp_path):
+    io = _io()
+    if "sst" not in getattr(io, "file_extensions", []):
+        pytest.skip("openPMD-api was not built with ADIOS2 SST support")
+
+    stream = tmp_path / "sst_pair.sst"
+    config = repr(transport.SST_CONFIG)
+    values = [1.25, 2.5, 3.75]
+    reader_code = textwrap.dedent(
+        f"""
+        import numpy as np
+        import openpmd_api as io
+        import sys
+
+        def access(name):
+            return getattr(io.Access_Type, name) if hasattr(io, "Access_Type") else getattr(io.Access, name)
+
+        series = io.Series(sys.argv[1], access("read_linear"), {config})
+        try:
+            iterations = series.read_iterations() if hasattr(series, "read_iterations") else series.snapshots().items()
+            item = next(iter(iterations))
+            iteration = item[1] if isinstance(item, tuple) else item
+            component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
+            chunk = component.load_chunk()
+            series.flush()
+            data = np.asarray(chunk, dtype=np.float64).reshape(-1)
+            iteration.close()
+        finally:
+            series.close()
+
+        expected = np.asarray({values!r}, dtype=np.float64)
+        if not np.allclose(data, expected):
+            raise SystemExit(f"unexpected SST payload: {{data!r}}")
+        print("reader done", flush=True)
+        """
+    )
+    writer_code = textwrap.dedent(
+        f"""
+        import numpy as np
+        import openpmd_api as io
+        import sys
+
+        def access(name):
+            return getattr(io.Access_Type, name) if hasattr(io, "Access_Type") else getattr(io.Access, name)
+
+        series = io.Series(sys.argv[1], access("create_linear"), {config})
+        try:
+            iteration = series.snapshots()[0]
+            data = np.asarray({values!r}, dtype=np.float64)
+            component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
+            component.reset_dataset(io.Dataset(data.dtype, data.shape))
+            component.store_chunk(data)
+            iteration.close()
+        finally:
+            series.close()
+        print("writer done", flush=True)
+        """
+    )
+
+    def finish(process, name, timeout=20):
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            pytest.fail(f"{name} timed out\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        assert process.returncode == 0, f"{name} failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        return stdout, stderr
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    reader = subprocess.Popen(
+        [sys.executable, "-u", "-c", reader_code, str(stream)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    time.sleep(0.5)
+    writer = subprocess.Popen(
+        [sys.executable, "-u", "-c", writer_code, str(stream)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    try:
+        writer_stdout, _ = finish(writer, "SST writer")
+        reader_stdout, _ = finish(reader, "SST reader")
+    finally:
+        for process in (writer, reader):
+            if process.poll() is None:
+                process.kill()
+
+    assert "writer done" in writer_stdout
+    assert "reader done" in reader_stdout
 
 
 def test_run_phi_ase_uses_openpmd_session_manager(monkeypatch):
@@ -415,9 +523,9 @@ def test_run_phi_ase_uses_openpmd_session_manager(monkeypatch):
     medium = object()
     cross_sections = object()
 
-    assert transport.runPhiASE(phi_ase, medium, cross_sections, transport="bp") is result
+    assert transport.runPhiASE(phi_ase, medium, cross_sections, transport="adios") is result
     assert events == [
-        ("init", "bp"),
+        ("init", "adios"),
         ("enter",),
         ("run", phi_ase, medium, cross_sections),
         ("exit", None),
@@ -436,7 +544,7 @@ def test_openpmd_session_assigns_monotonic_request_iterations(monkeypatch):
 
     monkeypatch.setattr(transport.OpenPmdPhiAseSession, "_run_file_iteration", fake_run_file_iteration)
 
-    with transport.OpenPmdPhiAseSession(transport="bp") as session:
+    with transport.OpenPmdPhiAseSession(transport="adios") as session:
         first = session.run("phi0", "medium0", "cross0")
         second = session.run("phi1", "medium1", "cross1")
 
@@ -561,18 +669,25 @@ def test_openpmd_input_series_contains_exact_values_order_shape_dtype_units_and_
     series.close()
 
 
+def _build_dir_candidates():
+    root = Path(__file__).resolve().parents[3]
+    env = os.environ.get("BUILD_DIR")
+    if env:
+        path = Path(env)
+        yield path if path.is_absolute() else root / path
+
+    yield from sorted(root.glob("build/cp*"))
+    yield root / "build"
+    yield root / "build" / "ci"
+    yield root / "cmake-build-debug"
+
+
 def _parser_validation_candidates():
     env = os.environ.get("HASE_OPENPMD_PARSER_VALIDATION")
     if env:
         yield Path(env)
-    root = Path(__file__).resolve().parents[3]
-    build_dir = os.environ.get("BUILD_DIR")
-    if build_dir:
-        yield root / build_dir / "tests" / "tests_openpmdParserValidation"
-    yield from sorted(root.glob("build/cp*/tests/tests_openpmdParserValidation"))
-    yield root / "build" / "ci" / "tests" / "tests_openpmdParserValidation"
-    yield root / "build" / "tests" / "tests_openpmdParserValidation"
-    yield root / "cmake-build-debug" / "tests" / "tests_openpmdParserValidation"
+    for build_dir in _build_dir_candidates():
+        yield build_dir / "tests" / "tests_openpmdParserValidation"
 
 
 def _parser_validation_binary():
@@ -652,7 +767,7 @@ def _openpmd_backend_values():
     if raw:
         return [backend.strip() for backend in raw.split(",") if backend.strip()]
     backend = os.environ.get("HASE_OPENPMD_BACKEND")
-    return [backend] if backend else ["bp"]
+    return [backend] if backend else ["adios"]
 
 
 def _cache_value(cache_path, name):
@@ -671,30 +786,40 @@ def _build_dir_for_executable(executable):
             return parent
         if parent == Path.cwd().resolve():
             break
+
+    for build_dir in _build_dir_candidates():
+        if (build_dir / "CMakeCache.txt").is_file():
+            return build_dir
     return None
 
 
 def _target_uses_openpmd_main(build_dir):
     if build_dir is None:
-        return False
-    for manifest in ("build.ninja", "Makefile", "compile_commands.json"):
-        path = build_dir / manifest
-        if path.is_file() and "src/openpmd_main.cpp" in path.read_text(encoding="utf-8", errors="ignore"):
-            return True
-    return False
+        return True
+    manifests = [build_dir / name for name in ("build.ninja", "Makefile", "compile_commands.json")]
+    existing = [path for path in manifests if path.is_file()]
+    if not existing:
+        return True
+    return any("src/openpmd_main.cpp" in path.read_text(encoding="utf-8", errors="ignore") for path in existing)
+
+
+def _installed_calc_phi_ase_candidates():
+    try:
+        import HASEonGPU_Bindings
+    except ImportError:
+        return []
+
+    return [Path(path) / "calcPhiASE" for path in HASEonGPU_Bindings.__path__]
 
 
 def _calc_phi_ase_candidates():
     env = os.environ.get("HASE_OPENPMD_CALCPHIASE") or os.environ.get("HASE_CALCPHIASE")
     if env:
         yield Path(env)
-    root = Path(__file__).resolve().parents[3]
-    yield root / "build" / "ci" / "calcPhiASE"
-    yield root / "build" / "calcPhiASE"
-    yield root / "build" / "cp312-cp312-linux_x86_64" / "calcPhiASE"
-    for build_dir in root.glob("build/*"):
+    yield from _installed_calc_phi_ase_candidates()
+    for build_dir in _build_dir_candidates():
+        yield build_dir / "python" / "HASEonGPU_Bindings" / "calcPhiASE"
         yield build_dir / "calcPhiASE"
-    yield root / "cmake-build-debug" / "calcPhiASE"
 
 
 def _openpmd_transport_sources():
@@ -859,6 +984,7 @@ def test_openpmd_input_series_preserves_custom_fields(tmp_path):
     assert record.get_attribute("haseSchemaVersion") == HASE_SCHEMA_VERSION
     assert record.get_attribute("haseEntity") == "cell_layer"
     assert _attribute_list(record.get_attribute("haseAxes")) == ["cell", "layer"]
+    assert record.get_attribute("haseAxesString") == "cell,layer"
     assert record.get_attribute("haseLayoutOrder") == "backendFlat"
     assert _attribute_list(record.get_attribute("hasePrimitiveShape")) == [3, 5]
     assert record.get_attribute("haseStatic") is True

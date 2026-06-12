@@ -149,7 +149,7 @@ Physical Constants
 
 These correspond to :math:`c` and :math:`h` in the pump equations.
 
-The short names used by the low-level pump routine remain available as aliases:
+The short names used by the pump implementation remain available as aliases:
 
 .. code-block:: python
 

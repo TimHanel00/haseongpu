@@ -36,6 +36,8 @@ Contents
    compilation
    windows
    binaryInterface
+   openpmdTransport
    mpi
    pythonInterface
    pythonAPI
+   pythonInterfaceLegacy

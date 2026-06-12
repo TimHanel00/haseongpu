@@ -187,14 +187,20 @@ if(HASE_OPENPMD_USE_ADIOS2)
         FORCE
     )
     set(ADIOS2_INSTALL_GENERATE_CONFIG
-        ON
+        OFF
         CACHE BOOL
-        "Generate ADIOS2 CMake configs required by openPMD's find_package(ADIOS2)"
+        "Disable ADIOS2's install-time adios2-config helper generation in the HASE superbuild"
+        FORCE
+    )
+    set(ADIOS2_USE_SST
+        ${HASE_OPENPMD_USE_SST}
+        CACHE STRING
+        "Enable ADIOS2 SST only for the HASE adios-sst openPMD backend"
         FORCE
     )
 
     # Keep the ADIOS2 superbuild narrow. HASE's openPMD transport uses ADIOS2
-    # BP/SST-style openPMD series and does not need HDF5, compression plugins,
+    # ADIOS/SST-style openPMD series and does not need HDF5, compression plugins,
     # remote/cloud transports, visualization hooks, or profiling infrastructure.
     foreach(
         HASE_ADIOS2_DISABLED_OPTION
@@ -365,6 +371,13 @@ FetchContent_MakeAvailable(openPMD)
 
 if(NOT TARGET openPMD::openPMD)
     message(FATAL_ERROR "openPMD::openPMD target was not created")
+endif()
+
+if(TARGET openPMD)
+    set_target_properties(
+        openPMD
+        PROPERTIES INSTALL_RPATH "${HASE_INSTALL_LIB_RPATH}"
+    )
 endif()
 
 if(TARGET openPMD.py)

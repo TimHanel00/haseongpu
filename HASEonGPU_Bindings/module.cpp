@@ -264,7 +264,7 @@ PYBIND11_MODULE(HASEonGPU, m)
                 [experiment, compute, host_mesh]() mutable
                 {
                     hase::core::Result result;
-                    int const rc = hase::core::pythonEntry(experiment, compute, result, host_mesh);
+                    int const rc = hase::core::startSimulation<false>(experiment, compute, result, host_mesh);
                     if(rc != 0)
                     {
                         throw std::runtime_error(

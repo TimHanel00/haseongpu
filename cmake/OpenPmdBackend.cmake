@@ -5,25 +5,19 @@ if(POLICY CMP0057)
 endif()
 
 set(HASE_OPENPMD_BACKEND
-    "bp"
+    "adios"
     CACHE STRING
-    "openPMD backend used by the HASE transport: adios, adios-sst/adiossst, bp, or hdf5"
+    "openPMD backend used by the HASE transport: adios, adios-sst, or hdf5"
 )
-set_property(
-    CACHE HASE_OPENPMD_BACKEND
-    PROPERTY STRINGS adios adios-sst adiossst bp hdf5
-)
+set_property(CACHE HASE_OPENPMD_BACKEND PROPERTY STRINGS adios adios-sst hdf5)
 
-set(HASE_OPENPMD_BACKEND_ALLOWED adios adios-sst bp hdf5)
+set(HASE_OPENPMD_BACKEND_ALLOWED adios adios-sst hdf5)
 string(TOLOWER "${HASE_OPENPMD_BACKEND}" HASE_OPENPMD_BACKEND_NORMALIZED)
-if(HASE_OPENPMD_BACKEND_NORMALIZED STREQUAL "adiossst")
-    set(HASE_OPENPMD_BACKEND_NORMALIZED "adios-sst")
-endif()
 if(NOT HASE_OPENPMD_BACKEND STREQUAL HASE_OPENPMD_BACKEND_NORMALIZED)
     set(HASE_OPENPMD_BACKEND
         "${HASE_OPENPMD_BACKEND_NORMALIZED}"
         CACHE STRING
-        "openPMD backend used by the HASE transport: adios, adios-sst/adiossst, bp, or hdf5"
+        "openPMD backend used by the HASE transport: adios, adios-sst, or hdf5"
         FORCE
     )
 endif()
@@ -32,18 +26,26 @@ if(NOT HASE_OPENPMD_BACKEND IN_LIST HASE_OPENPMD_BACKEND_ALLOWED)
     message(
         FATAL_ERROR
         "Unsupported HASE_OPENPMD_BACKEND='${HASE_OPENPMD_BACKEND}'. "
-        "Expected one of: adios, adios-sst, bp, hdf5."
+        "Expected one of: adios, adios-sst, hdf5."
     )
 endif()
 
 set(HASE_OPENPMD_USE_ADIOS2 OFF)
 set(HASE_OPENPMD_USE_HDF5 OFF)
+set(HASE_OPENPMD_USE_SST OFF)
 set(HASE_OPENPMD_FILE_EXTENSION "bp")
+# File-replay tests need a persistent series even when production uses streaming.
+set(HASE_OPENPMD_TEST_FILE_EXTENSION "bp")
 if(HASE_OPENPMD_BACKEND STREQUAL "hdf5")
     set(HASE_OPENPMD_USE_HDF5 ON)
     set(HASE_OPENPMD_FILE_EXTENSION "h5")
+    set(HASE_OPENPMD_TEST_FILE_EXTENSION "h5")
 else()
     set(HASE_OPENPMD_USE_ADIOS2 ON)
+    if(HASE_OPENPMD_BACKEND STREQUAL "adios-sst")
+        set(HASE_OPENPMD_USE_SST ON)
+        set(HASE_OPENPMD_FILE_EXTENSION "sst")
+    endif()
 endif()
 
 message(STATUS "HASE openPMD backend: ${HASE_OPENPMD_BACKEND}")
