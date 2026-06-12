@@ -6,6 +6,8 @@ set(HASE_OPENPMD_GIT_REPOSITORY "https://github.com/openPMD/openPMD-api.git")
 set(HASE_OPENPMD_GIT_TAG "0.17.0")
 set(HASE_ADIOS2_GIT_REPOSITORY "https://github.com/ornladios/ADIOS2.git")
 set(HASE_ADIOS2_GIT_TAG "v2.10.2")
+set(HASE_HDF5_GIT_REPOSITORY "https://github.com/HDFGroup/hdf5.git")
+set(HASE_HDF5_GIT_TAG "hdf5_1.14.6")
 
 if(DEFINED openPMD_SUPERBUILD)
     set(HASE_OPENPMD_SUPERBUILD_DEFAULT ${openPMD_SUPERBUILD})
@@ -20,12 +22,135 @@ option(
 option(
     HASE_OPENPMD_BUILD_PYTHON_BINDINGS
     "Build openPMD-api Python bindings as part of the HASE CMake build"
-    OFF
+    ${HASE_ENABLE_PYTHON}
 )
 
 message(STATUS "Fetching pinned openPMD-api for the HASE openPMD transport")
 
 include(FetchContent)
+
+if(HASE_OPENPMD_USE_HDF5 AND HASE_OPENPMD_SUPERBUILD)
+    message(STATUS "Fetching pinned HDF5 for the HASE openPMD transport")
+    set(BUILD_SHARED_LIBS
+        ON
+        CACHE BOOL
+        "Build shared third-party libraries for the HASE openPMD transport"
+        FORCE
+    )
+    set(HDF5_BUILD_CPP_LIB
+        OFF
+        CACHE BOOL
+        "Disable HDF5 C++ bindings in the HASE superbuild"
+        FORCE
+    )
+    set(HDF5_BUILD_FORTRAN
+        OFF
+        CACHE BOOL
+        "Disable HDF5 Fortran bindings in the HASE superbuild"
+        FORCE
+    )
+    set(HDF5_BUILD_HL_LIB
+        OFF
+        CACHE BOOL
+        "Disable the HDF5 high-level library in the HASE superbuild"
+        FORCE
+    )
+    set(HDF5_BUILD_JAVA
+        OFF
+        CACHE BOOL
+        "Disable HDF5 Java bindings in the HASE superbuild"
+        FORCE
+    )
+    set(HDF5_BUILD_TOOLS
+        OFF
+        CACHE BOOL
+        "Disable HDF5 command-line tools in the HASE superbuild"
+        FORCE
+    )
+    set(HDF5_BUILD_EXAMPLES
+        OFF
+        CACHE BOOL
+        "Disable HDF5 examples in the HASE superbuild"
+        FORCE
+    )
+    set(HDF5_ENABLE_SZIP_SUPPORT
+        OFF
+        CACHE BOOL
+        "Disable optional SZIP support in the HASE HDF5 superbuild"
+        FORCE
+    )
+    set(HDF5_ENABLE_Z_LIB_SUPPORT
+        OFF
+        CACHE BOOL
+        "Disable optional zlib support in the HASE HDF5 superbuild"
+        FORCE
+    )
+    set(BUILD_TESTING
+        OFF
+        CACHE BOOL
+        "Disable third-party tests while configuring the HASE superbuild dependencies"
+        FORCE
+    )
+    if(MPI_FOUND)
+        find_package(MPI COMPONENTS C REQUIRED)
+        set(HDF5_ENABLE_PARALLEL
+            ON
+            CACHE BOOL
+            "Enable parallel HDF5 when HASE MPI is available"
+            FORCE
+        )
+        set(HASE_INTERNAL_HDF5_IS_PARALLEL TRUE)
+    else()
+        set(HDF5_ENABLE_PARALLEL
+            OFF
+            CACHE BOOL
+            "Disable parallel HDF5 when HASE MPI is unavailable"
+            FORCE
+        )
+        set(HASE_INTERNAL_HDF5_IS_PARALLEL FALSE)
+    endif()
+
+    FetchContent_Declare(
+        HDF5
+        GIT_REPOSITORY "${HASE_HDF5_GIT_REPOSITORY}"
+        GIT_TAG "${HASE_HDF5_GIT_TAG}"
+    )
+    FetchContent_MakeAvailable(HDF5)
+
+    set(HASE_INTERNAL_HDF5_INCLUDE_DIRS
+        "${hdf5_SOURCE_DIR}/src"
+        "${hdf5_SOURCE_DIR}/src/H5FDsubfiling"
+        "${hdf5_BINARY_DIR}/src"
+    )
+    set(HASE_INTERNAL_FIND_MODULE_DIR "${CMAKE_BINARY_DIR}/hase-cmake-overrides")
+    file(MAKE_DIRECTORY "${HASE_INTERNAL_FIND_MODULE_DIR}")
+    file(
+        WRITE
+        "${HASE_INTERNAL_FIND_MODULE_DIR}/FindHDF5.cmake"
+        "if(NOT TARGET hdf5-shared)\n"
+        "    message(FATAL_ERROR \"HASE internal HDF5 target hdf5-shared is not available\")\n"
+        "endif()\n"
+        "set(HDF5_FOUND TRUE)\n"
+        "set(HDF5_C_FOUND TRUE)\n"
+        "set(HDF5_VERSION \"1.14.6\")\n"
+        "set(HDF5_LIBRARIES hdf5-shared)\n"
+        "set(HDF5_C_LIBRARIES hdf5-shared)\n"
+        "set(HDF5_INCLUDE_DIRS \"${HASE_INTERNAL_HDF5_INCLUDE_DIRS}\")\n"
+        "set(HDF5_C_INCLUDE_DIRS \"${HASE_INTERNAL_HDF5_INCLUDE_DIRS}\")\n"
+        "set(HDF5_DEFINITIONS \"\")\n"
+        "set(HDF5_IS_PARALLEL ${HASE_INTERNAL_HDF5_IS_PARALLEL})\n"
+        "set(HDF5_ENABLE_PARALLEL ${HASE_INTERNAL_HDF5_IS_PARALLEL})\n"
+        "set(HDF5_PROVIDES_PARALLEL ${HASE_INTERNAL_HDF5_IS_PARALLEL})\n"
+        "foreach(component IN LISTS HDF5_FIND_COMPONENTS)\n"
+        "    if(component STREQUAL \"C\")\n"
+        "        set(HDF5_C_FOUND TRUE)\n"
+        "    else()\n"
+        "        set(HDF5_${component}_FOUND FALSE)\n"
+        "    endif()\n"
+        "endforeach()\n"
+    )
+    list(PREPEND CMAKE_MODULE_PATH "${HASE_INTERNAL_FIND_MODULE_DIR}")
+endif()
 
 if(HASE_OPENPMD_USE_ADIOS2)
     message(STATUS "Fetching pinned ADIOS2 for the HASE openPMD transport")

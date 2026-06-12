@@ -1,7 +1,5 @@
 :doc:`<- Back to Getting Started <gettingStarted>`
 
-:doc:`<- Back to Matlab Interface <MATLABInterface>`
-
 :doc:`<- Back to Binaray Interface <binaryInterface>`
 
 Compilation

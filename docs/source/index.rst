@@ -37,6 +37,5 @@ Contents
    windows
    binaryInterface
    mpi
-   MATLABInterface
    pythonInterface
    pythonAPI

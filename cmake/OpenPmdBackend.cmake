@@ -7,20 +7,23 @@ endif()
 set(HASE_OPENPMD_BACKEND
     "bp"
     CACHE STRING
-    "openPMD backend used by the HASE transport: adios, adios-sst, bp, or hdf5"
+    "openPMD backend used by the HASE transport: adios, adios-sst/adiossst, bp, or hdf5"
 )
 set_property(
     CACHE HASE_OPENPMD_BACKEND
-    PROPERTY STRINGS adios adios-sst bp hdf5
+    PROPERTY STRINGS adios adios-sst adiossst bp hdf5
 )
 
 set(HASE_OPENPMD_BACKEND_ALLOWED adios adios-sst bp hdf5)
 string(TOLOWER "${HASE_OPENPMD_BACKEND}" HASE_OPENPMD_BACKEND_NORMALIZED)
+if(HASE_OPENPMD_BACKEND_NORMALIZED STREQUAL "adiossst")
+    set(HASE_OPENPMD_BACKEND_NORMALIZED "adios-sst")
+endif()
 if(NOT HASE_OPENPMD_BACKEND STREQUAL HASE_OPENPMD_BACKEND_NORMALIZED)
     set(HASE_OPENPMD_BACKEND
         "${HASE_OPENPMD_BACKEND_NORMALIZED}"
         CACHE STRING
-        "openPMD backend used by the HASE transport: adios, adios-sst, bp, or hdf5"
+        "openPMD backend used by the HASE transport: adios, adios-sst/adiossst, bp, or hdf5"
         FORCE
     )
 endif()

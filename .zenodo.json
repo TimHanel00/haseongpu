@@ -1,7 +1,7 @@
 {
   "title": "HASEonGPU",
   "version": "2.0.0",
-  "description": "HASEonGPU is open-source HPC software for calculating amplified spontaneous emission (ASE) flux in laser gain media. It supports the design and analysis of high-power laser systems by estimating ASE flux in configurable gain media using a Monte Carlo ray-tracing approach. Release 2.0.0 marks HASEonGPU as the first scientific software based on the new heterogeneous alpaka 3 library (https://github.com/alpaka-group/alpaka3.git), leveraging its redesigned programming interface and enhanced utilities, including SIMD abstractions, to support ASE calculation on CPU and GPU (HIP, CUDA) backends with improved performance portability. In addition, this release ships a refactored Python API that provides library utilities for geometry construction, laser pumping, and time integration.",
+  "description": "HASEonGPU is open-source HPC software for calculating amplified spontaneous emission (ASE) flux in laser gain media. It supports the design and analysis of high-power laser systems by estimating ASE flux in configurable gain media using a Monte Carlo ray-tracing approach. Release 2.0.0 marks HASEonGPU as the first scientific software to adopt the new heterogeneous alpaka 3 library (https://github.com/alpaka-group/alpaka3.git), leveraging its redesigned programming interface and enhanced utilities, including SIMD abstractions, to support ASE calculation on CPU and GPU (HIP, CUDA) backends with improved performance portability. In addition, this release ships a refactored Python API that provides library utilities for geometry construction, laser pumping and time integration.",
   "creators": [
     {
       "name": "Hanel, Tim",

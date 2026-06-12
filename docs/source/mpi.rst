@@ -22,8 +22,8 @@ support enabled.  The CMake option ``DISABLE_MPI`` controls this at build time:
    Builds without MPI support.
 
 An MPI-enabled build links against the MPI C++ target found by CMake.  A
-runtime started with ``--parallel-mode=mpi`` exits with an error if the binary
-was built without MPI support.
+runtime started from openPMD metadata with ``parallelMode = mpi`` exits with an
+error if the binary was built without MPI support.
 
 Execution Model
 ---------------

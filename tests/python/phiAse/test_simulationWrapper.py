@@ -7,13 +7,8 @@
 
 import argparse
 
-import HASEonGPU_Bindings.HASEonGPU as HASEonGPU_Bindings
 from HASEonGPU import PhiASE
 import pyInclude.simulation as simulation_module
-
-
-UNSPECIFIED_SAMPLE_RANGE = 2**32 - 1
-
 
 class DummyResult:
     phiAse = [1.0]
@@ -22,7 +17,7 @@ class DummyResult:
     dndtAse = [0.0]
 
 
-def testSimulationRunBuildsBindingInputsAndStoresResults(
+def testSimulationRunUsesOpenPmdTransportAndStoresResults(
     monkeypatch,
     smallGainMedium,
     crossSections,
@@ -30,13 +25,13 @@ def testSimulationRunBuildsBindingInputsAndStoresResults(
 ):
     captured = {}
 
-    def fakeCalcPhiAse(experiment, compute, hostMesh):
-        captured["experiment"] = experiment
-        captured["compute"] = compute
-        captured["host_mesh"] = hostMesh
+    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties):
+        captured["phi_ase"] = phiAse
+        captured["gain_medium"] = gainMedium
+        captured["spectral_properties"] = spectralProperties
         return DummyResult()
 
-    monkeypatch.setattr(HASEonGPU_Bindings, "calcPhiASE", fakeCalcPhiAse)
+    monkeypatch.setattr(simulation_module.transport, "runPhiASE", fakeRunPhiAse)
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
@@ -50,13 +45,12 @@ def testSimulationRunBuildsBindingInputsAndStoresResults(
     ).run(gainMedium=smallGainMedium)
 
     assert isinstance(phiAse.getResults(), DummyResult)
-    assert captured["host_mesh"].numberOfTriangles == 2
-    assert captured["host_mesh"].numberOfLevels == 3
-    assert captured["compute"].minSampleRange == UNSPECIFIED_SAMPLE_RANGE
-    assert captured["compute"].maxSampleRange == UNSPECIFIED_SAMPLE_RANGE
-    assert captured["experiment"].minRaysPerSample == 1000
-    assert captured["experiment"].useReflections is False
-    assert captured["compute"].rngSeed == 1234
+    assert captured["phi_ase"] is phiAse
+    assert captured["gain_medium"] is smallGainMedium
+    assert captured["spectral_properties"] is crossSections
+    assert captured["phi_ase"].minRaysPerSample == 1000
+    assert captured["phi_ase"].useReflections is False
+    assert captured["phi_ase"].rngSeed == 1234
 
 
 def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
@@ -82,7 +76,7 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
     assert fromArgs.maxRaysPerSample == 10000
 
 
-def testPhiAseMpiRunUsesLauncherWithoutBinding(
+def testPhiAseMpiRunUsesOpenPmdTransportMetadata(
     monkeypatch,
     smallGainMedium,
     crossSections,
@@ -90,19 +84,15 @@ def testPhiAseMpiRunUsesLauncherWithoutBinding(
 ):
     captured = {}
 
-    def failBinding(*args, **kwargs):
-        raise AssertionError("binding path must not run for parallelMode='mpi'")
-
-    def fakeMpiRun(phiAse, gainMedium, laser, laserProperties):
+    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties):
         captured["nPerNode"] = phiAse.nPerNode
         captured["numDevices"] = phiAse.numDevices
+        captured["parallelMode"] = phiAse.parallelMode
         captured["gain_medium"] = gainMedium
-        captured["laser"] = laser
-        captured["max_sigma_e"] = laserProperties.maxSigmaE
+        captured["spectral_properties"] = spectralProperties
         return DummyResult()
 
-    monkeypatch.setattr(HASEonGPU_Bindings, "calcPhiASE", failBinding)
-    monkeypatch.setattr(simulation_module.mpiLauncher, "runPhiaseMPI", fakeMpiRun)
+    monkeypatch.setattr(simulation_module.transport, "runPhiASE", fakeRunPhiAse)
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
@@ -115,9 +105,9 @@ def testPhiAseMpiRunUsesLauncherWithoutBinding(
     assert isinstance(phiAse.getResults(), DummyResult)
     assert captured["nPerNode"] == 2
     assert captured["numDevices"] == 4
+    assert captured["parallelMode"] == "mpi"
     assert captured["gain_medium"] is smallGainMedium
-    assert captured["laser"]["l_res"] == 1
-    assert captured["max_sigma_e"] == crossSections.crossSectionEmission[0]
+    assert captured["spectral_properties"] is crossSections
 
 
 def testPhiAseNPerNodeLoadsFromArgsAndConfig():

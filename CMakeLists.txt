@@ -400,7 +400,6 @@ file(
 list(
     REMOVE_ITEM
     HASE_RUNTIME_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/openpmd_main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/alpakaUtils/backendNamesLibrary.cpp"
 )

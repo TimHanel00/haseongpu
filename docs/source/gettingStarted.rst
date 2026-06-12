@@ -12,8 +12,6 @@ HASEonGPU supports multiple usage paths:
 
 * :doc:`Python Interface Guide <pythonInterface>` for workflow-oriented Python usage
 * :doc:`Binary Interface <binaryInterface>` for command-line execution
-* :doc:`MATLAB Interface <MATLABInterface>` for integration into existing
-  MATLAB or Octave workflows
 
 Repository Setup
 ----------------
@@ -47,7 +45,6 @@ Optional backend/runtime dependencies:
 Optional software and tools:
 
 * ``OpenMPI >= 4.0``
-* MATLAB or Octave
 * ``ParaView`` for visualization of ``.vtk`` output
 
 Hardware requirements:
@@ -104,15 +101,6 @@ The binary interface is useful for running HASEonGPU directly from the command
 line or as an entry point for constructing a custom API call.
 
 Continue with :doc:`Binary Interface <binaryInterface>`.
-
-MATLAB Interface
-^^^^^^^^^^^^^^^^
-
-The MATLAB-compatible interface is mainly intended for existing MATLAB or Octave
-workflows. For new workflows, the Python interface is usually the better
-choice.
-
-Continue with :doc:`MATLAB Interface <MATLABInterface>`.
 
 Typical Workflow
 ----------------

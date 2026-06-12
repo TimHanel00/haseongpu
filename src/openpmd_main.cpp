@@ -71,17 +71,17 @@ int main(int argc, char** argv)
         hase::openpmd::Parser openPmdParser{paths.input, paths.output};
 #endif
 
-        auto simulation = openPmdParser.read();
-        int const result = hase::core::startSimulation<false>(
-            simulation.experiment,
-            simulation.compute,
-            simulation.result,
-            simulation.mesh);
-        if(result != 0)
-        {
-            throw std::runtime_error("simulation failed with return code " + std::to_string(result));
-        }
-        openPmdParser.writeResult(simulation.result, simulation.mesh);
+        openPmdParser.processAll([](hase::core::SimulationContext& simulation) {
+            int const result = hase::core::startSimulation<false>(
+                simulation.experiment,
+                simulation.compute,
+                simulation.result,
+                simulation.mesh);
+            if(result != 0)
+            {
+                throw std::runtime_error("simulation failed with return code " + std::to_string(result));
+            }
+        });
 
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
         MPI_Finalize();

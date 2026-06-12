@@ -259,9 +259,10 @@ the installed build:
    backend = AlpakaBackends.Host_Cpu_CpuSerial
 
 Pass one of these strings to ``PhiASE(..., backend=...)``.  The same backend
-names are used by the ``--backend=`` option of the command-line binary.  See
-:doc:`Backend Selection <backendSelection>` for build-time backend selection,
-runtime backend naming, and troubleshooting the backend-name helper library.
+names are written into the openPMD metadata consumed by the command-line
+binary.  See :doc:`Backend Selection <backendSelection>` for build-time backend
+selection, runtime backend naming, and troubleshooting the backend-name helper
+library.
 
 Assemble the Time Simulation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
