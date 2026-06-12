@@ -317,19 +317,45 @@ namespace
         writeComponent<double>(series, first, "core_points", "x", {0.0, 1.0, 0.0, 0.0, 1.0, 0.0}, {"mesh_point"});
         writeComponent<double>(series, first, "core_points", "y", {0.0, 0.0, 1.0, 0.0, 0.0, 1.0}, {"mesh_point"});
         writeComponent<double>(series, first, "core_points", "z", {0.0, 0.0, 0.0, 0.25, 0.25, 0.25}, {"mesh_point"});
-        setMetadata(first.meshes["core_points"], {"coordinate", "mesh_point"}, {3u, 6u}, false, false, "m", {"mesh_point"});
-        writeScalar<unsigned>(series, first, "core_cells_connectivity", {0u, 1u, 2u, 3u, 4u, 5u}, {"cell", "local_vertex"}, {1u, 6u}, false, false);
+        setMetadata(
+            first.meshes["core_points"],
+            {"coordinate", "mesh_point"},
+            {3u, 6u},
+            false,
+            false,
+            "m",
+            {"mesh_point"});
+        writeScalar<unsigned>(
+            series,
+            first,
+            "core_cells_connectivity",
+            {0u, 1u, 2u, 3u, 4u, 5u},
+            {"cell", "local_vertex"},
+            {1u, 6u},
+            false,
+            false);
         writeScalar<unsigned>(series, first, "core_cells_offsets", {0u, 6u}, {"cell_offset"}, {2u}, false, false);
         writeScalar<unsigned>(series, first, "core_cells_types", {13u}, {"cell"}, {1u}, false, false);
         writeScalar<double>(series, first, "core_beta_volume", {0.1}, {"cell", "layer"}, {1u, 1u}, true);
-        writeScalar<double>(series, first, "core_point_beta", {0.1, 0.2, 0.3, 0.4, 0.5, 0.6}, {"point", "level"}, {3u, 2u}, true);
+        writeScalar<double>(
+            series,
+            first,
+            "core_point_beta",
+            {0.1, 0.2, 0.3, 0.4, 0.5, 0.6},
+            {"point", "level"},
+            {3u, 2u},
+            true);
         writeScalar<unsigned>(series, first, "core_cladding_cell_type", {0u}, {"cell"}, {1u});
         writeScalar<float>(series, first, "core_refractive_index", {1.5f, 1.0f, 1.5f, 1.0f}, {"interface"}, {4u});
         writeScalar<float>(series, first, "core_reflectivity", {0.1f, 0.2f}, {"cell", "interface"}, {1u, 2u});
-        writeScalar<double>(series, first, "core_lambda_absorption", {900.0, 910.0}, {"wavelength"}, {2u}, false, false, "m");
-        writeScalar<double>(series, first, "core_lambda_emission", {1000.0, 1010.0}, {"wavelength"}, {2u}, false, false, "m");
-        writeScalar<double>(series, first, "core_sigma_absorption", {0.01, 0.02}, {"wavelength"}, {2u}, false, false, "cm^2");
-        writeScalar<double>(series, first, "core_sigma_emission", {0.03, 0.04}, {"wavelength"}, {2u}, false, false, "cm^2");
+        writeScalar<
+            double>(series, first, "core_lambda_absorption", {900.0, 910.0}, {"wavelength"}, {2u}, false, false, "m");
+        writeScalar<
+            double>(series, first, "core_lambda_emission", {1000.0, 1010.0}, {"wavelength"}, {2u}, false, false, "m");
+        writeScalar<
+            double>(series, first, "core_sigma_absorption", {0.01, 0.02}, {"wavelength"}, {2u}, false, false, "cm^2");
+        writeScalar<
+            double>(series, first, "core_sigma_emission", {0.03, 0.04}, {"wavelength"}, {2u}, false, false, "cm^2");
         first.close();
 
         auto second = series.snapshots()[1];
@@ -338,7 +364,14 @@ namespace
         second.setTimeUnitSI(1.0);
         second.setAttribute("haseStaticUpdate", false);
         writeScalar<double>(series, second, "core_beta_volume", {0.9}, {"cell", "layer"}, {1u, 1u}, true);
-        writeScalar<double>(series, second, "core_point_beta", {1.1, 1.2, 1.3, 1.4, 1.5, 1.6}, {"point", "level"}, {3u, 2u}, true);
+        writeScalar<double>(
+            series,
+            second,
+            "core_point_beta",
+            {1.1, 1.2, 1.3, 1.4, 1.5, 1.6},
+            {"point", "level"},
+            {3u, 2u},
+            true);
         second.close();
         series.close();
         return path;
@@ -475,19 +508,66 @@ namespace
             series,
             iteration,
             "core_point_beta",
-            {100.0, 110.0, 120.0, 130.0, 140.0, 101.0, 111.0, 121.0, 131.0, 141.0,
-             102.0, 112.0, 122.0, 132.0, 142.0, 103.0, 113.0, 123.0, 133.0, 143.0,
-             104.0, 114.0, 124.0, 134.0, 144.0, 105.0, 115.0, 125.0, 135.0, 145.0},
+            {100.0, 110.0, 120.0, 130.0, 140.0, 101.0, 111.0, 121.0, 131.0, 141.0, 102.0, 112.0, 122.0, 132.0, 142.0,
+             103.0, 113.0, 123.0, 133.0, 143.0, 104.0, 114.0, 124.0, 134.0, 144.0, 105.0, 115.0, 125.0, 135.0, 145.0},
             {"point", "level"},
             {numberOfPoints, numberOfLevels},
             true);
         writeScalar<unsigned>(series, iteration, "core_cladding_cell_type", {0u, 2u, 1u}, {"cell"}, {numberOfCells});
-        writeScalar<float>(series, iteration, "core_refractive_index", {1.80f, 1.20f, 1.65f, 1.05f}, {"interface"}, {4u});
-        writeScalar<float>(series, iteration, "core_reflectivity", {0.01f, 0.03f, 0.05f, 0.02f, 0.04f, 0.06f}, {"cell", "interface"}, {numberOfCells, 2u});
-        writeScalar<double>(series, iteration, "core_lambda_absorption", {900e-9, 910e-9, 930e-9}, {"wavelength"}, {3u}, false, false, "m");
-        writeScalar<double>(series, iteration, "core_lambda_emission", {1000e-9, 1015e-9, 1040e-9}, {"wavelength"}, {3u}, false, false, "m");
-        writeScalar<double>(series, iteration, "core_sigma_absorption", {0.010, 0.025, 0.040}, {"wavelength"}, {3u}, false, false, "cm^2");
-        writeScalar<double>(series, iteration, "core_sigma_emission", {0.050, 0.035, 0.020}, {"wavelength"}, {3u}, false, false, "cm^2");
+        writeScalar<float>(
+            series,
+            iteration,
+            "core_refractive_index",
+            {1.80f, 1.20f, 1.65f, 1.05f},
+            {"interface"},
+            {4u});
+        writeScalar<float>(
+            series,
+            iteration,
+            "core_reflectivity",
+            {0.01f, 0.03f, 0.05f, 0.02f, 0.04f, 0.06f},
+            {"cell", "interface"},
+            {numberOfCells, 2u});
+        writeScalar<double>(
+            series,
+            iteration,
+            "core_lambda_absorption",
+            {900e-9, 910e-9, 930e-9},
+            {"wavelength"},
+            {3u},
+            false,
+            false,
+            "m");
+        writeScalar<double>(
+            series,
+            iteration,
+            "core_lambda_emission",
+            {1000e-9, 1015e-9, 1040e-9},
+            {"wavelength"},
+            {3u},
+            false,
+            false,
+            "m");
+        writeScalar<double>(
+            series,
+            iteration,
+            "core_sigma_absorption",
+            {0.010, 0.025, 0.040},
+            {"wavelength"},
+            {3u},
+            false,
+            false,
+            "cm^2");
+        writeScalar<double>(
+            series,
+            iteration,
+            "core_sigma_emission",
+            {0.050, 0.035, 0.020},
+            {"wavelength"},
+            {3u},
+            false,
+            false,
+            "cm^2");
 
         iteration.close();
         series.close();

@@ -324,25 +324,27 @@ def _candidate_python_paths(executable: Path):
 
 
 def _prefer_matching_openpmd_api(executable: Path):
+    candidates = [candidate for candidate in _candidate_python_paths(executable) if candidate.is_dir()]
     if "openpmd_api" in sys.modules:
         active = Path(getattr(sys.modules["openpmd_api"], "__file__", "")).resolve()
-        for candidate in _candidate_python_paths(executable):
+        for candidate in candidates:
             try:
                 active.relative_to(candidate.resolve())
                 return
             except ValueError:
                 pass
+        if not candidates:
+            return
         raise RuntimeError(
             "The openPMD transport requires the Python writer and C++ reader to use the same "
             "openPMD-api build. Restart Python with the CMake-built "
             "openPMD module first on PYTHONPATH, e.g. "
-            f"PYTHONPATH={next(_candidate_python_paths(executable), '<openpmd-python-path>')}:$PYTHONPATH"
+            f"PYTHONPATH={candidates[0]}:$PYTHONPATH"
         )
 
-    for candidate in _candidate_python_paths(executable):
-        if candidate.is_dir():
-            sys.path.insert(0, str(candidate))
-            return
+    for candidate in candidates:
+        sys.path.insert(0, str(candidate))
+        return
 
 
 def _access(name):

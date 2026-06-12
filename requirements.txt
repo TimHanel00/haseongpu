@@ -7,3 +7,4 @@ numba
 vtk
 matplotlib
 pyyaml
+openpmd-api==0.17.0

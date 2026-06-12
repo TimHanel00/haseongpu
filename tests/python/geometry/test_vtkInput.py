@@ -71,4 +71,3 @@ def testBundledExampleVtkFixturesExposeFrontendFields():
         assert np.isfinite(medium.get("crystalTFluo").value)
         assert medium.get("claddingNumber").value >= 1
         assert np.isfinite(medium.get("claddingAbsorption").value)
-

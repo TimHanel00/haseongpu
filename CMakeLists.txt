@@ -433,9 +433,6 @@ set_target_properties(
         INSTALL_RPATH_USE_LINK_PATH ON
 )
 target_link_libraries(calcPhiASE PRIVATE hase::hase)
-if(TARGET hase_openpmd_python)
-    add_dependencies(calcPhiASE hase_openpmd_python)
-endif()
 foreach(HASE_ADIOS2_RUNTIME_MODULE IN ITEMS cmselect cmsockets)
     if(TARGET ${HASE_ADIOS2_RUNTIME_MODULE})
         add_dependencies(calcPhiASE ${HASE_ADIOS2_RUNTIME_MODULE})

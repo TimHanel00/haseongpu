@@ -265,6 +265,7 @@ namespace hase::core
         bool monochromatic = false;
         unsigned spectral;
     };
+
     struct SimulationContext
     {
         core::ExperimentParameters experiment;

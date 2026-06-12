@@ -4,11 +4,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <map>
 #include <functional>
+#include <map>
 #include <memory>
-#include <optional>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -352,7 +352,9 @@ namespace
             auto const p2 = triangleVertex(topology.trianglePointIndices, numberOfCells, triangle, 2u);
             if(p0 >= numberOfPoints || p1 >= numberOfPoints || p2 >= numberOfPoints)
             {
-                validationError("canonical topology", "triangle connectivity references a point outside the base level");
+                validationError(
+                    "canonical topology",
+                    "triangle connectivity references a point outside the base level");
             }
 
             auto const x0 = topology.points.at(p0);
@@ -429,7 +431,11 @@ namespace
             {numberOfCells, 3u},
             false,
             true);
-        return deriveBackendTopology(std::move(points), std::move(trianglePointIndices), numberOfCells, numberOfPoints);
+        return deriveBackendTopology(
+            std::move(points),
+            std::move(trianglePointIndices),
+            numberOfCells,
+            numberOfPoints);
     }
 
     DerivedTopology loadCanonicalTopology(
@@ -477,7 +483,9 @@ namespace
         {
             if(offsets.at(prism) != 6u * prism || cellTypes.at(prism) != 13u)
             {
-                validationError("canonical topology", "only contiguous VTK_WEDGE cells are supported by the current backend");
+                validationError(
+                    "canonical topology",
+                    "only contiguous VTK_WEDGE cells are supported by the current backend");
             }
         }
         if(offsets.back() != 6u * numberOfPrisms)
@@ -498,12 +506,18 @@ namespace
                 auto const point = connectivity.at(6u * triangle + local);
                 if(point >= numberOfPoints)
                 {
-                    validationError("canonical topology", "first-layer wedge connectivity must reference base-level points");
+                    validationError(
+                        "canonical topology",
+                        "first-layer wedge connectivity must reference base-level points");
                 }
                 trianglePointIndices.at(local * numberOfCells + triangle) = point;
             }
         }
-        return deriveBackendTopology(std::move(basePoints), std::move(trianglePointIndices), numberOfCells, numberOfPoints);
+        return deriveBackendTopology(
+            std::move(basePoints),
+            std::move(trianglePointIndices),
+            numberOfCells,
+            numberOfPoints);
     }
 
     void initializeResultForMesh(hase::core::Result& result, hase::core::HostMesh const& mesh)
@@ -607,15 +621,15 @@ namespace hase::openpmd
     {
         std::string const prefix = m_meshGroup + "_";
         bool const hasCanonical = iteration.meshes.contains(prefix + "points")
-            || iteration.meshes.contains(prefix + "cells_connectivity")
-            || iteration.meshes.contains(prefix + "cells_offsets")
-            || iteration.meshes.contains(prefix + "cells_types");
+                                  || iteration.meshes.contains(prefix + "cells_connectivity")
+                                  || iteration.meshes.contains(prefix + "cells_offsets")
+                                  || iteration.meshes.contains(prefix + "cells_types");
         if(hasCanonical)
         {
             bool const completeCanonical = iteration.meshes.contains(prefix + "points")
-                && iteration.meshes.contains(prefix + "cells_connectivity")
-                && iteration.meshes.contains(prefix + "cells_offsets")
-                && iteration.meshes.contains(prefix + "cells_types");
+                                           && iteration.meshes.contains(prefix + "cells_connectivity")
+                                           && iteration.meshes.contains(prefix + "cells_offsets")
+                                           && iteration.meshes.contains(prefix + "cells_types");
             if(!completeCanonical)
             {
                 validationError("canonical topology", "partial static topology update");
@@ -623,8 +637,10 @@ namespace hase::openpmd
             return true;
         }
 
-        bool const hasLegacy = iteration.meshes.contains(prefix + "vertices") || iteration.meshes.contains(prefix + "connectivity");
-        if(hasLegacy && !(iteration.meshes.contains(prefix + "vertices") && iteration.meshes.contains(prefix + "connectivity")))
+        bool const hasLegacy
+            = iteration.meshes.contains(prefix + "vertices") || iteration.meshes.contains(prefix + "connectivity");
+        if(hasLegacy
+           && !(iteration.meshes.contains(prefix + "vertices") && iteration.meshes.contains(prefix + "connectivity")))
         {
             validationError("legacy topology", "partial static topology update");
         }
@@ -639,9 +655,10 @@ namespace hase::openpmd
         auto const numberOfCells = attribute<unsigned>(iteration, field::numberOfCells);
         auto const numberOfLevels = attribute<unsigned>(iteration, field::numberOfLevels);
 
-        auto topology = iteration.meshes.contains(prefix + "points")
-            ? loadCanonicalTopology(series, iteration, prefix, numberOfPoints, numberOfCells, numberOfLevels)
-            : loadLegacyTopology(series, iteration, prefix, numberOfPoints, numberOfCells);
+        auto topology
+            = iteration.meshes.contains(prefix + "points")
+                  ? loadCanonicalTopology(series, iteration, prefix, numberOfPoints, numberOfCells, numberOfLevels)
+                  : loadLegacyTopology(series, iteration, prefix, numberOfPoints, numberOfCells);
         auto betaVolume = loadScalar<double>(
             series,
             iteration,
@@ -787,7 +804,10 @@ namespace hase::openpmd
         return {std::move(experiment), std::move(compute), std::move(mesh), std::move(result)};
     }
 
-    void Parser::updateDynamicIteration(io::Series& series, io::Iteration& iteration, core::SimulationContext& simulation)
+    void Parser::updateDynamicIteration(
+        io::Series& series,
+        io::Iteration& iteration,
+        core::SimulationContext& simulation)
     {
         std::string const prefix = m_meshGroup + "_";
         auto const numberOfCells = simulation.mesh.numberOfTriangles;
@@ -897,10 +917,8 @@ namespace hase::openpmd
                 m_comm,
                 seriesConfig(outputStream));
 #else
-            outputSeries = std::make_unique<io::Series>(
-                outputStream,
-                io::Access::CREATE_LINEAR,
-                seriesConfig(outputStream));
+            outputSeries
+                = std::make_unique<io::Series>(outputStream, io::Access::CREATE_LINEAR, seriesConfig(outputStream));
 #endif
             outputSeries->setAttribute("haseSchemaVersion", std::string{HASE_SCHEMA_VERSION});
         }

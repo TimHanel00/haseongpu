@@ -22,7 +22,7 @@ option(
 option(
     HASE_OPENPMD_BUILD_PYTHON_BINDINGS
     "Build openPMD-api Python bindings as part of the HASE CMake build"
-    ${HASE_ENABLE_PYTHON}
+    OFF
 )
 
 message(STATUS "Fetching pinned openPMD-api for the HASE openPMD transport")
@@ -122,7 +122,9 @@ if(HASE_OPENPMD_USE_HDF5 AND HASE_OPENPMD_SUPERBUILD)
         "${hdf5_SOURCE_DIR}/src/H5FDsubfiling"
         "${hdf5_BINARY_DIR}/src"
     )
-    set(HASE_INTERNAL_FIND_MODULE_DIR "${CMAKE_BINARY_DIR}/hase-cmake-overrides")
+    set(HASE_INTERNAL_FIND_MODULE_DIR
+        "${CMAKE_BINARY_DIR}/hase-cmake-overrides"
+    )
     file(MAKE_DIRECTORY "${HASE_INTERNAL_FIND_MODULE_DIR}")
     file(
         WRITE
@@ -310,7 +312,7 @@ foreach(HASE_OPENPMD_INTERNAL_DEP IN ITEMS CATCH JSON TOML11 PYBIND11)
 endforeach()
 set(openPMD_USE_PYTHON
     ${HASE_OPENPMD_BUILD_PYTHON_BINDINGS}
-    CACHE STRING
+    CACHE BOOL
     "Build openPMD-api Python bindings from the HASE CMake build"
     FORCE
 )

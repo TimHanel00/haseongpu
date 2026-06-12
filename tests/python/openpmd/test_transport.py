@@ -445,6 +445,25 @@ def test_openpmd_session_assigns_monotonic_request_iterations(monkeypatch):
     assert calls == [(0, "phi0", "medium0", "cross0"), (1, "phi1", "medium1", "cross1")]
 
 
+def test_openpmd_api_preference_accepts_installed_module_without_bundled_build(monkeypatch, tmp_path):
+    active = tmp_path / "site-packages" / "openpmd_api" / "__init__.py"
+    monkeypatch.setitem(transport.sys.modules, "openpmd_api", SimpleNamespace(__file__=str(active)))
+    monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([tmp_path / "missing"]))
+
+    transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
+
+
+def test_openpmd_api_preference_rejects_mismatched_bundled_build(monkeypatch, tmp_path):
+    candidate = tmp_path / "build" / "site-packages"
+    candidate.mkdir(parents=True)
+    active = tmp_path / "other" / "site-packages" / "openpmd_api" / "__init__.py"
+    monkeypatch.setitem(transport.sys.modules, "openpmd_api", SimpleNamespace(__file__=str(active)))
+    monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([candidate]))
+
+    with pytest.raises(RuntimeError, match="same openPMD-api build"):
+        transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
+
+
 def test_layout_helpers_reject_accidental_transpose_views():
     mesh = asymmetric_mesh()
     spec = fieldSpec("betaVolume")
