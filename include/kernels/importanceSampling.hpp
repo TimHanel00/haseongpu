@@ -68,7 +68,7 @@ namespace hase::kernels
         alpaka::concepts::IMdSpan auto droppedRays,
         alpaka::concepts::IMdSpan auto infiniteRaySnapshots)
     {
-        auto queue = devBundle.device.makeQueue();
+        auto queue = devBundle.device.makeQueue(alpaka::queueKind::blocking);
         // wrapper for NDEBUG only be compiled in debug mode
         ALPAKA_ASSERT((
             [&]
@@ -137,7 +137,7 @@ namespace hase::kernels
         double hSumPhi,
         unsigned& threadLocalStridingRNG)
     {
-        auto queue = devBundle.device.makeQueue();
+        auto queue = devBundle.device.makeQueue(alpaka::queueKind::blocking);
         alpaka::onHost::fill(queue, raysPerPrism, 0u);
         unsigned hRaysDump = 0;
         auto hRaysDumpView = alpaka::makeView(alpaka::api::host, &hRaysDump, alpaka::Vec{1u});
