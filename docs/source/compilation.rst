@@ -215,12 +215,11 @@ started. See :doc:`openpmdTransport` for runtime transport options.
 ``HASE_OPENPMD_BUILD_PYTHON_BINDINGS``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* Default: ``OFF``
+* Default: ``ON``
 * Description:
   Builds the openPMD-api Python bindings as part of the HASE CMake build. The
-  Python package normally depends on ``openpmd-api==0.17.0`` instead, so this
-  option is mainly useful when the Python writer must use the exact openPMD-api
-  module produced by the local CMake build.
+  Python transport requires this CMake-built module so the Python writer and
+  compiled ``calcPhiASE`` reader use the same openPMD-api stack.
 
 ``HASE_TESTING``
 ^^^^^^^^^^^^^^^^

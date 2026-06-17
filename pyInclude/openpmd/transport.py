@@ -167,6 +167,21 @@ def _truthy(value):
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _watchdog_interval(value=None):
+    if value is None:
+        value = os.environ.get("HASE_OPENPMD_WATCHDOG_INTERVAL", "30")
+    text = str(value).strip().lower()
+    if text in {"0", "none", "off", "false", "no"}:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError as exc:
+        raise ValueError("HASE_OPENPMD_WATCHDOG_INTERVAL must be a positive number of seconds, 0, or 'none'") from exc
+    if seconds <= 0.0:
+        raise ValueError("HASE_OPENPMD_WATCHDOG_INTERVAL must be a positive number of seconds, 0, or 'none'")
+    return seconds
+
+
 def _artifact_root():
     explicit = os.environ.get("HASE_OPENPMD_ARTIFACT_DIR")
     if explicit:
@@ -362,6 +377,13 @@ def _candidate_python_paths(executable: Path):
 
 def _prefer_matching_openpmd_api(executable: Path):
     candidates = [candidate for candidate in _candidate_python_paths(executable) if candidate.is_dir()]
+    if not candidates:
+        raise RuntimeError(
+            "The openPMD transport requires the CMake-built openpmd_api Python "
+            "module from the same build as calcPhiASE. Rebuild with "
+            "HASE_OPENPMD_BUILD_PYTHON_BINDINGS=ON or set HASE_CALCPHIASE to "
+            "the matching CMake-built calcPhiASE binary."
+        )
     if "openpmd_api" in sys.modules:
         active = Path(getattr(sys.modules["openpmd_api"], "__file__", "")).resolve()
         for candidate in candidates:
@@ -370,8 +392,6 @@ def _prefer_matching_openpmd_api(executable: Path):
                 return
             except ValueError:
                 pass
-        if not candidates:
-            return
         raise RuntimeError(
             "The openPMD transport requires the Python writer and C++ reader to use the same "
             "openPMD-api build. Restart Python with the CMake-built "
@@ -762,9 +782,9 @@ def read_result(path, *, expected_iteration_index=0) -> Result:
 class OpenPmdPhiAseSession:
     """Run PhiASE requests through openPMD and wait for matching result iterations."""
 
-    def __init__(self, *, transport=None, timeout=30, command_prefix=None, workspace_dir=None):
+    def __init__(self, *, transport=None, watchdog_interval=None, command_prefix=None, workspace_dir=None):
         self.spec = _backend_spec(transport)
-        self.timeout = timeout
+        self.watchdog_interval = _watchdog_interval(watchdog_interval)
         self.command_prefix = [] if command_prefix is None else list(command_prefix)
         self.workspace_dir = None if workspace_dir is None else Path(workspace_dir)
         self._workspace = None
@@ -780,8 +800,11 @@ class OpenPmdPhiAseSession:
         self._result_queue = None
         self._send_queue = None
         self._sender_errors = None
+        self._watchdog_events = None
+        self._watchdog_stop = None
         self._reader = None
         self._sender = None
+        self._watchdog = None
         self._pending_results = {}
         self._next_iteration = 0
         self._entered = False
@@ -863,11 +886,7 @@ class OpenPmdPhiAseSession:
             raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
 
     def _finish_backend_process(self):
-        try:
-            return_code = self._proc.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            self._proc.kill()
-            return_code = self._proc.wait()
+        return_code = self._proc.wait()
         stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
         self._proc = None
         return return_code, stderr
@@ -875,7 +894,7 @@ class OpenPmdPhiAseSession:
     def _join_streaming_thread(self, thread, description):
         if thread is None:
             return None
-        thread.join(timeout=self.timeout)
+        thread.join()
         if thread.is_alive():
             return RuntimeError(f"openPMD {description} thread did not stop")
         return None
@@ -887,6 +906,17 @@ class OpenPmdPhiAseSession:
             return self._sender_errors.get_nowait()
         except queue.Empty:
             return None
+
+    def _pop_watchdog_error(self):
+        if self._watchdog_events is None:
+            return None
+        while True:
+            try:
+                ok, payload = self._watchdog_events.get_nowait()
+            except queue.Empty:
+                return None
+            if not ok:
+                return payload
 
     def _close_streaming(self):
         close_error = None
@@ -924,6 +954,14 @@ class OpenPmdPhiAseSession:
         if return_code not in (None, 0) and close_error is None:
             detail = _backend_failure_detail(stderr=stderr)
             close_error = RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
+
+        if self._watchdog_stop is not None:
+            self._watchdog_stop.set()
+        watchdog_error = self._join_streaming_thread(self._watchdog, "backend watchdog")
+        if watchdog_error is not None and close_error is None:
+            close_error = watchdog_error
+        self._watchdog = None
+        self._watchdog_stop = None
 
         if close_error is not None:
             raise close_error
@@ -1010,6 +1048,8 @@ class OpenPmdPhiAseSession:
         self._result_queue = queue.Queue()
         self._send_queue = queue.Queue()
         self._sender_errors = queue.Queue()
+        self._watchdog_events = queue.Queue()
+        self._watchdog_stop = threading.Event()
         self._proc = subprocess.Popen(
             self._calc_phi_ase_command(self._input_path, self._output_path),
             stderr=subprocess.PIPE,
@@ -1017,6 +1057,7 @@ class OpenPmdPhiAseSession:
         )
         self._start_result_reader()
         self._start_input_sender()
+        self._start_watchdog()
 
     def _start_input_sender(self):
         if self._sender is not None:
@@ -1037,6 +1078,32 @@ class OpenPmdPhiAseSession:
             daemon=True,
         )
         self._reader.start()
+
+    def _start_watchdog(self):
+        if self._watchdog is not None or self.watchdog_interval is None:
+            return
+        self._watchdog = threading.Thread(
+            target=self._watch_streaming_backend,
+            name="HASE openPMD backend watchdog",
+            daemon=True,
+        )
+        self._watchdog.start()
+
+    def _watch_streaming_backend(self):
+        try:
+            while self._watchdog_stop is not None and not self._watchdog_stop.wait(self.watchdog_interval):
+                proc = self._proc
+                if proc is None:
+                    return
+                return_code = proc.poll()
+                if return_code is not None:
+                    self._watchdog_events.put((False, RuntimeError(f"calcPhiASE exited with return code {return_code}")))
+                    return
+                os.kill(proc.pid, 0)
+                self._watchdog_events.put((True, None))
+        except BaseException as exc:
+            if self._watchdog_events is not None:
+                self._watchdog_events.put((False, exc))
 
     def _read_streaming_results(self):
         try:
@@ -1088,7 +1155,6 @@ class OpenPmdPhiAseSession:
         if expected_iteration_index in self._pending_results:
             return self._pending_results.pop(expected_iteration_index)
 
-        deadline = time.monotonic() + self.timeout
         while True:
             sender_error = self._pop_sender_error()
             if sender_error is not None:
@@ -1096,28 +1162,21 @@ class OpenPmdPhiAseSession:
                 suffix = "" if sender_iteration is None else f" for iteration {sender_iteration}"
                 raise RuntimeError(f"openPMD input sender failed{suffix}") from exc
 
+            watchdog_error = self._pop_watchdog_error()
+            if watchdog_error is not None:
+                stderr = ""
+                if self._proc is not None and self._proc.poll() is not None and self._proc.stderr is not None:
+                    stderr = self._proc.stderr.read()
+                detail = _backend_failure_detail(stderr=stderr)
+                raise RuntimeError(f"openPMD backend watchdog failed{detail}") from watchdog_error
+
             if self._proc is not None and self._proc.poll() not in (None, 0):
                 stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
                 detail = _backend_failure_detail(stderr=stderr)
                 raise RuntimeError(f"calcPhiASE failed with return code {self._proc.returncode}{detail}")
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                stderr = ""
-                if self._proc is not None:
-                    self._proc.kill()
-                    self._proc.wait()
-                    if self._proc.stderr is not None:
-                        stderr = self._proc.stderr.read()
-                    self._proc = None
-                detail = f"; backend stderr: {stderr.strip()}" if stderr and stderr.strip() else ""
-                raise TimeoutError(
-                    f"Timed out waiting for openPMD backend '{self.spec.name}' result iteration "
-                    f"{expected_iteration_index}{detail}"
-                )
-
             try:
-                ok, payload = self._result_queue.get(timeout=min(0.1, remaining))
+                ok, payload = self._result_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
             if not ok:

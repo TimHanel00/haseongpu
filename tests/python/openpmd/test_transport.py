@@ -266,6 +266,7 @@ def _scalar_record_values(mesh):
 
 @pytest.fixture
 def contract_input(tmp_path):
+    _require_openpmd_transport_io()
     output = tmp_path / ("contract" + _file_suffix_for_tests())
     with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
         writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
@@ -273,7 +274,16 @@ def contract_input(tmp_path):
 
 
 def _io():
-    return transport._io()
+    try:
+        return transport._io()
+    except RuntimeError as exc:
+        if "CMake-built openpmd_api" in str(exc):
+            pytest.skip(str(exc))
+        raise
+
+
+def _require_openpmd_transport_io():
+    _io()
 
 
 def _read_scalar(series, iteration, name):
@@ -397,6 +407,59 @@ def test_openpmd_backend_names_map_to_expected_suffixes_and_configs(monkeypatch)
     for backend in ("bp", "unsupported"):
         with pytest.raises(ValueError, match="unsupported openPMD backend"):
             transport._backend_spec(backend)
+
+
+def test_openpmd_watchdog_interval_defaults_to_thirty_seconds(monkeypatch):
+    monkeypatch.delenv("HASE_OPENPMD_WATCHDOG_INTERVAL", raising=False)
+
+    assert transport._watchdog_interval() == 30.0
+
+
+def test_openpmd_watchdog_interval_accepts_explicit_and_environment_values(monkeypatch):
+    assert transport._watchdog_interval(12) == 12.0
+    assert transport._watchdog_interval("2.5") == 2.5
+    assert transport._watchdog_interval("none") is None
+
+    monkeypatch.setenv("HASE_OPENPMD_WATCHDOG_INTERVAL", "45")
+    assert transport._watchdog_interval() == 45.0
+    monkeypatch.setenv("HASE_OPENPMD_WATCHDOG_INTERVAL", "0")
+    assert transport._watchdog_interval() is None
+
+
+def test_openpmd_watchdog_interval_rejects_invalid_values(monkeypatch):
+    monkeypatch.setenv("HASE_OPENPMD_WATCHDOG_INTERVAL", "not-a-number")
+    with pytest.raises(ValueError, match="HASE_OPENPMD_WATCHDOG_INTERVAL"):
+        transport._watchdog_interval()
+
+    with pytest.raises(ValueError, match="HASE_OPENPMD_WATCHDOG_INTERVAL"):
+        transport._watchdog_interval(-1)
+
+
+def test_streaming_wait_ignores_watchdog_alive_events():
+    session = transport.OpenPmdPhiAseSession(transport="adios-sst", watchdog_interval="none")
+    result = object()
+    session._sender_errors = transport.queue.Queue()
+    session._watchdog_events = transport.queue.Queue()
+    session._result_queue = transport.queue.Queue()
+    session._proc = SimpleNamespace(poll=lambda: None)
+
+    session._watchdog_events.put((True, None))
+    session._result_queue.put((True, (0, result)))
+
+    assert session._wait_for_result(0) is result
+
+
+def test_streaming_wait_raises_on_watchdog_failure():
+    session = transport.OpenPmdPhiAseSession(transport="adios-sst", watchdog_interval="none")
+    session._sender_errors = transport.queue.Queue()
+    session._watchdog_events = transport.queue.Queue()
+    session._result_queue = transport.queue.Queue()
+    session._proc = SimpleNamespace(poll=lambda: None, stderr=None)
+
+    session._watchdog_events.put((False, RuntimeError("backend liveness probe failed")))
+
+    with pytest.raises(RuntimeError, match="openPMD backend watchdog failed"):
+        session._wait_for_result(0)
 
 
 @pytest.mark.integration
@@ -686,12 +749,13 @@ def test_backend_failure_detail_includes_stdout_and_stderr():
     assert "calcPhiASE stderr:\nbackend error" in detail
 
 
-def test_openpmd_api_preference_accepts_installed_module_without_bundled_build(monkeypatch, tmp_path):
+def test_openpmd_api_preference_rejects_missing_cmake_built_module(monkeypatch, tmp_path):
     active = tmp_path / "site-packages" / "openpmd_api" / "__init__.py"
     monkeypatch.setitem(transport.sys.modules, "openpmd_api", SimpleNamespace(__file__=str(active)))
     monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([tmp_path / "missing"]))
 
-    transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
+    with pytest.raises(RuntimeError, match="CMake-built openpmd_api"):
+        transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
 
 
 def test_openpmd_api_preference_rejects_mismatched_bundled_build(monkeypatch, tmp_path):
@@ -831,6 +895,7 @@ def _parser_validation_binary():
 
 
 def test_openpmd_input_series_omits_static_topology_after_first_iteration(tmp_path):
+    _require_openpmd_transport_io()
     output = tmp_path / ("dynamic_split" + _file_suffix_for_tests())
     with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
         writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
@@ -985,6 +1050,34 @@ def _openpmd_calc_phi_ase():
     pytest.fail("no current openPMD calcPhiASE binary found; build HASE_BUILD_PhiAse with src/openpmd_main.cpp")
 
 
+@pytest.mark.integration
+def testAdiosSstWatchdogEmitsFiveAliveBeatsFromNormalSession(monkeypatch):
+    selectedBackend = os.environ.get("HASE_OPENPMD_BACKEND", "adios").strip().lower()
+    if selectedBackend != "adios-sst":
+        pytest.skip("watchdog beat test only runs for HASE_OPENPMD_BACKEND=adios-sst")
+
+    io = _io()
+    if "sst" not in getattr(io, "file_extensions", []):
+        pytest.skip("openPMD-api was not built with ADIOS2 SST support")
+
+    executable, _ = _openpmd_calc_phi_ase()
+    monkeypatch.setenv("HASE_CALCPHIASE", str(executable))
+
+    expectedBeats = 5
+    aliveBeats = 0
+    with transport.OpenPmdPhiAseSession(transport="adios-sst", watchdog_interval=0.05) as session:
+        while aliveBeats < expectedBeats:
+            try:
+                isAlive, payload = session._watchdog_events.get(timeout=1.0)
+            except transport.queue.Empty:
+                pytest.fail(f"watchdog emitted only {aliveBeats} alive beats")
+            if not isAlive:
+                raise AssertionError("watchdog reported backend failure") from payload
+            aliveBeats += 1
+
+    assert aliveBeats == expectedBeats
+
+
 def _mpi_enabled(build_dir):
     cache = None if build_dir is None else build_dir / "CMakeCache.txt"
     if _cache_value(cache, "DISABLE_MPI") == "ON":
@@ -999,6 +1092,7 @@ def _mpi_enabled(build_dir):
 
 
 def _assert_mpi_mode_rejected_by_non_mpi_build(tmp_path, executable):
+    _require_openpmd_transport_io()
     phi_ase = launch_smoke_phi_ase()
     phi_ase.parallelMode = "mpi"
     input_path = tmp_path / f"mpi_input{_file_suffix_for_tests()}"
@@ -1017,6 +1111,7 @@ def _assert_mpi_mode_rejected_by_non_mpi_build(tmp_path, executable):
 
 
 def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
+    _require_openpmd_transport_io()
     executable, build_dir = _openpmd_calc_phi_ase()
     if parallel_mode == "mpi" and not _mpi_enabled(build_dir):
         return _assert_mpi_mode_rejected_by_non_mpi_build(tmp_path, executable)
@@ -1058,6 +1153,7 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
 @pytest.mark.integration
 @pytest.mark.parametrize("openpmd_backend", _openpmd_backend_values())
 def test_python_api_launches_configured_openpmd_backend_once(monkeypatch, openpmd_backend):
+    _require_openpmd_transport_io()
     executable, _ = _openpmd_calc_phi_ase()
     monkeypatch.setenv("HASE_CALCPHIASE", str(executable))
     monkeypatch.setenv("HASE_OPENPMD_BACKEND", openpmd_backend)
@@ -1086,10 +1182,7 @@ def test_calc_phi_ase_mpi_openpmd_round_trip_when_mpi_enabled(tmp_path):
 
 
 def test_openpmd_input_series_preserves_custom_fields(tmp_path):
-    try:
-        _io()
-    except ImportError as exc:
-        pytest.fail(str(exc))
+    _require_openpmd_transport_io()
 
     class ThermalPrism(PrismSchema):
         temperature = PrimitiveFieldSpec("temperature", "custom_temperature", np.float64, unit="K", backendRequired=False)

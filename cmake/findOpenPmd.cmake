@@ -22,7 +22,7 @@ option(
 option(
     HASE_OPENPMD_BUILD_PYTHON_BINDINGS
     "Build openPMD-api Python bindings as part of the HASE CMake build"
-    OFF
+    ON
 )
 
 message(STATUS "Fetching pinned openPMD-api for the HASE openPMD transport")

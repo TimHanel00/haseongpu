@@ -54,6 +54,13 @@ openPMD dependencies and default file extension are built into the C++ test and
 binary configuration. Runtime Python selection still requires the matching
 openPMD-api Python module and backend support to be available.
 
+The Python transport does not use the PyPI ``openpmd-api`` wheel. It requires
+the ``openpmd_api`` module built by the same CMake openPMD-api build as the
+selected ``calcPhiASE`` binary. Build with
+``HASE_OPENPMD_BUILD_PYTHON_BINDINGS=ON`` and keep the reported
+``HASE_OPENPMD_PYTHONPATH`` entry on ``PYTHONPATH`` when running from a build
+tree.
+
 Schema Summary
 --------------
 
@@ -153,6 +160,12 @@ transport files:
 
 ``HASE_OPENPMD_ARTIFACT_RUN_ID=name``
    Use a stable run id instead of a timestamped id.
+
+``HASE_OPENPMD_WATCHDOG_INTERVAL=seconds``
+   Set the Python-side watchdog interval for streaming backends. The watchdog
+   checks that the launched backend process is still alive while the result
+   receiver waits. The default is ``30`` seconds. Use ``0`` or ``none`` to
+   disable the watchdog.
 
 ``HASE_CALCPHIASE=/path/to/calcPhiASE``
    Force the Python transport to use a specific openPMD ``calcPhiASE`` binary.
