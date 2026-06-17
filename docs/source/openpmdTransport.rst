@@ -49,6 +49,35 @@ For direct helper calls, pass ``transport=``:
        transport="adios",
    )
 
+For repeated calls over a streaming backend, keep one session open and pass it
+back into each run:
+
+.. code-block:: python
+
+   phi_ase = PhiASE(...)
+
+   openpmdSession = phi_ase.openStream()
+   try:
+       for _ in range(steps):
+           phi_ase.run(
+               gainMedium=medium,
+               crossSections=spectra,
+               openpmdSession=openpmdSession,
+           )
+           result = phi_ase.getResults()
+   finally:
+       phi_ase.closeStream()
+
+``PhiASE.run(...)`` defaults to interval ownership: one open/write/read/close
+cycle per call. Pass ``openpmdSession="persistent"`` to let the ``PhiASE``
+object open and reuse its own stream, or pass an existing session object when
+the caller owns the stream lifetime.
+
+``Simulation.runSteps(...)`` and ``Simulation.runUntil(...)`` keep one
+persistent stream automatically for ``adios-sst``. Pass
+``openpmdSession="interval"`` to force one-shot open/write/read/close behavior,
+or pass an existing session object to share caller-managed ownership.
+
 The CMake build also has ``HASE_OPENPMD_BACKEND``. That option selects which
 openPMD dependencies and default file extension are built into the C++ test and
 binary configuration. Runtime Python selection still requires the matching

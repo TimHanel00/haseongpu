@@ -698,6 +698,35 @@ def test_run_phi_ase_uses_openpmd_session_manager(monkeypatch):
     ]
 
 
+def testRunPhiAseUsesProvidedOpenPmdSessionWithoutClosingIt(monkeypatch):
+    result = object()
+    events = []
+
+    class FakeSession:
+        def run(self, phiAse, gainMedium, crossSections):
+            events.append(("run", phiAse, gainMedium, crossSections))
+            return result
+
+    monkeypatch.setattr(
+        transport,
+        "OpenPmdPhiAseSession",
+        lambda **kwargs: pytest.fail("provided openpmdSession should bypass session construction"),
+    )
+
+    phiAse = object()
+    gainMedium = object()
+    crossSections = object()
+    openpmdSession = FakeSession()
+
+    assert transport.runPhiASE(
+        phiAse,
+        gainMedium,
+        crossSections,
+        openpmdSession=openpmdSession,
+    ) is result
+    assert events == [("run", phiAse, gainMedium, crossSections)]
+
+
 def test_openpmd_session_assigns_monotonic_request_iterations(monkeypatch):
     calls = []
 

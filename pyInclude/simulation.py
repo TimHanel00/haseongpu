@@ -76,6 +76,7 @@ class PhiASE:
     """Optional RNG seed for reproducible Monte Carlo sampling."""
 
     _result: object | None = field(default=None, init=False, repr=False)
+    _openpmdSession: object | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if isinstance(self.config, (str, Path)):
@@ -220,7 +221,19 @@ class PhiASE:
             attributes["rngSeed"] = int(self.rngSeed)
         return attributes
 
-    def run(self, gainMedium=None, crossSections=None):
+    def openStream(self, **kwargs):
+        """Open a persistent openPMD transport session owned by this ``PhiASE``."""
+        if self._openpmdSession is None:
+            self._openpmdSession = transport.openStream(**kwargs)
+        return self._openpmdSession
+
+    def closeStream(self):
+        """Close this ``PhiASE`` object's persistent openPMD transport session."""
+        session = self._openpmdSession
+        self._openpmdSession = None
+        return transport.closeStream(session)
+
+    def run(self, gainMedium=None, crossSections=None, *, openpmdSession=None):
         """Run ASE for the supplied or configured ``GainMedium``.
 
         Returns ``self``. Use ``getResults()`` afterwards to access the raw
@@ -235,7 +248,17 @@ class PhiASE:
         if cross_sections is None:
             raise ValueError("PhiASE.run requires crossSections")
 
-        self._result = transport.runPhiASE(self, medium, cross_sections)
+        if openpmdSession == "persistent":
+            openpmdSession = self.openStream()
+        elif openpmdSession == "interval":
+            openpmdSession = None
+
+        self._result = transport.runPhiASE(
+            self,
+            medium,
+            cross_sections,
+            openpmdSession=openpmdSession,
+        )
         return self
 
     def getResults(self):
@@ -360,6 +383,7 @@ class Simulation:
     _beforeStepCallbacks: list = field(default_factory=list, init=False, repr=False)
     _callbacks: list = field(default_factory=list, init=False, repr=False)
     _states: list[TimeStepState] = field(default_factory=list, init=False, repr=False)
+    _openpmdSession: object | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if self.timeIntegrationSolver is None or not hasattr(self.timeIntegrationSolver, "step"):
@@ -433,38 +457,71 @@ class Simulation:
         self._beforeStepCallbacks.append((callback, args, kwargs))
         return self
 
-    def runUntil(self, endtime=None, endTime=None):
+    def _withOpenPmdSession(self, openpmdSession):
+        if openpmdSession is None:
+            if transport._backend_spec().streaming:
+                return self.phiASE.openStream(), True
+            return None, False
+        if openpmdSession == "interval":
+            return None, False
+        if openpmdSession == "persistent":
+            return self.phiASE.openStream(), True
+        return openpmdSession, False
+
+    def runUntil(self, endtime=None, endTime=None, *, openpmdSession=None):
         """Advance steps until the configured or supplied end time is reached."""
         target = self.endTime if endtime is None and endTime is None else (endtime if endtime is not None else endTime)
         if target is None:
             raise ValueError("runUntil requires endtime or an endTime configured on construction")
-        while self._time < float(target) - 0.5 * self.timeStep:
-            self.step()
+        session, close_session = self._withOpenPmdSession(openpmdSession)
+        previous_session = self._openpmdSession
+        self._openpmdSession = session
+        try:
+            while self._time < float(target) - 0.5 * self.timeStep:
+                self.step(openpmdSession=session)
+        finally:
+            self._openpmdSession = previous_session
+            if close_session:
+                self.phiASE.closeStream()
         return self
 
-    def runSteps(self, steps):
+    def runSteps(self, steps, *, openpmdSession=None):
         """Run exactly ``steps`` calls to ``step()`` and return ``self``."""
-        for _ in range(int(steps)):
-            self.step()
+        session, close_session = self._withOpenPmdSession(openpmdSession)
+        previous_session = self._openpmdSession
+        self._openpmdSession = session
+        try:
+            for _ in range(int(steps)):
+                self.step(openpmdSession=session)
+        finally:
+            self._openpmdSession = previous_session
+            if close_session:
+                self.phiASE.closeStream()
         return self
 
-    def step(self):
+    def step(self, *, openpmdSession=None):
         """Advance one time step and return the completed ``TimeStepState``."""
+        previous_session = self._openpmdSession
+        if openpmdSession is not None:
+            self._openpmdSession = openpmdSession
         self._runInitCallbacks()
-        for callback, args, kwargs in self._beforeStepCallbacks:
-            callback(self, *args, **kwargs)
+        try:
+            for callback, args, kwargs in self._beforeStepCallbacks:
+                callback(self, *args, **kwargs)
 
-        beta_cells = np.asarray(self.gainMedium.get("betaCells").value, dtype=np.float64).reshape(
-            self.gainMedium.get("betaCells").expectedShape,
-            order="F",
-        )
+            beta_cells = np.asarray(self.gainMedium.get("betaCells").value, dtype=np.float64).reshape(
+                self.gainMedium.get("betaCells").expectedShape,
+                order="F",
+            )
 
-        integration_result = self.timeIntegrationSolver.step(
-            self._timeDerivative,
-            beta_cells.copy(),
-            self._time,
-            self.timeStep,
-        )
+            integration_result = self.timeIntegrationSolver.step(
+                self._timeDerivative,
+                beta_cells.copy(),
+                self._time,
+                self.timeStep,
+            )
+        finally:
+            self._openpmdSession = previous_session
         updated_beta = integration_result.betaCells
         derivative = integration_result.evaluation
 
@@ -549,7 +606,11 @@ class Simulation:
         )
         self.gainMedium.get("betaCells").value = beta_cells
         self._updateBetaVolumeFromCells()
-        self.phiASE.run(gainMedium=self.gainMedium, crossSections=self.crossSections)
+        self.phiASE.run(
+            gainMedium=self.gainMedium,
+            crossSections=self.crossSections,
+            openpmdSession=self._openpmdSession,
+        )
         ase_result = self.phiASE.getResults()
         phi_ase = np.asarray(ase_result.phiAse, dtype=np.float64).reshape(beta_cells.shape, order="F")
         dndt_ase = self._aseDerivative(phi_ase, betaCells=beta_cells)

@@ -1195,16 +1195,33 @@ def _runOpenPmdAndExecuteHaseBinary(
     transport=None,
     command_prefix=None,
     workspace_dir=None,
+    watchdog_interval=None,
+    openpmdSession=None,
 ):
+    if openpmdSession is not None:
+        return openpmdSession.run(phiAse, gainMedium, crossSections)
+
     kwargs = {"transport": transport}
     if command_prefix is not None:
         kwargs["command_prefix"] = command_prefix
     if workspace_dir is not None:
         kwargs["workspace_dir"] = workspace_dir
+    if watchdog_interval is not None:
+        kwargs["watchdog_interval"] = watchdog_interval
     with OpenPmdPhiAseSession(**kwargs) as session:
         return session.run(phiAse, gainMedium, crossSections)
 
-def runPhiASE(phiAse, gainMedium, crossSections, *, transport=None, command_prefix=None, workspace_dir=None):
+def runPhiASE(
+    phiAse,
+    gainMedium,
+    crossSections,
+    *,
+    transport=None,
+    command_prefix=None,
+    workspace_dir=None,
+    watchdog_interval=None,
+    openpmdSession=None,
+):
     return _runOpenPmdAndExecuteHaseBinary(
         phiAse,
         gainMedium,
@@ -1212,4 +1229,22 @@ def runPhiASE(phiAse, gainMedium, crossSections, *, transport=None, command_pref
         transport=transport,
         command_prefix=command_prefix,
         workspace_dir=workspace_dir,
+        watchdog_interval=watchdog_interval,
+        openpmdSession=openpmdSession,
     )
+
+
+def openStream(*, transport=None, command_prefix=None, workspace_dir=None, watchdog_interval=None):
+    session = OpenPmdPhiAseSession(
+        transport=transport,
+        command_prefix=command_prefix,
+        workspace_dir=workspace_dir,
+        watchdog_interval=watchdog_interval,
+    )
+    return session.__enter__()
+
+
+def closeStream(openpmdSession):
+    if openpmdSession is None:
+        return None
+    return openpmdSession.__exit__(None, None, None)
