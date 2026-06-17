@@ -6,6 +6,10 @@
 
 import numpy as np
 
+from _source_tree_import import ensure_hase_importable
+
+ensure_hase_importable()
+
 from HASEonGPU import (
     GainMedium,
     Grid,

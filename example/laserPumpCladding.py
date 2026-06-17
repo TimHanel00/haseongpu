@@ -11,9 +11,13 @@ from pathlib import Path
 
 import numpy as np
 
+from _source_tree_import import ensure_hase_importable
+
 
 scriptDir = Path(__file__).resolve().parent
 defaultPhiAseConfigPath = scriptDir / "config/phiASE.yaml"
+
+ensure_hase_importable()
 
 from HASEonGPU import (  # noqa: E402
     BetaIntegrationGaussianSolver,

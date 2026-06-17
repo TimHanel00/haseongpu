@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -739,7 +740,10 @@ class OpenPmdPhiAseSession:
         self._proc = None
         self._input_series = None
         self._result_queue = None
+        self._send_queue = None
+        self._sender_errors = None
         self._reader = None
+        self._sender = None
         self._pending_results = {}
         self._next_iteration = 0
         self._entered = False
@@ -808,12 +812,19 @@ class OpenPmdPhiAseSession:
         return result
 
     def close(self):
-        if self._input_series is not None:
-            self._input_series.close()
-            self._input_series = None
+        if self.spec.streaming:
+            self._close_streaming()
+            return
         if self._proc is None:
             return
 
+        return_code, stderr = self._finish_backend_process()
+        self._write_handles_and_manifest(status="completed" if return_code == 0 else "failed", return_code=return_code)
+        if return_code != 0:
+            detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
+            raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
+
+    def _finish_backend_process(self):
         try:
             return_code = self._proc.wait(timeout=self.timeout)
         except subprocess.TimeoutExpired:
@@ -821,10 +832,63 @@ class OpenPmdPhiAseSession:
             return_code = self._proc.wait()
         stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
         self._proc = None
-        self._write_handles_and_manifest(status="completed" if return_code == 0 else "failed", return_code=return_code)
-        if return_code != 0:
+        return return_code, stderr
+
+    def _join_streaming_thread(self, thread, description):
+        if thread is None:
+            return None
+        thread.join(timeout=self.timeout)
+        if thread.is_alive():
+            return RuntimeError(f"openPMD {description} thread did not stop")
+        return None
+
+    def _pop_sender_error(self):
+        if self._sender_errors is None:
+            return None
+        try:
+            return self._sender_errors.get_nowait()
+        except queue.Empty:
+            return None
+
+    def _close_streaming(self):
+        close_error = None
+        if self._send_queue is not None:
+            self._send_queue.put(None)
+            self._send_queue = None
+
+        sender_error = self._join_streaming_thread(self._sender, "input sender")
+        if sender_error is not None:
+            close_error = sender_error
+            if self._proc is not None and self._proc.poll() is None:
+                self._proc.kill()
+        elif self._sender is not None:
+            self._sender = None
+
+        return_code = None
+        stderr = ""
+        if self._proc is not None:
+            return_code, stderr = self._finish_backend_process()
+            self._write_handles_and_manifest(
+                status="completed" if return_code == 0 else "failed",
+                return_code=return_code,
+            )
+
+        reader_error = self._join_streaming_thread(self._reader, "result receiver")
+        if reader_error is not None and close_error is None:
+            close_error = reader_error
+        elif self._reader is not None:
+            self._reader = None
+
+        pending_sender_error = self._pop_sender_error()
+        if pending_sender_error is not None and close_error is None:
+            _, close_error = pending_sender_error
+
+        if return_code not in (None, 0) and close_error is None:
             detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
-            raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
+            close_error = RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
+
+        if close_error is not None:
+            raise close_error
 
     def _paths_for_file_iteration(self, iteration_index):
         artifact_root = _artifact_root()
@@ -904,57 +968,119 @@ class OpenPmdPhiAseSession:
         )
 
     def _start_streaming_backend(self):
+        self._result_queue = queue.Queue()
+        self._send_queue = queue.Queue()
+        self._sender_errors = queue.Queue()
         self._proc = subprocess.Popen(
             self._calc_phi_ase_command(self._input_path, self._output_path),
             stderr=subprocess.PIPE,
             text=True,
         )
-        self._input_series = _open_input_series(self._input_path, backend=self.spec.name)
-        self._result_queue = queue.Queue()
+        self._start_result_reader()
+        self._start_input_sender()
+
+    def _start_input_sender(self):
+        if self._sender is not None:
+            return
+        self._sender = threading.Thread(
+            target=self._send_streaming_inputs,
+            name="HASE openPMD input sender",
+            daemon=True,
+        )
+        self._sender.start()
 
     def _start_result_reader(self):
         if self._reader is not None:
             return
-        self._reader = threading.Thread(target=self._read_streaming_results, daemon=True)
+        self._reader = threading.Thread(
+            target=self._read_streaming_results,
+            name="HASE openPMD result receiver",
+            daemon=True,
+        )
         self._reader.start()
 
     def _read_streaming_results(self):
         try:
             series = _io().Series(str(self._output_path), _access("read_linear"), _series_config(self._output_path))
-            for fallback_index, iteration in enumerate(series.read_iterations()):
-                self._result_queue.put((True, _read_result_iteration(series, iteration, fallback_index=fallback_index)))
-            series.close()
+            try:
+                for fallback_index, iteration in enumerate(series.read_iterations()):
+                    self._result_queue.put((True, _read_result_iteration(series, iteration, fallback_index=fallback_index)))
+            finally:
+                series.close()
         except BaseException as exc:
             self._result_queue.put((False, exc))
 
+    def _send_streaming_inputs(self):
+        series = None
+        try:
+            series = _open_input_series(self._input_path, backend=self.spec.name)
+            self._input_series = series
+            while True:
+                request = self._send_queue.get()
+                if request is None:
+                    return
+                iteration_index, phiAse, gainMedium, crossSections = request
+                _write_input_iteration(
+                    series,
+                    iteration_index,
+                    phiAse,
+                    gainMedium,
+                    crossSections,
+                    include_static=(iteration_index == 0),
+                )
+                series.flush()
+        except BaseException as exc:
+            self._sender_errors.put((None, exc))
+        finally:
+            if series is not None:
+                try:
+                    series.close()
+                except BaseException as exc:
+                    self._sender_errors.put((None, exc))
+            self._input_series = None
+
     def _run_streaming_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
-        _write_input_iteration(self._input_series, iteration_index, phiAse, gainMedium, crossSections, include_static=(iteration_index == 0))
-        self._input_series.flush()
-        self._start_result_reader()
+        if self._send_queue is None:
+            raise RuntimeError("openPMD input sender thread is not running")
+        self._send_queue.put((iteration_index, phiAse, gainMedium, crossSections))
         return self._wait_for_result(iteration_index)
 
     def _wait_for_result(self, expected_iteration_index):
         if expected_iteration_index in self._pending_results:
             return self._pending_results.pop(expected_iteration_index)
+
+        deadline = time.monotonic() + self.timeout
         while True:
+            sender_error = self._pop_sender_error()
+            if sender_error is not None:
+                sender_iteration, exc = sender_error
+                suffix = "" if sender_iteration is None else f" for iteration {sender_iteration}"
+                raise RuntimeError(f"openPMD input sender failed{suffix}") from exc
+
             if self._proc is not None and self._proc.poll() not in (None, 0):
                 stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
                 detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
                 raise RuntimeError(f"calcPhiASE failed with return code {self._proc.returncode}{detail}")
-            try:
-                ok, payload = self._result_queue.get(timeout=self.timeout)
-            except queue.Empty as exc:
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 stderr = ""
                 if self._proc is not None:
                     self._proc.kill()
                     self._proc.wait()
                     if self._proc.stderr is not None:
                         stderr = self._proc.stderr.read()
+                    self._proc = None
                 detail = f"; backend stderr: {stderr.strip()}" if stderr and stderr.strip() else ""
                 raise TimeoutError(
                     f"Timed out waiting for openPMD backend '{self.spec.name}' result iteration "
                     f"{expected_iteration_index}{detail}"
-                ) from exc
+                )
+
+            try:
+                ok, payload = self._result_queue.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                continue
             if not ok:
                 raise payload
             iteration_index, result = payload

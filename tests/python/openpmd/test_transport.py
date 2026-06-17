@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -496,6 +497,108 @@ def test_adios_sst_python_pair_publishes_one_iteration(tmp_path):
 
     assert "writer done" in writer_stdout
     assert "reader done" in reader_stdout
+
+
+
+@pytest.mark.integration
+def test_adios_sst_threads_can_send_and_receive_independent_streams(tmp_path):
+    io = _io()
+    if "sst" not in getattr(io, "file_extensions", []):
+        pytest.skip("openPMD-api was not built with ADIOS2 SST support")
+
+    input_stream = tmp_path / "threaded_input.sst"
+    output_stream = tmp_path / "threaded_output.sst"
+    config = transport.SST_CONFIG
+    input_values = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+    output_values = np.asarray([10.0, 20.0, 30.0], dtype=np.float64)
+    received = []
+    errors = []
+    sender_ready = threading.Event()
+    backend_input_read = threading.Event()
+    backend_output_written = threading.Event()
+
+    def access(name):
+        return getattr(io.Access_Type, name) if hasattr(io, "Access_Type") else getattr(io.Access, name)
+
+    def write_probe(series, values):
+        iteration = series.snapshots()[0]
+        component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
+        component.reset_dataset(io.Dataset(values.dtype, values.shape))
+        component.store_chunk(values)
+        iteration.close()
+        series.flush()
+
+    def read_probe(series):
+        iterations = series.read_iterations() if hasattr(series, "read_iterations") else series.snapshots().items()
+        item = next(iter(iterations))
+        iteration = item[1] if isinstance(item, tuple) else item
+        component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
+        chunk = component.load_chunk()
+        series.flush()
+        data = np.asarray(chunk, dtype=np.float64).reshape(-1).copy()
+        iteration.close()
+        return data
+
+    def sender():
+        try:
+            series = io.Series(str(input_stream), access("create_linear"), config)
+            try:
+                sender_ready.set()
+                write_probe(series, input_values)
+            finally:
+                series.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def receiver():
+        try:
+            series = io.Series(str(output_stream), access("read_linear"), config)
+            try:
+                received.append(read_probe(series))
+            finally:
+                series.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def backend():
+        try:
+            assert sender_ready.wait(timeout=5.0)
+            input_series = io.Series(str(input_stream), access("read_linear"), config)
+            try:
+                np.testing.assert_allclose(read_probe(input_series), input_values)
+                backend_input_read.set()
+            finally:
+                input_series.close()
+
+            output_series = io.Series(str(output_stream), access("create_linear"), config)
+            try:
+                write_probe(output_series, output_values)
+                backend_output_written.set()
+            finally:
+                output_series.close()
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=receiver, name="sst-receiver"),
+        threading.Thread(target=sender, name="sst-sender"),
+        threading.Thread(target=backend, name="sst-backend"),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20.0)
+
+    for thread in threads:
+        if thread.is_alive():
+            pytest.fail(f"{thread.name} did not finish")
+    if errors:
+        raise AssertionError("threaded SST workflow failed") from errors[0]
+
+    assert backend_input_read.is_set()
+    assert backend_output_written.is_set()
+    assert len(received) == 1
+    np.testing.assert_allclose(received[0], output_values)
 
 
 def test_run_phi_ase_uses_openpmd_session_manager(monkeypatch):

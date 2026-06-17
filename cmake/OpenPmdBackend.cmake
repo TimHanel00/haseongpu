@@ -4,10 +4,13 @@ if(POLICY CMP0057)
     cmake_policy(SET CMP0057 NEW)
 endif()
 
+set(HASE_OPENPMD_BACKEND_DESCRIPTION
+    "openPMD backend used by the HASE transport: adios, adios-sst, or hdf5"
+)
 set(HASE_OPENPMD_BACKEND
     "adios"
     CACHE STRING
-    "openPMD backend used by the HASE transport: adios, adios-sst, or hdf5"
+    "${HASE_OPENPMD_BACKEND_DESCRIPTION}"
 )
 set_property(CACHE HASE_OPENPMD_BACKEND PROPERTY STRINGS adios adios-sst hdf5)
 
@@ -17,7 +20,7 @@ if(NOT HASE_OPENPMD_BACKEND STREQUAL HASE_OPENPMD_BACKEND_NORMALIZED)
     set(HASE_OPENPMD_BACKEND
         "${HASE_OPENPMD_BACKEND_NORMALIZED}"
         CACHE STRING
-        "openPMD backend used by the HASE transport: adios, adios-sst, or hdf5"
+        "${HASE_OPENPMD_BACKEND_DESCRIPTION}"
         FORCE
     )
 endif()
