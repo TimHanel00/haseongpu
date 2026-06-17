@@ -2,7 +2,6 @@ import os
 import subprocess
 import sys
 import textwrap
-import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -286,6 +285,15 @@ def _require_openpmd_transport_io():
     _io()
 
 
+def _openpmd_subprocess_env():
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    openpmd_path = str(Path(_io().__file__).resolve().parents[1])
+    pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = openpmd_path if not pythonpath else os.pathsep.join((openpmd_path, pythonpath))
+    return env
+
+
 def _read_scalar(series, iteration, name):
     io = _io()
     component = iteration.meshes[name][io.Mesh_Record_Component.SCALAR]
@@ -532,8 +540,7 @@ def test_adios_sst_python_pair_publishes_one_iteration(tmp_path):
         assert process.returncode == 0, f"{name} failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
         return stdout, stderr
 
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
+    env = _openpmd_subprocess_env()
     reader = subprocess.Popen(
         [sys.executable, "-u", "-c", reader_code, str(stream)],
         stdout=subprocess.PIPE,
@@ -571,97 +578,143 @@ def test_adios_sst_threads_can_send_and_receive_independent_streams(tmp_path):
 
     input_stream = tmp_path / "threaded_input.sst"
     output_stream = tmp_path / "threaded_output.sst"
-    config = transport.SST_CONFIG
-    input_values = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
-    output_values = np.asarray([10.0, 20.0, 30.0], dtype=np.float64)
-    received = []
-    errors = []
-    sender_ready = threading.Event()
-    backend_input_read = threading.Event()
-    backend_output_written = threading.Event()
+    config = repr(transport.SST_CONFIG)
+    input_values = [1.0, 2.0, 3.0]
+    output_values = [10.0, 20.0, 30.0]
 
-    def access(name):
-        return getattr(io.Access_Type, name) if hasattr(io, "Access_Type") else getattr(io.Access, name)
+    common_code = f"""
+import numpy as np
+import openpmd_api as io
 
-    def write_probe(series, values):
-        iteration = series.snapshots()[0]
-        component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
-        component.reset_dataset(io.Dataset(values.dtype, values.shape))
-        component.store_chunk(values)
-        iteration.close()
-        series.flush()
+config = {config}
 
-    def read_probe(series):
-        iterations = series.read_iterations() if hasattr(series, "read_iterations") else series.snapshots().items()
-        item = next(iter(iterations))
-        iteration = item[1] if isinstance(item, tuple) else item
-        component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
-        chunk = component.load_chunk()
-        series.flush()
-        data = np.asarray(chunk, dtype=np.float64).reshape(-1).copy()
-        iteration.close()
-        return data
+def access(name):
+    return getattr(io.Access_Type, name) if hasattr(io, "Access_Type") else getattr(io.Access, name)
 
-    def sender():
+def write_probe(series, values):
+    iteration = series.snapshots()[0]
+    data = np.asarray(values, dtype=np.float64)
+    component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
+    component.reset_dataset(io.Dataset(data.dtype, data.shape))
+    component.store_chunk(data)
+    iteration.close()
+    series.flush()
+
+def read_probe(series):
+    iterations = series.read_iterations() if hasattr(series, "read_iterations") else series.snapshots().items()
+    item = next(iter(iterations))
+    iteration = item[1] if isinstance(item, tuple) else item
+    component = iteration.meshes["probe"][io.Mesh_Record_Component.SCALAR]
+    chunk = component.load_chunk()
+    series.flush()
+    data = np.asarray(chunk, dtype=np.float64).reshape(-1).copy()
+    iteration.close()
+    return data
+"""
+    sender_code = textwrap.dedent(
+        common_code
+        + f"""
+import sys
+
+series = io.Series(sys.argv[1], access("create_linear"), config)
+try:
+    write_probe(series, {input_values!r})
+finally:
+    series.close()
+print("sender done", flush=True)
+"""
+    )
+    backend_code = textwrap.dedent(
+        common_code
+        + f"""
+import sys
+
+input_series = io.Series(sys.argv[1], access("read_linear"), config)
+try:
+    data = read_probe(input_series)
+finally:
+    input_series.close()
+np.testing.assert_allclose(data, np.asarray({input_values!r}, dtype=np.float64))
+print("backend input read", flush=True)
+
+output_series = io.Series(sys.argv[2], access("create_linear"), config)
+try:
+    write_probe(output_series, {output_values!r})
+    print("backend output written", flush=True)
+    sys.stdin.read(1)
+finally:
+    output_series.close()
+"""
+    )
+    receiver_code = textwrap.dedent(
+        common_code
+        + f"""
+import sys
+
+series = io.Series(sys.argv[1], access("read_linear"), config)
+try:
+    data = read_probe(series)
+finally:
+    series.close()
+np.testing.assert_allclose(data, np.asarray({output_values!r}, dtype=np.float64))
+print("receiver done", flush=True)
+"""
+    )
+
+    def finish(process, name, timeout=20):
         try:
-            series = io.Series(str(input_stream), access("create_linear"), config)
-            try:
-                sender_ready.set()
-                write_probe(series, input_values)
-            finally:
-                series.close()
-        except BaseException as exc:
-            errors.append(exc)
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            pytest.fail(f"{name} timed out\nstdout:\n{stdout}\nstderr:\n{stderr}")
+        assert process.returncode == 0, f"{name} failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        return stdout, stderr
 
-    def receiver():
+    env = _openpmd_subprocess_env()
+    backend = subprocess.Popen(
+        [sys.executable, "-u", "-c", backend_code, str(input_stream), str(output_stream)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    time.sleep(0.5)
+    sender = subprocess.Popen(
+        [sys.executable, "-u", "-c", sender_code, str(input_stream)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    try:
+        sender_stdout, _ = finish(sender, "SST sender")
+        receiver = subprocess.Popen(
+            [sys.executable, "-u", "-c", receiver_code, str(output_stream)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        receiver_stdout, _ = finish(receiver, "SST receiver")
         try:
-            series = io.Series(str(output_stream), access("read_linear"), config)
-            try:
-                received.append(read_probe(series))
-            finally:
-                series.close()
-        except BaseException as exc:
-            errors.append(exc)
+            backend_stdout, backend_stderr = backend.communicate(input="\n", timeout=20)
+        except subprocess.TimeoutExpired:
+            backend.kill()
+            backend_stdout, backend_stderr = backend.communicate()
+            pytest.fail(f"SST backend timed out\nstdout:\n{backend_stdout}\nstderr:\n{backend_stderr}")
+        assert backend.returncode == 0, f"SST backend failed\nstdout:\n{backend_stdout}\nstderr:\n{backend_stderr}"
+    finally:
+        for process in (sender, backend):
+            if process.poll() is None:
+                process.kill()
 
-    def backend():
-        try:
-            assert sender_ready.wait(timeout=5.0)
-            input_series = io.Series(str(input_stream), access("read_linear"), config)
-            try:
-                np.testing.assert_allclose(read_probe(input_series), input_values)
-                backend_input_read.set()
-            finally:
-                input_series.close()
-
-            output_series = io.Series(str(output_stream), access("create_linear"), config)
-            try:
-                write_probe(output_series, output_values)
-                backend_output_written.set()
-            finally:
-                output_series.close()
-        except BaseException as exc:
-            errors.append(exc)
-
-    threads = [
-        threading.Thread(target=receiver, name="sst-receiver"),
-        threading.Thread(target=sender, name="sst-sender"),
-        threading.Thread(target=backend, name="sst-backend"),
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=20.0)
-
-    for thread in threads:
-        if thread.is_alive():
-            pytest.fail(f"{thread.name} did not finish")
-    if errors:
-        raise AssertionError("threaded SST workflow failed") from errors[0]
-
-    assert backend_input_read.is_set()
-    assert backend_output_written.is_set()
-    assert len(received) == 1
-    np.testing.assert_allclose(received[0], output_values)
+    assert "sender done" in sender_stdout
+    assert "backend input read" in backend_stdout
+    assert "backend output written" in backend_stdout
+    assert "receiver done" in receiver_stdout
 
 
 def test_run_phi_ase_uses_openpmd_session_manager(monkeypatch):

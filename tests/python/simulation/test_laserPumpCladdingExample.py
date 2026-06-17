@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 repoRoot = Path(__file__).resolve().parents[3]
@@ -34,7 +35,7 @@ class _FakePhiASE:
         self.backend = overrides.get("backend", "FakeBackend")
         self._shape = None
 
-    def run(self, gainMedium=None, crossSections=None):
+    def run(self, gainMedium=None, crossSections=None, **kwargs):
         self._shape = gainMedium.get("betaCells").expectedShape
         return self
 
@@ -45,6 +46,11 @@ class _FakePhiASE:
         result = Result()
         result.phiAse = np.ones(int(np.prod(self._shape)), dtype=np.float64)
         return result
+
+
+@pytest.fixture(autouse=True)
+def _use_file_openpmd_backend(monkeypatch):
+    monkeypatch.setenv("HASE_OPENPMD_BACKEND", "adios")
 
 
 def testLaserPumpCladdingExampleWritesVtkFromOnStep(monkeypatch, tmp_path, smallGainMedium):

@@ -2,7 +2,7 @@ set_target_properties(hase PROPERTIES POSITION_INDEPENDENT_CODE ON)
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG QUIET)
 
-if(NOT pybind11_FOUND)
+if(NOT pybind11_FOUND AND NOT TARGET pybind11::module)
     message(STATUS "pybind11 not found -> fetching pybind11")
 
     include(FetchContent)
@@ -17,6 +17,10 @@ if(NOT pybind11_FOUND)
 endif()
 pybind11_add_module(HASEonGPU HASEonGPU_Bindings/module.cpp)
 set(HASE_PYTHON_RUNTIME_DIR "${CMAKE_BINARY_DIR}/python/HASEonGPU_Bindings")
+if(TARGET hase_openpmd_python)
+    add_dependencies(HASEonGPU hase_openpmd_python)
+    add_dependencies(calcPhiASE hase_openpmd_python)
+endif()
 if(HASE_FORWARD_LOGGING)
     set(HASE_FORWARD_LOGGING_PY True)
 else()
@@ -82,7 +86,19 @@ install(
     FILES "${HASE_PYTHON_RUNTIME_DIR}/_config.py"
     DESTINATION HASEonGPU_Bindings
 )
-install(TARGETS openPMD LIBRARY DESTINATION lib)
+if(HASE_OPENPMD_PYTHON_PACKAGE_DIR)
+    install(
+        DIRECTORY "${HASE_OPENPMD_PYTHON_PACKAGE_DIR}/openpmd_api"
+        DESTINATION .
+        PATTERN "*.so" EXCLUDE
+        PATTERN "*.pyd" EXCLUDE
+        PATTERN "__pycache__" EXCLUDE
+    )
+    install(TARGETS openPMD.py LIBRARY DESTINATION openpmd_api)
+endif()
+if(NOT HASE_USE_SYSTEM_OPENPMD)
+    install(TARGETS openPMD LIBRARY DESTINATION lib)
+endif()
 install(FILES HASEonGPU.py DESTINATION .)
 install(
     DIRECTORY HASEonGPU_Bindings

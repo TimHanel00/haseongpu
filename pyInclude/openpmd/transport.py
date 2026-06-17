@@ -368,6 +368,8 @@ def _candidate_python_paths(executable: Path):
     build_dir = executable.parent
     if (build_dir / "openpmd_api").is_dir():
         yield build_dir
+    if (build_dir.parent / "openpmd_api").is_dir():
+        yield build_dir.parent
     if (build_dir / "site-packages" / "openpmd_api").is_dir():
         yield build_dir / "site-packages"
     yield from build_dir.glob("_deps/openpmd-build/lib/python*/site-packages")
@@ -922,9 +924,9 @@ class OpenPmdPhiAseSession:
         close_error = None
         if self._send_queue is not None:
             self._send_queue.put(None)
-            self._send_queue = None
 
         sender_error = self._join_streaming_thread(self._sender, "input sender")
+        self._send_queue = None
         if sender_error is not None:
             close_error = sender_error
             if self._proc is not None and self._proc.poll() is None:

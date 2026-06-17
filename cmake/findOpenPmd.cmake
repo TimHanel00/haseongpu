@@ -24,6 +24,70 @@ option(
     "Build openPMD-api Python bindings as part of the HASE CMake build"
     ON
 )
+option(
+    HASE_USE_SYSTEM_OPENPMD
+    "Use an externally installed openPMD-api package instead of fetching/building the pinned bundled openPMD-api."
+    OFF
+)
+
+if(HASE_USE_SYSTEM_OPENPMD)
+    message(STATUS "Using system openPMD-api for the HASE openPMD transport")
+    find_package(openPMD CONFIG REQUIRED)
+
+    if(NOT TARGET openPMD::openPMD)
+        message(
+            FATAL_ERROR
+            "System openPMD package did not provide openPMD::openPMD"
+        )
+    endif()
+
+    if(
+        HASE_OPENPMD_USE_HDF5
+        AND DEFINED openPMD_HAVE_HDF5
+        AND NOT openPMD_HAVE_HDF5
+    )
+        message(
+            FATAL_ERROR
+            "HASE_OPENPMD_BACKEND='${HASE_OPENPMD_BACKEND}' requires HDF5, "
+            "but the selected system openPMD package was built without HDF5."
+        )
+    endif()
+
+    if(
+        HASE_OPENPMD_USE_ADIOS2
+        AND DEFINED openPMD_HAVE_ADIOS2
+        AND NOT openPMD_HAVE_ADIOS2
+    )
+        message(
+            FATAL_ERROR
+            "HASE_OPENPMD_BACKEND='${HASE_OPENPMD_BACKEND}' requires ADIOS2, "
+            "but the selected system openPMD package was built without ADIOS2."
+        )
+    endif()
+
+    if(HASE_OPENPMD_USE_SST AND DEFINED ADIOS2_HAVE_SST AND NOT ADIOS2_HAVE_SST)
+        message(
+            FATAL_ERROR
+            "HASE_OPENPMD_BACKEND='${HASE_OPENPMD_BACKEND}' requires ADIOS2 SST, "
+            "but the ADIOS2 package used by system openPMD was built without SST."
+        )
+    endif()
+
+    if(HASE_OPENPMD_BUILD_PYTHON_BINDINGS)
+        message(
+            STATUS
+            "HASE_OPENPMD_BUILD_PYTHON_BINDINGS is ignored with HASE_USE_SYSTEM_OPENPMD=ON; "
+            "the Python openpmd_api module must come from the same external installation."
+        )
+    endif()
+    set(HASE_OPENPMD_BUILD_PYTHON_BINDINGS
+        OFF
+        CACHE BOOL
+        "Build openPMD-api Python bindings as part of the HASE CMake build"
+        FORCE
+    )
+    return()
+endif()
 
 message(STATUS "Fetching pinned openPMD-api for the HASE openPMD transport")
 
@@ -381,6 +445,12 @@ if(TARGET openPMD)
 endif()
 
 if(TARGET openPMD.py)
+    set_target_properties(
+        openPMD.py
+        PROPERTIES
+            INSTALL_RPATH "${HASE_INSTALL_RPATH}"
+            INSTALL_RPATH_USE_LINK_PATH ON
+    )
     add_custom_target(hase_openpmd_python DEPENDS openPMD.py)
 endif()
 
@@ -389,14 +459,14 @@ if(
     AND DEFINED openPMD_BINARY_DIR
     AND DEFINED openPMD_INSTALL_PYTHONDIR
 )
-    set(HASE_OPENPMD_PYTHONPATH
+    set(HASE_OPENPMD_PYTHON_PACKAGE_DIR
         "${openPMD_BINARY_DIR}/${openPMD_INSTALL_PYTHONDIR}"
         CACHE PATH
-        "PYTHONPATH entry for the openPMD-api Python module built by HASE"
+        "Generated openPMD-api Python package directory built by HASE"
         FORCE
     )
     message(
         STATUS
-        "HASE openPMD Python module path: ${HASE_OPENPMD_PYTHONPATH}"
+        "HASE openPMD Python package directory: ${HASE_OPENPMD_PYTHON_PACKAGE_DIR}"
     )
 endif()
