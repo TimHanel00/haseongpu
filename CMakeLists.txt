@@ -111,6 +111,11 @@ if(NOT DISABLE_MPI MATCHES "^(AUTO|ON|OFF)$")
 endif()
 option(HASE_TESTING "Build unit tests" OFF)
 option(HASE_BENCHMARK "Enable scoped PhiASE benchmark CSV output" OFF)
+option(
+    HASE_FORWARD_LOGGING
+    "Forward captured calcPhiASE stdout and stderr through the Python openPMD launcher."
+    OFF
+)
 
 set(HASE_CUDA_ARCHITECTURES native CACHE STRING "CUDA Architectures")
 
@@ -428,6 +433,9 @@ if(HASE_BENCHMARK)
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark/benchmark.cpp"
     )
     target_compile_definitions(hase_core INTERFACE HASE_ENABLE_BENCHMARK)
+endif()
+if(HASE_FORWARD_LOGGING)
+    target_compile_definitions(hase_core INTERFACE HASE_FORWARD_LOGGING)
 endif()
 alpaka_finalize(hase)
 

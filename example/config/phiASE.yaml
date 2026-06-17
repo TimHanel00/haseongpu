@@ -7,7 +7,7 @@ experiment:
 
 compute:
   repetitions: 1
-  backend: Cuda_NvidiaGpu_GpuCuda
+  backend: Host_Cpu_CpuSerial
   parallelMode: single
   numDevices: 4
   nPerNode: 1

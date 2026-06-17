@@ -17,11 +17,21 @@ if(NOT pybind11_FOUND)
 endif()
 pybind11_add_module(HASEonGPU HASEonGPU_Bindings/module.cpp)
 set(HASE_PYTHON_RUNTIME_DIR "${CMAKE_BINARY_DIR}/python/HASEonGPU_Bindings")
+if(HASE_FORWARD_LOGGING)
+    set(HASE_FORWARD_LOGGING_PY True)
+else()
+    set(HASE_FORWARD_LOGGING_PY False)
+endif()
 file(MAKE_DIRECTORY "${HASE_PYTHON_RUNTIME_DIR}")
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/HASEonGPU_Bindings/__init__.py"
     "${HASE_PYTHON_RUNTIME_DIR}/__init__.py"
     COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/HASEonGPU_Bindings/_config.py.in"
+    "${HASE_PYTHON_RUNTIME_DIR}/_config.py"
+    @ONLY
 )
 set_target_properties(
     HASEonGPU
@@ -68,6 +78,10 @@ add_custom_command(
 install(TARGETS HASEonGPU LIBRARY DESTINATION HASEonGPU_Bindings)
 install(TARGETS calcPhiASE RUNTIME DESTINATION HASEonGPU_Bindings)
 install(TARGETS HaseAlpakaBackendNames LIBRARY DESTINATION HASEonGPU_Bindings)
+install(
+    FILES "${HASE_PYTHON_RUNTIME_DIR}/_config.py"
+    DESTINATION HASEonGPU_Bindings
+)
 install(TARGETS openPMD LIBRARY DESTINATION lib)
 install(FILES HASEonGPU.py DESTINATION .)
 install(

@@ -57,6 +57,44 @@ CANONICAL_CELL_TYPES_SPEC = FieldSpec(
 DYNAMIC_FIELD_NAMES = {"betaVolume", "pointBeta"}
 
 
+def _env_flag(name):
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    return value.strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _forward_backend_logging_enabled():
+    override = _env_flag("HASE_FORWARD_LOGGING")
+    if override is not None:
+        return override
+    try:
+        from HASEonGPU_Bindings import _config
+    except ImportError:
+        return False
+    return bool(getattr(_config, "HASE_FORWARD_LOGGING", False))
+
+
+def _forward_backend_logging(stdout="", stderr=""):
+    if not _forward_backend_logging_enabled():
+        return
+    if stdout:
+        sys.stdout.write(stdout)
+        sys.stdout.flush()
+    if stderr:
+        sys.stderr.write(stderr)
+        sys.stderr.flush()
+
+
+def _backend_failure_detail(stdout="", stderr=""):
+    sections = []
+    if stdout and stdout.strip():
+        sections.append("calcPhiASE stdout:\n" + stdout.strip())
+    if stderr and stderr.strip():
+        sections.append("calcPhiASE stderr:\n" + stderr.strip())
+    return ": " + "\n".join(sections) if sections else ""
+
+
 @dataclass(frozen=True)
 class _AttributeField:
     name: str
@@ -821,7 +859,7 @@ class OpenPmdPhiAseSession:
         return_code, stderr = self._finish_backend_process()
         self._write_handles_and_manifest(status="completed" if return_code == 0 else "failed", return_code=return_code)
         if return_code != 0:
-            detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
+            detail = _backend_failure_detail(stderr=stderr)
             raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
 
     def _finish_backend_process(self):
@@ -884,7 +922,7 @@ class OpenPmdPhiAseSession:
             _, close_error = pending_sender_error
 
         if return_code not in (None, 0) and close_error is None:
-            detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
+            detail = _backend_failure_detail(stderr=stderr)
             close_error = RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
 
         if close_error is not None:
@@ -935,6 +973,7 @@ class OpenPmdPhiAseSession:
             text=True,
             capture_output=True,
         )
+        _forward_backend_logging(stdout=completed.stdout, stderr=completed.stderr)
         if manifest_path is not None:
             _write_artifact_manifest(
                 manifest_path,
@@ -947,7 +986,7 @@ class OpenPmdPhiAseSession:
                 return_code=completed.returncode,
             )
         if completed.returncode != 0:
-            detail = f": {completed.stderr.strip()}" if completed.stderr and completed.stderr.strip() else ""
+            detail = _backend_failure_detail(stdout=completed.stdout, stderr=completed.stderr)
             raise RuntimeError(f"calcPhiASE failed with return code {completed.returncode}{detail}")
         return read_result(output_path, expected_iteration_index=iteration_index)
 
@@ -1059,7 +1098,7 @@ class OpenPmdPhiAseSession:
 
             if self._proc is not None and self._proc.poll() not in (None, 0):
                 stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
-                detail = f": {stderr.strip()}" if stderr and stderr.strip() else ""
+                detail = _backend_failure_detail(stderr=stderr)
                 raise RuntimeError(f"calcPhiASE failed with return code {self._proc.returncode}{detail}")
 
             remaining = deadline - time.monotonic()
