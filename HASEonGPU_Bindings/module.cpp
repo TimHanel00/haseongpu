@@ -174,19 +174,15 @@ PYBIND11_MODULE(HASEonGPU, m)
         .def(
             py::init<
                 std::vector<unsigned>,
-                unsigned,
-                unsigned,
-                unsigned,
-                float,
-                std::vector<double>,
-                std::vector<double>,
-                std::vector<double>,
                 std::vector<unsigned>,
-                std::vector<double>,
-                std::vector<double>,
+                std::vector<int>,
+                std::vector<int>,
                 std::vector<int>,
                 std::vector<int>,
                 std::vector<float>,
+                std::vector<double>,
+                std::vector<double>,
+                std::vector<double>,
                 std::vector<double>,
                 std::vector<double>,
                 std::vector<unsigned>,
@@ -196,20 +192,16 @@ PYBIND11_MODULE(HASEonGPU, m)
                 float,
                 unsigned,
                 double>(),
-            py::arg("trianglePointIndices") = std::vector<unsigned>{},
-            py::arg("numberOfTriangles") = 0u,
-            py::arg("numberOfLevels") = 0u,
-            py::arg("numberOfPoints") = 0u,
-            py::arg("thickness") = 0.0f,
+            py::arg("cellPointIndices") = std::vector<unsigned>{},
+            py::arg("cellTypes") = std::vector<unsigned>{},
+            py::arg("cellFaces") = std::vector<int>{},
+            py::arg("cellNeighborCells") = std::vector<int>{},
+            py::arg("cellNeighborLocalFaces") = std::vector<int>{},
+            py::arg("cellFaceBoundaries") = std::vector<int>{},
+            py::arg("cellVolumes") = std::vector<float>{},
             py::arg("points") = std::vector<double>{},
-            py::arg("triangleCenterX") = std::vector<double>{},
-            py::arg("triangleCenterY") = std::vector<double>{},
-            py::arg("triangleNormalPoint") = std::vector<unsigned>{},
-            py::arg("triangleNormalsX") = std::vector<double>{},
-            py::arg("triangleNormalsY") = std::vector<double>{},
-            py::arg("forbiddenEdge") = std::vector<int>{},
-            py::arg("triangleNeighbors") = std::vector<int>{},
-            py::arg("triangleSurfaces") = std::vector<float>{},
+            py::arg("samplePoints") = std::vector<double>{},
+            py::arg("cellCenters") = std::vector<double>{},
             py::arg("betaVolume") = std::vector<double>{},
             py::arg("betaCells") = std::vector<double>{},
             py::arg("claddingCellTypes") = std::vector<unsigned>{},
@@ -219,20 +211,20 @@ PYBIND11_MODULE(HASEonGPU, m)
             py::arg("crystalTFluo") = 0.0f,
             py::arg("claddingNumber") = 0u,
             py::arg("claddingAbsorption") = 0.0)
-        .def_readwrite("trianglePointIndices", &hase::core::HostMesh::trianglePointIndices)
-        .def_readwrite("numberOfTriangles", &hase::core::HostMesh::numberOfTriangles)
-        .def_readwrite("numberOfLevels", &hase::core::HostMesh::numberOfLevels)
-        .def_readwrite("numberOfPoints", &hase::core::HostMesh::numberOfPoints)
-        .def_readwrite("thickness", &hase::core::HostMesh::thickness)
         .def_readwrite("points", &hase::core::HostMesh::points)
-        .def_readwrite("triangleCenterX", &hase::core::HostMesh::triangleCenterX)
-        .def_readwrite("triangleCenterY", &hase::core::HostMesh::triangleCenterY)
-        .def_readwrite("triangleNormalPoint", &hase::core::HostMesh::triangleNormalPoint)
-        .def_readwrite("triangleNormalsX", &hase::core::HostMesh::triangleNormalsX)
-        .def_readwrite("triangleNormalsY", &hase::core::HostMesh::triangleNormalsY)
-        .def_readwrite("forbiddenEdge", &hase::core::HostMesh::forbiddenEdge)
-        .def_readwrite("triangleNeighbors", &hase::core::HostMesh::triangleNeighbors)
-        .def_readwrite("triangleSurfaces", &hase::core::HostMesh::triangleSurfaces)
+        .def_readwrite("cellPointIndices", &hase::core::HostMesh::cellPointIndices)
+        .def_readwrite("cellTypes", &hase::core::HostMesh::cellTypes)
+        .def_readwrite("cellFaces", &hase::core::HostMesh::cellFaces)
+        .def_readwrite("cellNeighborCells", &hase::core::HostMesh::cellNeighborCells)
+        .def_readwrite("cellNeighborLocalFaces", &hase::core::HostMesh::cellNeighborLocalFaces)
+        .def_readwrite("cellFaceBoundaries", &hase::core::HostMesh::cellFaceBoundaries)
+        .def_readwrite("cellVolumes", &hase::core::HostMesh::cellVolumes)
+        .def_readwrite("cellCenters", &hase::core::HostMesh::cellCenters)
+        .def_readwrite("samplePoints", &hase::core::HostMesh::samplePoints)
+        .def_readwrite("numberOfCells", &hase::core::HostMesh::numberOfCells)
+        .def_readwrite("numberOfPrisms", &hase::core::HostMesh::numberOfPrisms)
+        .def_readwrite("numberOfPoints", &hase::core::HostMesh::numberOfPoints)
+        .def_readwrite("numberOfSamples", &hase::core::HostMesh::numberOfSamples)
         .def_readwrite("betaVolume", &hase::core::HostMesh::betaVolume)
         .def_readwrite("betaCells", &hase::core::HostMesh::betaCells)
         .def_readwrite("claddingCellTypes", &hase::core::HostMesh::claddingCellTypes)
@@ -247,9 +239,9 @@ PYBIND11_MODULE(HASEonGPU, m)
             "__repr__",
             [](hase::core::HostMesh const& hm)
             {
-                return "<HostMesh numberOfTriangles=" + std::to_string(hm.numberOfTriangles)
-                       + ", numberOfLevels=" + std::to_string(hm.numberOfLevels)
-                       + ", numberOfPoints=" + std::to_string(hm.numberOfPoints) + ">";
+                return "<HostMesh numberOfCells=" + std::to_string(hm.numberOfCells)
+                       + ", numberOfPoints=" + std::to_string(hm.numberOfPoints)
+                       + ", numberOfSamples=" + std::to_string(hm.numberOfSamples) + ">";
             });
 
     m.def(

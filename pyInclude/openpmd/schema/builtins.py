@@ -22,7 +22,7 @@ HASE_EXTENSION_ATTRIBUTES = {
     "haseOpenPMDextension": "HASE",
     "haseVersion": "0.1",
     "simulationType": "laserCrystalASE",
-    "geometryType": "extrudedTriangularPrism",
+    "geometryType": "unstructuredPrism6",
 }
 
 
