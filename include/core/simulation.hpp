@@ -417,7 +417,7 @@ namespace hase::core
                     {
                         std::cout.imbue(std::locale(""));
                     }
-                    catch(std::runtime_error e)
+                    catch(std::runtime_error const&)
                     {
                     }
 
