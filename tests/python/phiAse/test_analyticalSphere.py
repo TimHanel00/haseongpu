@@ -112,6 +112,7 @@ def testCenterPointIntegralMatchesAnalyticalSolution(radius, g0, backend, phiAse
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
         spectralProperties=crossSections,
+        propagationMode="backward",
         minRaysPerSample=10000,
         maxRaysPerSample=100000,
         repetitions=2,
