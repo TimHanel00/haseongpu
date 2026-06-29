@@ -25,7 +25,7 @@ from .geometry import _flat
 
 @dataclass
 class PhiAseMpiResult:
-    """Result object shaped like the direct pybind ASE result."""
+    """Result object shaped like the openPMD ASE result."""
 
     phiAse: np.ndarray
     r"""Flattened ASE flux :math:`\Phi_i` for each beta sample."""

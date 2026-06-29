@@ -116,31 +116,13 @@ EXPLICIT_CELL_DOMAINS_SPEC = FieldSpec(
     lambda context: (context.numberOfCells,),
     backendRequired=False,
 )
-EXPLICIT_SAMPLE_POINTS_SPEC = FieldSpec(
-    "explicitSamplePoints",
-    "sample_points",
-    ("coordinate", "sample_point"),
-    np.float64,
-    lambda context: (3, context.numberOfSamplePoints),
-    unit="m",
-    unitDimension=(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-    backendRequired=False,
-)
-DYNAMIC_FIELD_NAMES = {"betaVolume", "pointBeta"}
+DYNAMIC_FIELD_NAMES = {"betaVolume"}
 EXPLICIT_BETA_VOLUME_SPEC = FieldSpec(
     "betaVolume",
     "beta_volume",
     ("cell",),
     np.float64,
     lambda context: (context.numberOfCells,),
-    dynamic=True,
-)
-EXPLICIT_POINT_BETA_SPEC = FieldSpec(
-    "pointBeta",
-    "point_beta",
-    ("sample_point",),
-    np.float64,
-    lambda context: (context.numberOfSamplePoints,),
     dynamic=True,
 )
 
@@ -152,19 +134,19 @@ def _env_flag(name):
     return value.strip().lower() in {"1", "true", "on", "yes"}
 
 
-def _binding_config():
+def _native_config():
     try:
-        from HASEonGPU_Bindings import _config
+        from pyInclude import _native_config
     except ImportError:
         return SimpleNamespace()
-    return _config
+    return _native_config
 
 
 def _forward_backend_logging_enabled():
     override = _env_flag("HASE_FORWARD_LOGGING")
     if override is not None:
         return override
-    return bool(getattr(_binding_config(), "HASE_FORWARD_LOGGING", False))
+    return bool(getattr(_native_config(), "HASE_FORWARD_LOGGING", False))
 
 
 def _forward_backend_logging(stdout="", stderr=""):
@@ -280,8 +262,8 @@ def _streaming_thread_join_timeout(value=None):
 
 def _propagation_mode(phiAse):
     mode = str(getattr(phiAse, "propagationMode", "forward")).strip().lower()
-    if mode not in {"forward", "backward"}:
-        raise ValueError("propagationMode must be 'forward' or 'backward'")
+    if mode != "forward":
+        raise ValueError("propagationMode must be 'forward'")
     return mode
 
 
@@ -404,10 +386,7 @@ def _attributeValues(phiAse, gainMedium, crossSections):
 
 def _arrayFields(gainMedium, crossSections, *, phiAse=None, include_static=True):
     context = _fieldContext(gainMedium)
-    forward_mode = False if phiAse is None else _is_forward_mode(phiAse)
     for field in _fieldsFromDomain(gainMedium.openPmdFields(context)):
-        if forward_mode and field.spec.name == "pointBeta":
-            continue
         if include_static or field.spec.name in DYNAMIC_FIELD_NAMES:
             yield field
     if include_static:
@@ -523,7 +502,7 @@ def _env_openpmd_python_paths():
 
 
 def _configured_openpmd_python_paths():
-    configured = getattr(_binding_config(), "HASE_OPENPMD_PYTHON_PACKAGE_DIR", "")
+    configured = getattr(_native_config(), "HASE_OPENPMD_PYTHON_PACKAGE_DIR", "")
     if configured:
         yield _openpmd_python_package_parent(Path(configured))
 
@@ -714,16 +693,7 @@ def _explicit_point_components(topology):
     }
 
 
-def _explicit_sample_point_components(topology):
-    points = np.asarray(topology.samplePoints, dtype=np.float64)
-    return {
-        "x": points[:, 0],
-        "y": points[:, 1],
-        "z": points[:, 2],
-    }
-
-
-def _write_explicit_static_topology(iteration, topology, *, include_sample_points=True):
+def _write_explicit_static_topology(iteration, topology):
     context = _explicit_topology_context(topology)
     record = iteration.meshes["core_" + CANONICAL_POINTS_SPEC.recordName]
     for component_name, values in _explicit_point_components(topology).items():
@@ -738,21 +708,6 @@ def _write_explicit_static_topology(iteration, topology, *, include_sample_point
     _record_metadata(record, CANONICAL_POINTS_SPEC)
     record.set_attribute("geometryParameters", "topology=explicit_tet4_volume")
     record.set_attribute("hasePrimitiveShape", list(CANONICAL_POINTS_SPEC.expectedShape(context)))
-
-    if include_sample_points:
-        sample_record = iteration.meshes["core_" + EXPLICIT_SAMPLE_POINTS_SPEC.recordName]
-        for component_name, values in _explicit_sample_point_components(topology).items():
-            _resetComponent(
-                sample_record,
-                component_name,
-                np.ascontiguousarray(values),
-                ["sample_point"],
-                _unit_dimension(_io(), EXPLICIT_SAMPLE_POINTS_SPEC.unitDimension),
-                EXPLICIT_SAMPLE_POINTS_SPEC.unitSI,
-            )
-        _record_metadata(sample_record, EXPLICIT_SAMPLE_POINTS_SPEC)
-        sample_record.set_attribute("geometryParameters", "topology=explicit_tet4_volume")
-        sample_record.set_attribute("hasePrimitiveShape", list(EXPLICIT_SAMPLE_POINTS_SPEC.expectedShape(context)))
 
     def backend_flat(values):
         return np.asarray(values).reshape(-1)
@@ -806,12 +761,8 @@ def _is_openpmd_calc_phi_ase(executable: Path):
 
 
 def _installed_calc_phi_ase_candidates():
-    try:
-        import HASEonGPU_Bindings
-    except ImportError:
-        return []
-
-    return [Path(path) / "calcPhiASE" for path in HASEonGPU_Bindings.__path__]
+    native_dir = Path(__file__).resolve().parents[1] / "_native"
+    return [native_dir / "calcPhiASE"]
 
 
 def _build_dir_candidates(root: Path):
@@ -835,7 +786,7 @@ def findCalcPhiAse():
     root = Path(__file__).resolve().parents[2]
     candidates = list(_installed_calc_phi_ase_candidates())
     for build_dir in _build_dir_candidates(root):
-        candidates.append(build_dir / "python" / "HASEonGPU_Bindings" / "calcPhiASE")
+        candidates.append(build_dir / "python" / "pyInclude" / "_native" / "calcPhiASE")
         candidates.append(build_dir / "calcPhiASE")
 
     for candidate in candidates:
@@ -844,7 +795,7 @@ def findCalcPhiAse():
 
     raise FileNotFoundError(
         "Could not find an openPMD calcPhiASE binary in the installed package or HASE build tree. "
-        "Build the Python package or set HASE_CALCPHIASE."
+        "Build the Python package, build calcPhiASE, or set HASE_CALCPHIASE."
     )
 
 
@@ -876,7 +827,7 @@ def _write_input_iteration(series, iteration_index, phiAse, gainMedium, crossSec
         topology = gainMedium.topology
         if not (hasattr(topology, "cellPointIndices") and hasattr(topology, "neighborCells")):
             raise TypeError("PhiASE openPMD transport requires a Tet4 VolumeTopology")
-        _write_explicit_static_topology(iteration, topology, include_sample_points=not _is_forward_mode(phiAse))
+        _write_explicit_static_topology(iteration, topology)
     else:
         iteration.set_attribute("haseStaticUpdate", False)
 

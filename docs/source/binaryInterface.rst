@@ -69,8 +69,7 @@ layout. Python-written series store arrays as openPMD ``Mesh`` records, but
 the unstructured extruded-prism topology encoded by ``core_points``,
 ``core_cells_connectivity``, ``core_cells_offsets``, and ``core_cells_types`` is
 HASE-defined. Static iterations include that topology; dynamic-only iterations
-contain only ``core_beta_volume`` plus ``core_point_beta`` and reuse the cached
-static topology.
+contain only ``core_beta_volume`` and reuse the cached static topology.
 
 ``--output-path``
 ^^^^^^^^^^^^^^^^^

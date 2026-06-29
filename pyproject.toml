@@ -60,20 +60,13 @@ Changelog = "https://github.com/computationalradiationphysics/haseongpu/releases
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}"
-wheel.packages = ["HASEonGPU_Bindings", "pyInclude"]
+wheel.packages = ["pyInclude"]
 
 [[tool.scikit-build.generate]]
 path = "HASEonGPU.py"
 template = """
 __version__ = "2.1.0"
-import HASEonGPU_Bindings
-from HASEonGPU_Bindings import *
 from pyInclude import *
-for _name in ("HostMesh", "ExperimentParameters", "ComputeParameters", "Mesh", "calcPhiASE"):
-    globals().pop(_name, None)
-del _name
-if hasattr(HASEonGPU_Bindings, "HostMesh"):
-    del HASEonGPU_Bindings.HostMesh
 """
 
 [tool.scikit-build.cmake]

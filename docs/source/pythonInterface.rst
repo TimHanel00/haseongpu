@@ -53,8 +53,8 @@ build the pinned openPMD provider itself.
 Compiler Runtime
 ----------------
 
-The Python extension is built with an ``$ORIGIN`` RPATH so libraries installed
-next to the wheel extension are preferred at import time. If you change the GCC
+The native runtime artifacts are built with an ``$ORIGIN`` RPATH so libraries installed
+next to the packaged binaries are preferred at runtime. If you change the GCC
 or C++ runtime version used to build HASEonGPU, rebuild and reinstall the wheel:
 
 .. code-block:: bash

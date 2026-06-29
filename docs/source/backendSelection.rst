@@ -66,12 +66,11 @@ and alpaka configuration as the simulation code.  It enumerates alpaka's
 enabled APIs and executors, filters them to backends for which a device can be
 created, and exposes the resulting names through a small C ABI.
 
-For Python builds, CMake copies this library into the build package next to the
-Python extension:
+For Python builds, CMake copies this library into the native runtime package:
 
 .. code-block:: text
 
-   build/python/HASEonGPU_Bindings/libHaseAlpakaBackendNames.so
+   build/python/pyInclude/_native/libHaseAlpakaBackendNames.so
 
 On macOS the filename ends in ``.dylib``.  On Windows it is
 ``HaseAlpakaBackendNames.dll``.
@@ -88,8 +87,8 @@ explicitly:
 
    cmake --build build --target HaseAlpakaBackendNames
 
-When the Python interface is built, the regular Python extension target also
-copies the helper library into the Python runtime package.
+When the Python interface is built, the native packaging hook also copies the
+helper library into the Python runtime package.
 
 
 Runtime backend selection
@@ -155,7 +154,7 @@ If importing ``AlpakaBackends`` raises an error about the backend-name library,
 the Python package can see the Python files but not the compiled helper
 library.  Build ``HaseAlpakaBackendNames`` and make sure the generated library
 is either installed with the Python package or present under
-``build/python/HASEonGPU_Bindings``.
+``build/python/pyInclude/_native``.
 
 The available APIs, device kinds, and executors are documented in the
 `alpaka cheatsheet <https://alpaka3.readthedocs.io/en/latest/basic/cheatsheet.html#accelerator-platform-and-device>`__.

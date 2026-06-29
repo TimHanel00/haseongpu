@@ -181,8 +181,7 @@ order and stored with ``axisLabels`` ``["flatIndex"]``; the original primitive
 axes and shape are retained in HASE metadata as ``haseAxes`` and
 ``hasePrimitiveShape``:
 
-* ``core_beta_volume`` for prism-centered excited-state fraction.
-* ``core_point_beta`` for point-level excited-state fraction.
+* ``core_beta_volume`` for cell-centered excited-state fraction.
 
 Static material and spectral records include ``core_cladding_cell_type``,
 ``core_refractive_index``, ``core_reflectivity``,
@@ -191,7 +190,7 @@ Static material and spectral records include ``core_cladding_cell_type``,
 
 The C++ backend writes result records under ``core_result_``:
 ``phi_ase``, ``mse``, ``total_rays``, and ``dndt_ase``. Result records use
-record-C layout with openPMD ``axisLabels`` ``["point", "level"]``.
+record-C layout with openPMD ``axisLabels`` ``["cell"]``.
 
 User-defined fields from ``GainMedium.defineField(...)`` or
 ``PrimitiveFieldSpec`` inheritance are serialized through the same scalar
@@ -234,16 +233,16 @@ An openPMD input series may contain multiple iterations.
 The first Python-written iteration includes ``haseStaticUpdate = true`` and
 contains topology, static material records, spectra, and dynamic fields.
 Later iterations default to ``haseStaticUpdate = false`` and contain only
-``core_beta_volume`` and ``core_point_beta``. The C++ parser caches the
-iteration-0 topology, material, spectra, and compute settings, then applies
-each dynamic-only iteration to that cached context.
+``core_beta_volume``. The C++ parser caches the iteration-0 topology, material,
+spectra, and compute settings, then applies each dynamic-only iteration to that
+cached context.
 
 After iteration 0, the parser's contract is intentionally dynamic-only:
-``core_beta_volume`` and ``core_point_beta`` are the only records that may
-change. Additional non-dynamic mesh records, ``haseStaticUpdate = true``, or
-changed HASE-known topology/material/spectral/compute attributes are rejected
-with an openPMD validation error. Repeating unchanged scalar attributes is
-accepted for compatibility, but does not update the cached static context.
+``core_beta_volume`` is the only record that may change. Additional non-dynamic
+mesh records, ``haseStaticUpdate = true``, or changed HASE-known
+topology/material/spectral/compute attributes are rejected with an openPMD
+validation error. Repeating unchanged scalar attributes is accepted for
+compatibility, but does not update the cached static context.
 
 This split is important for streaming or repeated ASE evaluations because the
 large static topology does not need to be rewritten for every dynamic state.

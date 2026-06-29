@@ -8,7 +8,6 @@
 
 import ctypes
 import ctypes.util
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -19,13 +18,6 @@ def _libraryNames():
     if sys.platform == "darwin":
         return ("libHaseAlpakaBackendNames.dylib",)
     return ("libHaseAlpakaBackendNames.so",)
-
-
-def _bindingPackageDirs():
-    spec = importlib.util.find_spec("HASEonGPU_Bindings")
-    if spec is None or spec.submodule_search_locations is None:
-        return ()
-    return tuple(Path(path) for path in spec.submodule_search_locations)
 
 
 def _candidatePaths():
@@ -39,26 +31,23 @@ def _candidatePaths():
         seen.add(normalized)
         return path
 
-    for packageDir in _bindingPackageDirs():
-        for name in _libraryNames():
-            candidate = yieldPath(packageDir / name)
-            if candidate is not None:
-                yield candidate
-
     for name in _libraryNames():
+        candidate = yieldPath(moduleDir.parent / "_native" / name)
+        if candidate is not None:
+            yield candidate
         candidate = yieldPath(moduleDir / name)
         if candidate is not None:
             yield candidate
 
     for parent in moduleDir.parents:
         for name in _libraryNames():
-            candidate = yieldPath(parent / "build" / "python" / "HASEonGPU_Bindings" / name)
+            candidate = yieldPath(parent / "build" / "python" / "pyInclude" / "_native" / name)
             if candidate is not None:
                 yield candidate
         buildRoot = parent / "build"
         if not buildRoot.is_dir():
             continue
-        for bindingDir in sorted(buildRoot.glob("*/python/HASEonGPU_Bindings")):
+        for bindingDir in sorted(buildRoot.glob("*/python/pyInclude/_native")):
             for name in _libraryNames():
                 candidate = yieldPath(bindingDir / name)
                 if candidate is not None:

@@ -103,7 +103,7 @@ option(
 )
 option(
     HASE_ENABLE_PYTHON
-    "Build the HASEonGPU Python extension and installable Python package artifacts"
+    "Build installable Python frontend artifacts and native openPMD runtime helpers"
     ON
 )
 option(HASE_CUDA_FLUSHTOZERO "Set flush to zero for GPU" OFF)
