@@ -42,7 +42,6 @@ VOLUME_CELLS = np.array(
     dtype=np.uint32,
 )
 VOLUME_BETA = np.array([0.11, 0.21, 0.31], dtype=np.float64)
-VOLUME_POINT_BETA = np.array([100.0, 110.0, 120.0], dtype=np.float64)
 
 MESH_FIELD_VALUES = {
     "points": np.array([0.0, 1.5, 0.25, 2.25, -0.75, 0.0, -0.5, 1.25, 2.5, 3.75], dtype=np.float64),
@@ -56,7 +55,6 @@ MESH_FIELD_VALUES = {
     "cellNormalY": np.array([-0.10, -0.40, -0.70, -0.20, -0.50, -0.80, -0.30, -0.60, -0.90], dtype=np.float64),
     "surface": np.array([1.25, 2.50, 3.75], dtype=np.float32),
     "betaVolume": np.array([0.11, 0.21, 0.31, 0.12, 0.22, 0.32, 0.13, 0.23, 0.33, 0.14, 0.24, 0.34, 0.15, 0.25, 0.35], dtype=np.float64),
-    "pointBeta": np.array([100.0 + 10.0 * point + level for level in range(6) for point in range(5)], dtype=np.float64),
     "claddingCellType": np.array([0, 2, 1], dtype=np.uint32),
     "refractiveIndex": np.array([1.80, 1.20, 1.65, 1.05], dtype=np.float32),
     "reflectivity": np.array([0.01, 0.03, 0.05, 0.02, 0.04, 0.06], dtype=np.float32),
@@ -88,7 +86,6 @@ SCALAR_RECORD_SPECS = {
     "cell_normal_y": "cellNormalY",
     "surface": "surface",
     "beta_volume": "betaVolume",
-    "point_beta": "pointBeta",
     "cladding_cell_type": "claddingCellType",
     "refractive_index": "refractiveIndex",
     "reflectivity": "reflectivity",
@@ -106,7 +103,6 @@ def asymmetric_topology():
 def asymmetric_medium():
     return GainMedium(asymmetric_topology()).withPhysicalProperties(
         betaVolume=backendFlat(VOLUME_BETA),
-        betaCells=backendFlat(VOLUME_POINT_BETA),
         claddingCellTypes=MESH_FIELD_VALUES["claddingCellType"],
         refractiveIndices=MESH_FIELD_VALUES["refractiveIndex"],
         reflectivities=backendFlat(MESH_FIELD_VALUES["reflectivity"]),
@@ -135,14 +131,15 @@ def asymmetric_phi_ase():
         mseThreshold=0.25,
         repetitions=1,
         adaptiveSteps=1,
-        useReflections=True,
+        useReflections=False,
         backend=_launch_backend(),
         parallelMode="single",
         numDevices=1,
         minSampleRange=0,
         maxSampleRange=0,
         rngSeed=1234,
-        propagationMode="backward",
+        propagationMode="forward",
+        forwardRayLength=1.0,
     )
 
 
@@ -196,7 +193,8 @@ def launch_smoke_phi_ase(*, parallel_mode="single"):
         minSampleRange=0,
         maxSampleRange=0,
         rngSeed=1234,
-        propagationMode="backward",
+        propagationMode="forward",
+        forwardRayLength=1.0,
     )
 
 
@@ -235,7 +233,6 @@ def asymmetric_mesh():
         triangleNormalsY=derived["triangleNormalsY"],
         triangleSurfaces=derived["triangleSurfaces"],
         betaVolume=MESH_FIELD_VALUES["betaVolume"],
-        betaCells=MESH_FIELD_VALUES["pointBeta"],
         claddingCellTypes=MESH_FIELD_VALUES["claddingCellType"],
         refractiveIndices=MESH_FIELD_VALUES["refractiveIndex"],
         reflectivities=MESH_FIELD_VALUES["reflectivity"],
@@ -254,7 +251,6 @@ def _field_context():
 def _transport_scalar_record_values():
     return {
         "beta_volume": VOLUME_BETA,
-        "point_beta": VOLUME_POINT_BETA,
         "cladding_cell_type": MESH_FIELD_VALUES["claddingCellType"],
         "refractive_index": MESH_FIELD_VALUES["refractiveIndex"],
         "reflectivity": MESH_FIELD_VALUES["reflectivity"],
@@ -278,7 +274,6 @@ def _mesh_field_values(mesh):
         "cellNormalY": np.asarray(mesh.triangleNormalsY),
         "surface": np.asarray(mesh.triangleSurfaces),
         "betaVolume": np.asarray(mesh.betaVolume),
-        "pointBeta": np.asarray(mesh.betaCells),
         "claddingCellType": np.asarray(mesh.claddingCellTypes),
         "refractiveIndex": np.asarray(mesh.refractiveIndices),
         "reflectivity": np.asarray(mesh.reflectivities),
@@ -296,7 +291,6 @@ def _scalar_record_values(mesh):
         "cell_normal_y": values["cellNormalY"],
         "surface": values["surface"],
         "beta_volume": values["betaVolume"],
-        "point_beta": values["pointBeta"],
         "cladding_cell_type": values["claddingCellType"],
         "refractive_index": values["refractiveIndex"],
         "reflectivity": values["reflectivity"],
@@ -1064,7 +1058,7 @@ def test_openPmdApiCandidatePathsIncludeConfiguredProvider(monkeypatch, tmp_path
     monkeypatch.delenv("HASE_OPENPMD_PYTHON_PACKAGE_DIR", raising=False)
     monkeypatch.setattr(
         transport,
-        "_binding_config",
+        "_native_config",
         lambda: SimpleNamespace(HASE_OPENPMD_PYTHON_PACKAGE_DIR=str(configured)),
     )
 
@@ -1080,7 +1074,7 @@ def test_openPmdApiUsesRuntimeOverride(monkeypatch, tmp_path):
     monkeypatch.setenv("HASE_OPENPMD_PYTHONPATH", str(runtime_package))
     monkeypatch.setattr(
         transport,
-        "_binding_config",
+        "_native_config",
         lambda: SimpleNamespace(HASE_OPENPMD_PYTHON_PACKAGE_DIR=str(configured)),
     )
 
@@ -1127,7 +1121,7 @@ def test_inputSeriesWritesContract(contract_input):
     assert iteration.get_attribute("crystal_t_fluo") == pytest.approx(1.75)
     assert iteration.get_attribute("spectral_resolution") == 3
     assert iteration.get_attribute("rng_seed") == 1234
-    assert iteration.get_attribute("propagation_mode") == "backward"
+    assert iteration.get_attribute("propagation_mode") == "forward"
 
     points = iteration.meshes["core_points"]
     assert points.get_attribute("haseTransportVersion") == HASE_TRANSPORT_VERSION
@@ -1161,14 +1155,8 @@ def test_inputSeriesWritesContract(contract_input):
         np.testing.assert_array_equal(values, expected.astype(spec.dtypeObject, copy=False))
         _assert_hase_metadata(record, spec, explicit_context)
 
-    sample_points = iteration.meshes["core_sample_points"]
-    np.testing.assert_array_equal(_read_component(series, sample_points["x"]), topology.samplePoints[:, 0])
-    np.testing.assert_array_equal(_read_component(series, sample_points["y"]), topology.samplePoints[:, 1])
-    np.testing.assert_array_equal(_read_component(series, sample_points["z"]), topology.samplePoints[:, 2])
-
     dynamic_specs = {
         "beta_volume": (transport.EXPLICIT_BETA_VOLUME_SPEC, VOLUME_BETA),
-        "point_beta": (transport.EXPLICIT_POINT_BETA_SPEC, VOLUME_POINT_BETA),
         "cladding_cell_type": (fieldSpec("claddingCellType"), MESH_FIELD_VALUES["claddingCellType"]),
         "refractive_index": (fieldSpec("refractiveIndex"), MESH_FIELD_VALUES["refractiveIndex"]),
         "reflectivity": (fieldSpec("reflectivity"), MESH_FIELD_VALUES["reflectivity"]),
@@ -1243,7 +1231,7 @@ def test_inputSeriesOmitsStaticTopology(tmp_path):
     assert "core_cells_connectivity" in first.meshes
     assert "core_points" not in second.meshes
     assert "core_cells_connectivity" not in second.meshes
-    assert sorted(second.meshes) == ["core_beta_volume", "core_point_beta"]
+    assert sorted(second.meshes) == ["core_beta_volume"]
     series.close()
 
 
@@ -1263,10 +1251,10 @@ def test_cppParserRoundTripsPythonWriter(contract_input, tmp_path):
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
     result = transport.read_result(output)
-    expected_phi = np.array([0.5 + i for i in range(30)], dtype=np.float32)
-    expected_mse = np.array([1000.0 + i for i in range(30)], dtype=np.float64)
-    expected_total_rays = np.array([200 + i for i in range(30)], dtype=np.uint32)
-    expected_dndt_ase = np.array([-10.0 - i for i in range(30)], dtype=np.float64)
+    expected_phi = np.array([0.5 + i for i in range(3)], dtype=np.float32)
+    expected_mse = np.array([1000.0 + i for i in range(3)], dtype=np.float64)
+    expected_total_rays = np.array([200 + i for i in range(3)], dtype=np.uint32)
+    expected_dndt_ase = np.array([-10.0 - i for i in range(3)], dtype=np.float64)
     np.testing.assert_array_equal(result.phiAse, expected_phi)
     np.testing.assert_array_equal(result.mse, expected_mse)
     np.testing.assert_array_equal(result.totalRays, expected_total_rays)
@@ -1284,12 +1272,12 @@ def test_cppParserRoundTripsPythonWriter(contract_input, tmp_path):
     for name in ["phi_ase", "mse", "total_rays", "dndt_ase"]:
         record = iteration.meshes["core_result_" + name]
         assert record.get_attribute("haseTransportVersion") == HASE_TRANSPORT_VERSION
-        assert record.get_attribute("haseEntity") == "point_level"
-        assert _attribute_list(record.get_attribute("haseAxes")) == ["point", "level"]
+        assert record.get_attribute("haseEntity") == "cell"
+        assert _attribute_list(record.get_attribute("haseAxes")) == ["cell"]
         assert record.get_attribute("haseLayoutOrder") == "recordC"
-        assert _attribute_list(record.get_attribute("hasePrimitiveShape")) == [5, 6]
+        assert _attribute_list(record.get_attribute("hasePrimitiveShape")) == [3]
         assert record.get_attribute("haseUnit") == expected_units[name]
-        assert list(record.axis_labels) == ["point", "level"]
+        assert list(record.axis_labels) == ["cell"]
     series.close()
 
 
@@ -1331,12 +1319,8 @@ def _target_uses_openpmd_main(build_dir):
 
 
 def _installed_calc_phi_ase_candidates():
-    try:
-        import HASEonGPU_Bindings
-    except ImportError:
-        return []
-
-    return [Path(path) / "calcPhiASE" for path in HASEonGPU_Bindings.__path__]
+    native_dir = Path(transport.__file__).resolve().parents[1] / "_native"
+    return [native_dir / "calcPhiASE"]
 
 
 def _calc_phi_ase_candidates():
@@ -1345,7 +1329,7 @@ def _calc_phi_ase_candidates():
         yield Path(env)
     yield from _installed_calc_phi_ase_candidates()
     for build_dir in _build_dir_candidates():
-        yield build_dir / "python" / "HASEonGPU_Bindings" / "calcPhiASE"
+        yield build_dir / "python" / "pyInclude" / "_native" / "calcPhiASE"
         yield build_dir / "calcPhiASE"
 
 

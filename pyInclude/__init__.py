@@ -6,12 +6,10 @@
 
 """Public Python convenience exports for HASEonGPU."""
 
-import HASEonGPU_Bindings
-
 __version__ = "2.1.0"
 
+
 from .alpakaUtils import AlpakaBackends
-from .calcPhiASE import calcPhiASE
 from .openpmd import (
     BaseGroup,
     BaseSchema,
@@ -47,5 +45,3 @@ from .timeIntegration import (
     RungeKutta4,
     TimeIntegrationSolver,
 )
-
-Mesh = HASEonGPU_Bindings.HostMesh

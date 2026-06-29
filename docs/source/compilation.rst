@@ -94,14 +94,15 @@ For reproducible builds on different systems, specifying the CUDA architecture i
 
 * Default: ``ON``
 * Description:
-  Controls whether the Python extension and package helpers are built. Turn
-  this off only for command-line-only C++ builds. For normal Python
-  installation and usage, see :doc:`Python Interface Guide <pythonInterface>`.
+  Controls whether the Python frontend package and native openPMD runtime
+  helpers are built. Turn this off only for command-line-only C++ builds. For
+  normal Python installation and usage, see :doc:`Python Interface Guide
+  <pythonInterface>`.
 
 * Values:
 
   * ``OFF``: build only the C++ project and binary interface
-  * ``ON``: build the Python interface
+  * ``ON``: build the Python interface and native runtime helper artifacts
 
 ``HASE_BUILD_RELEASE``
 ^^^^^^^^^^^^^^^^^^^^^^
