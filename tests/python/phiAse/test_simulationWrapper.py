@@ -238,67 +238,50 @@ def testPhiAseIntervalOpenPmdSessionUsesOneShotTransport(
     assert captured["openpmdSession"] is None
 
 
-def testSimulationRunStepsKeepsPersistentOpenPmdSessionUntilIntervalCompletes(monkeypatch):
-    events = []
-    openpmdSession = object()
+def testSimulationRunStepsRejectsExternalOpenPmdSessionOwnership():
     simulation = object.__new__(simulation_module.Simulation)
-    simulation.phiASE = SimpleNamespace(
-        openpmdBackend=None,
-        openStream=lambda: events.append(("openStream",)) or openpmdSession,
-        closeStream=lambda: events.append(("closeStream",)),
-    )
-    simulation._openpmdSession = None
 
-    def fakeStep(self, *, openpmdSession=None):
-        events.append(("step", openpmdSession))
-
-    monkeypatch.setattr(simulation_module.Simulation, "step", fakeStep)
-
-    simulation_module.Simulation.runSteps(
-        simulation,
-        2,
-        openpmdSession="persistent",
-    )
-
-    assert events == [
-        ("openStream",),
-        ("step", openpmdSession),
-        ("step", openpmdSession),
-        ("closeStream",),
-    ]
+    try:
+        simulation_module.Simulation.runSteps(
+            simulation,
+            2,
+            openpmdSession="persistent",
+        )
+    except ValueError as exc:
+        assert "owns its C++ openPMD lifetime" in str(exc)
+    else:
+        raise AssertionError("compiled Simulation accepted external openPMD session ownership")
 
 
-def testSimulationRunStepsDefaultsToPersistentOpenPmdSessionForStreamingBackend(monkeypatch):
-    events = []
-    openpmdSession = object()
-    simulation = object.__new__(simulation_module.Simulation)
-    simulation.phiASE = SimpleNamespace(
-        openpmdBackend="adios-sst",
-        openStream=lambda **kwargs: events.append(("openStream", kwargs)) or openpmdSession,
-        closeStream=lambda: events.append(("closeStream",)),
-    )
-    simulation._openpmdSession = None
+def testSimulationRunStepsPassesStreamingBackendToCompiledTransport(monkeypatch):
     captured = {}
+    simulation = object.__new__(simulation_module.Simulation)
+    simulation.phiASE = SimpleNamespace(openpmdBackend="adios-sst")
+    simulation.pump = SimpleNamespace(getProperty=lambda name: None)
+    simulation.timeStep = 1e-5
+    simulation._initialized = True
+    simulation._beforeStepCallbacks = []
+    simulation._callbacks = []
+    simulation._step = 0
+    simulation._time = 0.0
 
-    def fakeStep(self, *, openpmdSession=None):
-        events.append(("step", openpmdSession))
+    def fake_run_simulation(simulation_arg, *, steps, pumpSteps=None, transport=None):
+        captured["simulation"] = simulation_arg
+        captured["steps"] = steps
+        captured["pumpSteps"] = pumpSteps
+        captured["transport"] = transport
+        return []
 
-    monkeypatch.setattr(
-        simulation_module.transport,
-        "_backend_spec",
-        lambda backend=None: captured.update({"backend": backend}) or SimpleNamespace(streaming=True),
-    )
-    monkeypatch.setattr(simulation_module.Simulation, "step", fakeStep)
+    monkeypatch.setattr(simulation_module.transport, "runSimulation", fake_run_simulation)
 
     simulation_module.Simulation.runSteps(simulation, 1)
 
-    assert events == [
-        ("openStream", {}),
-        ("step", openpmdSession),
-        ("closeStream",),
-    ]
-    assert captured["backend"] == "adios-sst"
-
+    assert captured == {
+        "simulation": simulation,
+        "steps": 1,
+        "pumpSteps": None,
+        "transport": "adios-sst",
+    }
 
 def testPhiAseNPerNodeLoadsFromArgsAndConfig():
     phiAse = PhiASE({"compute": {"nPerNode": 3}})

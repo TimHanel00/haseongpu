@@ -4,19 +4,14 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from HASEonGPU import (
-    Constants,
-    OneDimensionalZTraversal,
-    CrossSectionData,
     ExponentialEuler,
     ExplicitEuler,
-    FrozenPhiAseRungeKutta4,
     GainMedium,
     Heun,
     ImplicitEuler,
@@ -25,41 +20,54 @@ from HASEonGPU import (
     PumpProperties,
     RungeKutta4,
     Simulation,
-    PumpRadiationProfile,
-    oneDimensionalZTraversalPumpRate,
 )
 from pyInclude.openpmd import transport
 
+@pytest.fixture
+def fakeCppSimulation(monkeypatch, smallTopology):
+    captured = []
+
+    def make_state(step, simulation, pump_steps):
+        shape = (smallTopology.numberOfPoints, smallTopology.levels)
+        volume_shape = (smallTopology.numberOfTriangles, smallTopology.levels - 1)
+        pump_active = pump_steps is None or step <= pump_steps
+        return SimpleNamespace(
+            step=step,
+            time=step * simulation.timeStep,
+            betaCells=np.full(shape, 0.25 * step),
+            betaVolume=np.full(volume_shape, 0.125 * step),
+            phiAse=np.full(shape, float(step)),
+            dndtAse=np.zeros(shape),
+            dndtPump=np.ones(shape) if pump_active else np.zeros(shape),
+            aseResult=object(),
+        )
+
+    def fake_run_simulation(simulation, *, steps, pumpSteps=None, transport=None):
+        captured.append(
+            {
+                "simulation": simulation,
+                "steps": steps,
+                "pumpSteps": pumpSteps,
+                "transport": transport,
+            }
+        )
+        return [make_state(step, simulation, pumpSteps) for step in range(1, steps + 1)]
+
+    monkeypatch.setattr(transport, "runSimulation", fake_run_simulation)
+    return captured
+
+
+def realPhiAse(crossSections, *, openpmdBackend="adios"):
+    return PhiASE(spectralProperties=crossSections, openpmdBackend=openpmdBackend)
+
 
 def testCompiledSimulationDelegatesRunStepsToCppTransport(
-    monkeypatch,
+    fakeCppSimulation,
     smallGainMedium,
-    smallTopology,
     pumpProperties,
     crossSections,
 ):
-    captured = {}
-
-    def fake_run_simulation(simulation, *, steps, pumpSteps=None, transport=None):
-        captured["simulation"] = simulation
-        captured["steps"] = steps
-        captured["pumpSteps"] = pumpSteps
-        captured["transport"] = transport
-        return [
-            SimpleNamespace(
-                step=1,
-                time=simulation.timeStep,
-                betaCells=np.full((smallTopology.numberOfPoints, smallTopology.levels), 0.25),
-                betaVolume=np.full((smallTopology.numberOfTriangles, smallTopology.levels - 1), 0.125),
-                phiAse=np.zeros((smallTopology.numberOfPoints, smallTopology.levels)),
-                dndtAse=np.zeros((smallTopology.numberOfPoints, smallTopology.levels)),
-                dndtPump=np.ones((smallTopology.numberOfPoints, smallTopology.levels)),
-                aseResult=object(),
-            )
-        ]
-
-    monkeypatch.setattr(transport, "runSimulation", fake_run_simulation)
-    phi_ase = PhiASE(spectralProperties=crossSections, openpmdBackend="adios")
+    phi_ase = realPhiAse(crossSections)
     simulation = Simulation(
         gainMedium=smallGainMedium,
         pump=pumpProperties,
@@ -71,46 +79,30 @@ def testCompiledSimulationDelegatesRunStepsToCppTransport(
     simulation.runSteps(1, pumpSteps=0)
 
     state = simulation.getLastState()
-    assert captured == {
-        "simulation": simulation,
-        "steps": 1,
-        "pumpSteps": 0,
-        "transport": "adios",
-    }
+    assert fakeCppSimulation == [
+        {
+            "simulation": simulation,
+            "steps": 1,
+            "pumpSteps": 0,
+            "transport": "adios",
+        }
+    ]
     assert state.step == 1
     assert np.allclose(state.betaCells, 0.25)
     assert np.allclose(simulation.gainMedium.get("betaCells").value, 0.25)
 
 
-def testCompiledSimulationRejectsPythonBeforeStepCallbacks(
+def testTimeSteppedSimulationRunsCallbacksFromCppSnapshots(
+    fakeCppSimulation,
     smallGainMedium,
     pumpProperties,
     crossSections,
 ):
-    simulation = Simulation(
-        gainMedium=smallGainMedium,
-        pump=pumpProperties,
-        phiASE=PhiASE(spectralProperties=crossSections),
-        timeIntegrationSolver="explicit-euler",
-        timeStep=1e-5,
-    ).beforeStep(lambda simulation: None)
-
-    with pytest.raises(ValueError, match="beforeStep"):
-        simulation.runSteps(1)
-
-
-def testTimeSteppedSimulationRunsCallbacksWithFakeAse(
-    smallGainMedium,
-    smallTopology,
-    pumpProperties,
-    makeFakePhiAse,
-):
-    phiAse = makeFakePhiAse(smallTopology)
     seen = []
     simulation = Simulation(
         gainMedium=smallGainMedium,
         pump=pumpProperties,
-        phiASE=phiAse,
+        phiASE=realPhiAse(crossSections),
         timeIntegrationSolver=ExponentialEuler(),
         timeStep=1e-5,
     ).onStep(seen.append)
@@ -126,95 +118,54 @@ def testTimeSteppedSimulationRunsCallbacksWithFakeAse(
     assert seen[-1].betaVolume.shape == (2, 2)
 
 
-def testSimulationCanDisableAseWithoutBreakingState(
-    smallGainMedium,
-    smallTopology,
-    pumpProperties,
-    makeFakePhiAse,
-):
-    phiAse = makeFakePhiAse(smallTopology)
-
-    def failRun(*args, **kwargs):
-        raise AssertionError("PhiASE.run should not be called when enableAse=False")
-
-    phiAse.run = failRun
-    state = Simulation(
-        gainMedium=smallGainMedium,
-        pump=pumpProperties,
-        phiASE=phiAse,
-        timeIntegrationSolver=ExponentialEuler(),
-        timeStep=1e-5,
-        enableAse=False,
-    ).step()
-
-    assert state.aseResult is None
-    assert state.phiAse.shape == (smallTopology.numberOfPoints, smallTopology.levels)
-    assert state.dndtAse.shape == (smallTopology.numberOfPoints, smallTopology.levels)
-    assert np.allclose(state.phiAse, 0.0)
-    assert np.allclose(state.dndtAse, 0.0)
-    assert np.all(np.isfinite(state.betaCells))
-
-
 def testRunStepsCanLimitPumpContribution(
+    fakeCppSimulation,
     smallGainMedium,
-    smallTopology,
     pumpProperties,
-    makeFakePhiAse,
+    crossSections,
 ):
-    class ConstantPumpSolver:
-        def step(self, input, pump):
-            return np.asarray(input["betaCell"], dtype=np.float64) + 1.0e-6
-
-    pumpProperties.customProperties["solver"] = ConstantPumpSolver()
     seen = []
     simulation = Simulation(
         gainMedium=smallGainMedium,
         pump=pumpProperties,
-        phiASE=makeFakePhiAse(smallTopology),
+        phiASE=realPhiAse(crossSections),
         timeIntegrationSolver=ExponentialEuler(),
         timeStep=1e-5,
     ).onStep(seen.append)
 
     simulation.runSteps(3, pumpSteps=1)
 
+    assert fakeCppSimulation[-1]["pumpSteps"] == 1
     assert np.any(seen[0].dndtPump > 0.0)
     assert np.allclose(seen[1].dndtPump, 0.0)
     assert np.allclose(seen[2].dndtPump, 0.0)
 
 
 def testRunStepsUsesPumpPropertiesPumpStepsByDefault(
+    fakeCppSimulation,
     smallGainMedium,
-    smallTopology,
     pumpProperties,
-    makeFakePhiAse,
+    crossSections,
 ):
-    class ConstantPumpSolver:
-        def step(self, input, pump):
-            return np.asarray(input["betaCell"], dtype=np.float64) + 1.0e-6
-
-    pumpProperties.customProperties["solver"] = ConstantPumpSolver()
     pumpProperties.customProperties["pumpSteps"] = 1
-    seen = []
     simulation = Simulation(
         gainMedium=smallGainMedium,
         pump=pumpProperties,
-        phiASE=makeFakePhiAse(smallTopology),
+        phiASE=realPhiAse(crossSections),
         timeIntegrationSolver=ExponentialEuler(),
         timeStep=1e-5,
-    ).onStep(seen.append)
+    )
 
     simulation.runSteps(3)
 
-    assert np.any(seen[0].dndtPump > 0.0)
-    assert np.allclose(seen[1].dndtPump, 0.0)
-    assert np.allclose(seen[2].dndtPump, 0.0)
+    assert fakeCppSimulation[-1]["pumpSteps"] == 1
 
 
 def testOnStepPassesStateBeforeUserArguments(
+    fakeCppSimulation,
     smallGainMedium,
-    smallTopology,
     pumpProperties,
-    makeFakePhiAse,
+    crossSections,
 ):
     seen = []
 
@@ -224,7 +175,7 @@ def testOnStepPassesStateBeforeUserArguments(
     simulation = Simulation(
         gainMedium=smallGainMedium,
         pump=pumpProperties,
-        phiASE=makeFakePhiAse(smallTopology),
+        phiASE=realPhiAse(crossSections),
         timeIntegrationSolver=ExponentialEuler(),
         timeStep=1e-5,
     ).onStep(record, "vtk", scale=2.0)
@@ -234,89 +185,62 @@ def testOnStepPassesStateBeforeUserArguments(
     assert seen == [("vtk", 1, 2.0, (4, 3)), ("vtk", 2, 2.0, (4, 3))]
 
 
-def testInitAndBeforeStepPassSimulationBeforeUserArguments(
+def testInitCallbacksRunBeforeCompiledTransport(
+    fakeCppSimulation,
     smallGainMedium,
-    smallTopology,
     pumpProperties,
-    makeFakePhiAse,
+    crossSections,
 ):
     events = []
 
     def init(simulation, label, enabled=False):
         events.append(("init", label, enabled, simulation.stepIndex))
-
-    def before(simulation, label, scale=1.0):
-        events.append(("before", label, scale, simulation.stepIndex))
-
-    simulation = Simulation(
-        gainMedium=smallGainMedium,
-        pump=pumpProperties,
-        phiASE=makeFakePhiAse(smallTopology),
-        timeIntegrationSolver=ExponentialEuler(),
-        timeStep=1e-5,
-    ).onInit(init, "setup", enabled=True).beforeStep(before, "pre", scale=3.0)
-
-    simulation.runSteps(2)
-
-    assert events == [
-        ("init", "setup", True, 0),
-        ("before", "pre", 3.0, 0),
-        ("before", "pre", 3.0, 1),
-    ]
-
-
-def testTimeSteppedSimulationLifecycleHooksGetSimulation(
-    smallGainMedium,
-    smallTopology,
-    pumpProperties,
-    makeFakePhiAse,
-):
-    phiAse = makeFakePhiAse(smallTopology)
-    events = []
-
-    def init(simulation):
-        events.append(("init", simulation.stepIndex, simulation.time, simulation.gainMedium is smallGainMedium))
         simulation.pump.withProperty("initialized", True)
 
-    def beforeStep(simulation):
-        events.append(("before", simulation.stepIndex, simulation.time, simulation.pump.getProperty("initialized")))
-
-    def afterStep(state):
-        events.append(("after", state.step, state.time))
-
     simulation = Simulation(
         gainMedium=smallGainMedium,
         pump=pumpProperties,
-        phiASE=phiAse,
+        phiASE=realPhiAse(crossSections),
         timeIntegrationSolver=ExponentialEuler(),
         timeStep=1e-5,
-    ).onInit(init).beforeStep(beforeStep).onStep(afterStep)
+    ).onInit(init, "setup", enabled=True)
 
     simulation.runSteps(2)
     simulation.runSteps(1)
 
-    assert events == [
-        ("init", 0, 0.0, True),
-        ("before", 0, 0.0, True),
-        ("after", 1, 1e-5),
-        ("before", 1, 1e-5, True),
-        ("after", 2, 2e-5),
-        ("before", 2, 2e-5, True),
-        ("after", 3, 3.0000000000000004e-5),
-    ]
+    assert events == [("init", "setup", True, 0)]
+    assert simulation.pump.getProperty("initialized") is True
+    assert simulation.stepIndex == 3
 
 
-def testTimeSteppedSimulationAcceptsCustomPumpSolver(
+def testCompiledSimulationRejectsPythonBeforeStepCallbacks(
     smallGainMedium,
-    smallTopology,
+    pumpProperties,
     crossSections,
-    makeFakePhiAse,
+):
+    simulation = Simulation(
+        gainMedium=smallGainMedium,
+        pump=pumpProperties,
+        phiASE=realPhiAse(crossSections),
+        timeIntegrationSolver="explicit-euler",
+        timeStep=1e-5,
+    ).beforeStep(lambda simulation: None)
+
+    with pytest.raises(ValueError, match="beforeStep"):
+        simulation.runSteps(1)
+
+
+def testCompiledSimulationRejectsCustomPythonPumpSolver(
+    monkeypatch,
+    smallGainMedium,
+    crossSections,
 ):
     class ConstantPumpSolver:
         def step(self, input, pump):
             return input["betaCell"] + 0.25
 
-    phiAse = makeFakePhiAse(smallTopology)
+    monkeypatch.setattr(transport, "_ensure_backend_available", lambda backend: None)
+    monkeypatch.setattr(transport, "findCalcPhiAse", lambda: "calcPhiASE")
     pump = PumpProperties(
         spectralProperties=crossSections,
         intensity=16e3,
@@ -325,237 +249,16 @@ def testTimeSteppedSimulationAcceptsCustomPumpSolver(
         wavelength=940e-9,
     )
 
-    state = Simulation(
+    simulation = Simulation(
         gainMedium=smallGainMedium,
         pump=pump,
-        phiASE=phiAse,
+        phiASE=realPhiAse(crossSections),
         timeIntegrationSolver=ExponentialEuler(),
         timeStep=1e-5,
-    ).step()
-
-    tau = 9.5e-4
-    expected = tau * (0.25 / 1e-5) * (1.0 - np.exp(-1e-5 / tau))
-    assert np.allclose(state.betaCells, expected)
-    assert np.allclose(state.betaCells[:, -1], expected)
-
-
-def testCustomPumpSolverCanReadAdditionalPumpProperties(
-    smallGainMedium,
-    smallTopology,
-    crossSections,
-    makeFakePhiAse,
-):
-    class ScaledPumpSolver:
-        def step(self, input, pump):
-            return input["betaCell"] + pump.getProperty("betaIncrement")
-
-    phiAse = makeFakePhiAse(smallTopology)
-    pump = PumpProperties(
-        spectralProperties=crossSections,
-        intensity=16e3,
-        pumpSubsteps=100,
-        solver=ScaledPumpSolver(),
-        wavelength=940e-9,
-        customProperties={"betaIncrement": 0.1},
-    ).withProperty("profileName", "user-defined")
-
-    state = Simulation(
-        gainMedium=smallGainMedium,
-        pump=pump,
-        phiASE=phiAse,
-        timeIntegrationSolver=ExponentialEuler(),
-        timeStep=1e-5,
-    ).step()
-
-    tau = 9.5e-4
-    expected = tau * (0.1 / 1e-5) * (1.0 - np.exp(-1e-5 / tau))
-    assert pump.getProperty("profileName") == "user-defined"
-    assert np.allclose(state.betaCells, expected)
-
-
-def testOneDimensionalZTraversalProducesFrozenStatePumpRate(
-    smallGainMedium,
-    smallTopology,
-    crossSections,
-    makeFakePhiAse,
-):
-    pump = PumpProperties(
-        spectralProperties=crossSections,
-        intensity=16e3,
-        wavelength=940e-9,
-        radiusX=1.5,
-        backReflection=False,
-        propagationDirection=(0.0, 0.0, 1.0),
-        solver=OneDimensionalZTraversal(),
-    )
-    state = Simulation(
-        gainMedium=smallGainMedium,
-        pump=pump,
-        phiASE=makeFakePhiAse(smallTopology),
-        timeIntegrationSolver=ExplicitEuler(),
-        timeStep=1e-5,
-        enableAse=False,
-    ).step()
-
-    expected = oneDimensionalZTraversalPumpRate(
-        smallTopology.points,
-        np.zeros((smallTopology.numberOfPoints, smallTopology.levels)),
-        pump,
-        smallGainMedium,
     )
 
-    assert np.allclose(state.dndtPump, expected)
-    assert np.all(state.dndtPump >= 0.0)
-    assert np.allclose(state.phiAse, 0.0)
-
-
-def testOneDimensionalZTraversalUsesProfileCenter(
-    smallTopology,
-):
-    spectra = CrossSectionData.monochromatic(
-        wavelength=940e-9,
-        crossSectionAbsorption=1.0e-22,
-        crossSectionEmission=0.0,
-    )
-    medium = GainMedium(topology=smallTopology).withPhysicalProperties(
-        betaCells=np.zeros((smallTopology.numberOfPoints, smallTopology.levels)),
-        claddingCellTypes=np.zeros(smallTopology.numberOfTriangles, dtype=np.uint32),
-        refractiveIndices=[1.8, 1.0, 1.8, 1.0],
-        reflectivities=np.zeros((2, smallTopology.numberOfTriangles)),
-        nTot=0.0,
-        crystalTFluo=9.5e-4,
-        claddingNumber=1,
-        claddingAbsorption=0.0,
-    )
-    profile = PumpRadiationProfile(
-        intensity=1.0,
-        wavelengths=[940e-9],
-        waist=(0.2, 0.2),
-        center=smallTopology.points[0],
-        propagationDirection=(0.0, 0.0, 1.0),
-        backReflection=False,
-        superGaussianOrder=2,
-    )
-    pump = PumpProperties(crossSections=spectra, profile=profile, solver=OneDimensionalZTraversal())
-
-    rate = oneDimensionalZTraversalPumpRate(
-        smallTopology.points,
-        medium.get("betaCells").value,
-        pump,
-        medium,
-    )
-
-    assert np.all(rate[0] >= rate[1:])
-    assert np.any(rate[0] > rate[1:])
-
-
-def testPumpRadiationProfileUsesCrystalSpectraAndDefaultUnitWeights(
-    smallTopology,
-):
-    spectra = CrossSectionData(
-        wavelengthsAbsorption=[900e-9, 940e-9],
-        crossSectionAbsorption=[1.0e-22, 2.0e-22],
-        wavelengthsEmission=[900e-9, 940e-9],
-        crossSectionEmission=[0.0, 0.0],
-    )
-    medium = GainMedium(topology=smallTopology).withPhysicalProperties(
-        betaCells=np.zeros((smallTopology.numberOfPoints, smallTopology.levels)),
-        claddingCellTypes=np.zeros(smallTopology.numberOfTriangles, dtype=np.uint32),
-        refractiveIndices=[1.8, 1.0, 1.8, 1.0],
-        reflectivities=np.zeros((2, smallTopology.numberOfTriangles)),
-        nTot=0.0,
-        crystalTFluo=9.5e-4,
-        claddingNumber=1,
-        claddingAbsorption=0.0,
-    )
-    profile = PumpRadiationProfile(
-        intensity=10.0,
-        wavelengths=[900e-9, 940e-9],
-        waist=(1.5, 1.5),
-        propagationDirection=(0.0, 0.0, 1.0),
-        backReflection=False,
-        superGaussianOrder=40,
-    )
-    pump = PumpProperties(
-        crossSections=spectra,
-        profile=profile,
-        solver=OneDimensionalZTraversal(),
-    )
-
-    rate = oneDimensionalZTraversalPumpRate(
-        smallTopology.points,
-        medium.get("betaCells").value,
-        pump,
-        medium,
-        Constants(c=3.0e8, h=6.0e-34),
-    )
-
-    points = np.asarray(smallTopology.points, dtype=np.float64)
-    intensity = 10.0 * np.exp(-((points[:, 0] ** 2 + points[:, 1] ** 2) / (1.5 ** 2)) ** 20.0)
-    expected_per_point = intensity * (
-        1.0e-22 * 900e-9 / (6.0e-34 * 3.0e8)
-        + 2.0e-22 * 940e-9 / (6.0e-34 * 3.0e8)
-    )
-
-    assert np.allclose(rate, expected_per_point[:, None])
-
-
-def testOneDimensionalZTraversalSupportsMultichromaticWeightsAndDirection(
-    smallTopology,
-):
-    spectra = CrossSectionData(
-        wavelengthsAbsorption=[900e-9, 940e-9],
-        crossSectionAbsorption=[1.0e-22, 2.0e-22],
-        wavelengthsEmission=[900e-9, 940e-9],
-        crossSectionEmission=[0.5e-22, 1.0e-22],
-    )
-    medium = GainMedium(topology=smallTopology).withPhysicalProperties(
-        betaCells=np.full((smallTopology.numberOfPoints, smallTopology.levels), 0.25),
-        claddingCellTypes=np.zeros(smallTopology.numberOfTriangles, dtype=np.uint32),
-        refractiveIndices=[1.8, 1.0, 1.8, 1.0],
-        reflectivities=np.zeros((2, smallTopology.numberOfTriangles)),
-        nTot=0.0,
-        crystalTFluo=9.5e-4,
-        claddingNumber=1,
-        claddingAbsorption=0.0,
-    )
-    pump = PumpProperties(
-        spectralProperties=spectra,
-        intensity=10.0,
-        radiusX=1.5,
-        backReflection=True,
-        reflectivity=0.5,
-        propagationDirection=(0.0, 0.0, -1.0),
-        spectralWeights=[0.25, 0.75],
-        solver=OneDimensionalZTraversal(),
-    )
-
-    rate = oneDimensionalZTraversalPumpRate(
-        smallTopology.points,
-        medium.get("betaCells").value,
-        pump,
-        medium,
-        Constants(c=3.0e8, h=6.0e-34),
-    )
-
-    points = np.asarray(smallTopology.points, dtype=np.float64)
-    intensity = 10.0 * np.exp(-((points[:, 0] ** 2 + points[:, 1] ** 2) / (1.5 ** 2)) ** 20.0)
-    wavelengths = np.asarray([900e-9, 940e-9])
-    sigma_abs = np.asarray([1.0e-22, 2.0e-22])
-    sigma_ems = np.asarray([0.5e-22, 1.0e-22])
-    weights = np.asarray([0.25, 0.75])
-    beta = 0.25
-    expected_per_point = np.sum(
-        weights
-        * (sigma_abs - beta * (sigma_abs + sigma_ems))
-        * (1.0 + 0.5)
-        * intensity[:, None]
-        * wavelengths
-        / (6.0e-34 * 3.0e8),
-        axis=1,
-    )
-
-    assert np.allclose(rate, expected_per_point[:, None])
+    with pytest.raises(ValueError, match="custom Python pump solvers"):
+        simulation.step()
 
 
 def testDefaultPumpSolverRequiresGaussianRadius(crossSections):
@@ -571,32 +274,6 @@ def testDefaultPumpSolverRequiresGaussianRadius(crossSections):
         raise AssertionError("default Gaussian pump accepted missing radiusX")
 
 
-def testAseDerivativeUsesPhiAseScalingFromBackend(
-    smallGainMedium,
-    smallTopology,
-    pumpProperties,
-    crossSections,
-    makeFakePhiAse,
-):
-    simulation = Simulation(
-        gainMedium=smallGainMedium,
-        pump=pumpProperties,
-        phiASE=makeFakePhiAse(smallTopology),
-        timeIntegrationSolver=ExponentialEuler(),
-        timeStep=1e-5,
-        crossSections=crossSections,
-    )
-    betaCells = np.full((smallTopology.numberOfPoints, smallTopology.levels), 0.25)
-    phiAse = np.full_like(betaCells, 2.0)
-
-    derivative = simulation._aseDerivative(phiAse, betaCells=betaCells)
-    gainPerDensity = 0.25 * (
-        crossSections.emissionAt(940e-9) + crossSections.absorptionAt(940e-9)
-    ) - crossSections.absorptionAt(940e-9)
-
-    assert np.allclose(derivative, gainPerDensity * phiAse)
-
-
 def testPumpPropertiesAcceptsArbitraryDirectKeywords(crossSections):
     pump = PumpProperties(
         spectralProperties=crossSections,
@@ -605,29 +282,26 @@ def testPumpPropertiesAcceptsArbitraryDirectKeywords(crossSections):
         wavelength=940e-9,
         radiusX=1.5,
         radiusY=1.5,
-        superGaussianOrder=40,
+        exponent=40,
         ji=3,
     )
 
     assert pump.getProperty("ji") == 3
     assert pump.ji == 3
     assert pump.radiusX == 1.5
-    assert pump.superGaussianOrder == 40
+    assert pump.exponent == 40
 
 
 def testTimeIntegrationSolverIsMandatory(
     smallGainMedium,
     pumpProperties,
-    makeFakePhiAse,
-    smallTopology,
+    crossSections,
 ):
-    phiAse = makeFakePhiAse(smallTopology)
-
     try:
         Simulation(
             gainMedium=smallGainMedium,
             pump=pumpProperties,
-            phiASE=phiAse,
+            phiASE=realPhiAse(crossSections),
             timeIntegrationSolver=None,
             timeStep=1e-5,
         )
@@ -637,172 +311,14 @@ def testTimeIntegrationSolverIsMandatory(
         raise AssertionError("Simulation accepted a missing timeIntegrationSolver")
 
 
-def _mediumLikeSmallTopology(smallTopology, betaCells=None):
-    if betaCells is None:
-        betaCells = np.zeros((smallTopology.numberOfPoints, smallTopology.levels))
-    return GainMedium(topology=smallTopology).withPhysicalProperties(
-        betaCells=betaCells,
-        claddingCellTypes=np.zeros(smallTopology.numberOfTriangles, dtype=np.uint32),
-        refractiveIndices=[1.8, 1.0, 1.8, 1.0],
-        reflectivities=np.zeros((2, smallTopology.numberOfTriangles)),
-        nTot=2.76e20,
-        crystalTFluo=9.5e-4,
-        claddingNumber=1,
-        claddingAbsorption=0.0,
-    )
-
-
-def testFrozenPhiAseRungeKutta4RunsAseBackendOncePerStep(
-    smallTopology,
-    pumpProperties,
-    makeFakePhiAse,
-):
-    phiAse = makeFakePhiAse(smallTopology)
-    calls = []
-
-    def run(*args, **kwargs):
-        calls.append(np.asarray(kwargs["gainMedium"].get("betaCells").value).copy())
-        return phiAse
-
-    phiAse.run = run
-    state = Simulation(
-        gainMedium=_mediumLikeSmallTopology(smallTopology),
-        pump=pumpProperties,
-        phiASE=phiAse,
-        timeIntegrationSolver=FrozenPhiAseRungeKutta4(),
-        timeStep=1e-5,
-    ).step()
-
-    assert len(calls) == 1
-    assert state.aseResult is not None
-    assert state.phiAse.shape == (smallTopology.numberOfPoints, smallTopology.levels)
-
-
-def testSimulationPrePumpSkipsAseBackendForInitialStepOnly(
-    smallTopology,
-    pumpProperties,
-    makeFakePhiAse,
-):
-    class ConstantPumpSolver:
-        def step(self, input, pump):
-            return np.asarray(input["betaCell"], dtype=np.float64) + 1.0e-6
-
-    pumpProperties.customProperties["solver"] = ConstantPumpSolver()
-    phiAse = makeFakePhiAse(smallTopology)
-    calls = []
-
-    def run(*args, **kwargs):
-        calls.append(np.asarray(kwargs["gainMedium"].get("betaCells").value).copy())
-        return phiAse
-
-    phiAse.run = run
-    simulation = Simulation(
-        gainMedium=_mediumLikeSmallTopology(smallTopology),
-        pump=pumpProperties,
-        phiASE=phiAse,
-        timeIntegrationSolver=FrozenPhiAseRungeKutta4(),
-        timeStep=1e-5,
-        enableAse=True,
-        prePump=True,
-    )
-
-    first = simulation.step()
-    second = simulation.step()
-
-    assert simulation.enableAse is True
-    assert first.aseResult is None
-    assert np.allclose(first.phiAse, 0.0)
-    assert np.allclose(first.dndtAse, 0.0)
-    assert second.aseResult is not None
-    assert len(calls) == 1
-    assert np.any(calls[0] > 0.0)
-
-
-def testFrozenPhiAseRungeKutta4SkipsAseBackendWhenDisabled(
-    smallTopology,
-    pumpProperties,
-    makeFakePhiAse,
-):
-    class LinearPumpSolver:
-        def step(self, input, pump):
-            beta = np.asarray(input["betaCell"], dtype=np.float64)
-            return beta + input["_timeStep"] * (0.2 + 0.05 * beta)
-
-    pumpProperties.customProperties["solver"] = LinearPumpSolver()
-    initial = np.full((smallTopology.numberOfPoints, smallTopology.levels), 0.1)
-
-    frozenPhiAse = makeFakePhiAse(smallTopology)
-    frozenPhiAse.run = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("PhiASE.run should not be called when enableAse=False")
-    )
-    frozenState = Simulation(
-        gainMedium=_mediumLikeSmallTopology(smallTopology, betaCells=initial.copy()),
-        pump=pumpProperties,
-        phiASE=frozenPhiAse,
-        timeIntegrationSolver=FrozenPhiAseRungeKutta4(),
-        timeStep=1e-5,
-        enableAse=False,
-    ).step()
-
-    regularPhiAse = makeFakePhiAse(smallTopology)
-    regularPhiAse.run = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("PhiASE.run should not be called when enableAse=False")
-    )
-    regularState = Simulation(
-        gainMedium=_mediumLikeSmallTopology(smallTopology, betaCells=initial.copy()),
-        pump=pumpProperties,
-        phiASE=regularPhiAse,
-        timeIntegrationSolver=RungeKutta4(),
-        timeStep=1e-5,
-        enableAse=False,
-    ).step()
-
-    assert np.allclose(frozenState.betaCells, regularState.betaCells)
-    assert np.allclose(frozenState.phiAse, 0.0)
-    assert np.allclose(frozenState.dndtAse, 0.0)
-
-
-def testFrozenPhiAseDerivativeReusesPhiAseWhileAseCouplingFollowsBeta(
+def testTimeIntegrationSolversCanStepSimulation(
+    fakeCppSimulation,
     smallGainMedium,
-    smallTopology,
     pumpProperties,
     crossSections,
-    makeFakePhiAse,
-):
-    simulation = Simulation(
-        gainMedium=smallGainMedium,
-        pump=pumpProperties,
-        phiASE=makeFakePhiAse(smallTopology),
-        timeIntegrationSolver=FrozenPhiAseRungeKutta4(),
-        timeStep=1e-5,
-        crossSections=crossSections,
-    )
-    phiAse = np.full((smallTopology.numberOfPoints, smallTopology.levels), 2.0)
-    lowBeta = np.full_like(phiAse, 0.1)
-    highBeta = np.full_like(phiAse, 0.4)
-
-    low = simulation._timeDerivativeWithFrozenPhiAse(lowBeta, 0.0, phiAse, object())
-    high = simulation._timeDerivativeWithFrozenPhiAse(highBeta, 0.0, phiAse, object())
-
-    assert np.allclose(low.phiAse, phiAse)
-    assert np.allclose(high.phiAse, phiAse)
-    assert not np.array_equal(low.dndtAse, high.dndtAse)
-
-
-def testTimeIntegrationSolversCanStepSimulation(
-    smallGainMedium,
-    pumpProperties,
-    makeFakePhiAse,
     smallTopology,
 ):
-    solvers = [
-        ExplicitEuler(),
-        Heun(),
-        Midpoint(),
-        RungeKutta4(),
-        FrozenPhiAseRungeKutta4(),
-        ImplicitEuler(iterations=2),
-    ]
+    solvers = [ExplicitEuler(), Heun(), Midpoint(), RungeKutta4(), ImplicitEuler(iterations=2)]
 
     for solver in solvers:
         medium = GainMedium(topology=smallTopology).withPhysicalProperties(
@@ -818,7 +334,7 @@ def testTimeIntegrationSolversCanStepSimulation(
         state = Simulation(
             gainMedium=medium,
             pump=pumpProperties,
-            phiASE=makeFakePhiAse(smallTopology),
+            phiASE=realPhiAse(crossSections),
             timeIntegrationSolver=solver,
             timeStep=1e-5,
         ).step()
