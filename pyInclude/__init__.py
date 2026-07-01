@@ -25,19 +25,9 @@ from .openpmd import (
     unitDimension,
 )
 from .geometry import GainMedium, GainMediumGeometry, Gmsh, Grid, MeshTopology, writeGainMediumVtk
-from .laser import CrossSectionData, LaserProperties, PumpProperties, SpectralDecomposition, PumpRadiationProfile
-from .pumping import (
-    BetaInt3PumpSolver,
-    BetaIntegrationSolver,
-    BetaIntegrationGaussianSolver,
-    Constants,
-    OneDimensionalZTraversal,
-    oneDimensionalZTraversalPumpRate,
-    beta_int3Main,
-    integrateLaserPump,
-    runLaserPumpStep,
-)
+from .laser import CrossSectionData, LaserProperties, PumpProperties, SpectralDecomposition
 from .simulation import (
+    ConnectivityAverageBetaVolumeMapper,
     LegacyGridDataBetaVolumeMapper,
     PhiASE,
     Simulation,
@@ -50,13 +40,10 @@ from .vtkWedge import vtkWedge
 from .timeIntegration import (
     ExplicitEuler,
     ExponentialEuler,
-    FrozenPhiAseRungeKutta4,
     Heun,
     ImplicitEuler,
     Midpoint,
     RungeKutta4,
-    TimeDerivative,
-    TimeIntegrationResult,
     TimeIntegrationSolver,
 )
 
