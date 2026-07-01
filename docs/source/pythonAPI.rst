@@ -1,9 +1,10 @@
 Python API Reference
 ====================
 
-This page is generated from the public Python objects exposed by ``HASEonGPU``.
-It is a reference for signatures and members. For the user workflow and a
-complete example, start with the :doc:`Python Interface Guide <pythonInterface>`.
+This page is generated from the Python objects exposed by ``HASEonGPU``.  It is
+the reference page for signatures, class members, functions, and direct object
+lookup.  For workflow-oriented explanations and complete simulation examples,
+start with the :doc:`Python Interface Guide <pythonInterface>`.
 
 Public API
 ----------
@@ -23,8 +24,8 @@ Geometry and gain media
    GainMediumGeometry
    Gmsh
 
-Spectra, pump, and ASE
-^^^^^^^^^^^^^^^^^^^^^^
+Spectra, pump, and ASE configuration
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autosummary::
    :toctree: generated
@@ -46,29 +47,57 @@ Simulation and time integration
    Simulation
    TimeStepState
    TimeSteppedSimulation
+   TimeIntegrationSolver
    ExplicitEuler
    ExponentialEuler
-   FrozenPhiAseRungeKutta4
    Heun
    ImplicitEuler
    Midpoint
    RungeKutta4
-   TimeIntegrationSolver
 
-Utilities and transport schemas
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Pump solvers, field helpers, and utilities
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autosummary::
    :toctree: generated
    :nosignatures:
 
+   ConnectivityAverageBetaVolumeMapper
+   LegacyGridDataBetaVolumeMapper
+   calcGainFromState
    AlpakaBackends
    BaseSchema
    PointSchema
    TriangleSchema
    PrismSchema
    PrimitiveFieldSpec
+   unitDimension
    backendFlat
-   calcGainFromState
    vtkWedge
    writeGainMediumVtk
+
+The ``unitDimension`` namespace is exported from ``HASEonGPU`` and contains
+predefined openPMD unit-dimension tuples for HASE transport variables and common
+dimensions.
+
+
+Module Summaries
+----------------
+
+These modules back the public API. They are documented for users who need to
+inspect implementation helpers or extension points.
+
+.. currentmodule:: pyInclude
+
+.. autosummary::
+   :toctree: generated
+   :recursive:
+
+   geometry.core
+   geometry.msh
+   geometry.vtk
+   laser
+   simulation
+   gainMap
+   timeIntegration
+   vtkWedge

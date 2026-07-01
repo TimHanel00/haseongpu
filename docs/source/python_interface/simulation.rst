@@ -15,7 +15,6 @@ Simulation
        timeIntegrationSolver=RungeKutta4(),
        timeStep=1e-5,
        endTime=1e-3,
-       enableASE=True,
    )
 
 Running
@@ -38,9 +37,8 @@ continue for the full run:
 to ``runSteps`` or store it on ``PumpProperties`` and then call
 ``simulation.runSteps(150)``.  When neither location provides ``pumpSteps``, the
 pump is active for every step passed to ``runSteps``.  This is different from
-``PumpProperties.pumpSubsteps``, which is a compatibility field for pump
-routines with inner time integration and does not count outer simulation
-steps.
+``PumpProperties.pumpSubsteps``, which only controls the internal time
+resolution of the pump integration inside one pumped simulation step.
 
 Run until a target time:
 
@@ -72,9 +70,6 @@ mapping all run in C++/Alpaka.  Python only runs ``onInit`` before launch and
 ``onStep`` callbacks as snapshots arrive.
 
 The supported compiled pump routine is ``one-dimensional-z-traversal``.
-Set ``enableASE=False`` to run the same pump, fluorescence, and integration
-path while omitting ASE depletion; ASE result fields remain present and are
-filled with zeros.
 
 Callbacks
 ---------
@@ -187,14 +182,12 @@ with a ``.name`` attribute. Built-in descriptors are documented in
 * ``heun``
 * ``midpoint``
 * ``runge-kutta-4``
-* ``frozen-phi-ase-runge-kutta-4`` (reuses one ASE evaluation across RK4 stages)
-* ``frozen-phi-ase-runge-kutta-4``
 * ``implicit-euler``
 * ``exponential-euler``
 
 ``ImplicitEuler(iterations=8, tolerance=1e-10)`` also serializes
 ``implicit_iterations`` and ``implicit_tolerance`` run-control attributes.
-Set ``simulation.enableASE = False`` to advance pump and fluorescence without ASE. Custom Python time integrators are not supported by compiled runs.
+Custom Python time integrators are not supported by compiled runs.
 
 Beta Volume Mapping
 -------------------

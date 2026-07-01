@@ -16,10 +16,8 @@ Import built-in solvers from ``HASEonGPU``:
        Heun,
        Midpoint,
        RungeKutta4,
-       FrozenPhiAseRungeKutta4,
        ImplicitEuler,
        ExponentialEuler,
-       FrozenPhiAseRungeKutta4,
    )
 
 Available solvers:
@@ -28,8 +26,6 @@ Available solvers:
 * ``Heun()``
 * ``Midpoint()``
 * ``RungeKutta4()``
-* ``FrozenPhiAseRungeKutta4()``: reuses one ASE evaluation across RK4 stages.
-* ``FrozenPhiAseRungeKutta4()``
 * ``ImplicitEuler(iterations=8, tolerance=1e-10)``
 * ``ExponentialEuler()``
 

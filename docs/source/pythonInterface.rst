@@ -1,45 +1,66 @@
 Python Interface Guide
 ======================
 
-The Python interface is the recommended way to build HASEonGPU simulations.  It
-keeps the physical setup in Python objects and uses the compiled C++ backend for
-the ASE calculation.
+This guide is the recommended starting point for new HASEonGPU simulations in
+Python.  It explains the workflow and concepts: mesh construction, material
+properties, pump propagation, ASE execution, and time stepping with the high-level
+Python objects.
 
-The usual workflow is:
-
-#. build a :doc:`topology <python_interface/topology>`
-#. attach material/state arrays with :doc:`GainMedium <python_interface/gain_medium>`
-#. provide :doc:`spectra <python_interface/spectral_decomposition>`
-#. define :doc:`pump properties <python_interface/pump_properties>`
-#. configure :doc:`PhiASE <python_interface/phi_ase>`
-#. run a :doc:`Simulation <python_interface/simulation>`
-
-For generated signatures and member lists, use the
+For generated signatures, class members, and direct object lookup, use the
 :doc:`Python API Reference <pythonAPI>`.
+
+The current interface allows users to describe the physical problem using
+separate high-level abstraction objects. These objects define the
+``MeshTopology`` and the physical properties of the ``GainMedium``.
+
+Absorption and emission cross sections are described through a
+``SpectralDecomposition``.
+
+The pump setup (``PumpProperties``) and the settings for the C++ ``PhiASE``
+computation can be configured independently.
+
+Together, these configuration objects can be used to run a time-stepped
+physical ``Simulation`` of the laser crystal. During the simulation, the
+evolution of gain propagation and population inversion can be monitored.
 
 Installation
 ------------
 
-Install from the repository root after following
-:doc:`Getting Started <gettingStarted>`:
+Install the haseongpu Python package from the repository root. The recommended
+path for performance-sensitive use is a source build with native host
+optimizations enabled. The default install uses an externally installed
+openPMD-api C++ package and the ``openpmd-api`` Python package from the active
+Python environment:
 
 .. code-block:: bash
 
-   python3 utils/configure_hase.py
-   # run the printed command, typically:
-   CMAKE_ARGS="<selected CMake options>" python3 -m pip install -v .
+   python3 -m pip install openpmd-api
+   CMAKE_ARGS="-DHASE_NATIVE_OPTIMIZATIONS=ON" python3 -m pip install .
 
-``pip install -v .`` builds the C++ extension through CMake and installs the
-Python package.  The configurator chooses compatible openPMD provider settings,
-prints the install command, and writes the optional
-``config/hase-phiase.yaml`` compute-settings file.
+This builds and installs the C++ extension locally and installs the Python
+dependencies declared in ``pyproject.toml``. ``HASE_NATIVE_OPTIMIZATIONS=ON``
+enables host-specific ``-march=native`` and ``-mtune=native`` tuning for the
+build machine. Disable it when building redistributable wheels or binaries for
+unknown CPUs.
 
-If you change the compiler or C++ runtime used for the extension, rebuild and
-reinstall:
+The external C++ ``openPMD::openPMD`` package and Python ``openpmd_api`` module
+must come from the same provider and must enable the same storage backends. If
+the C++ package is installed in a non-default prefix, pass its location through
+``CMAKE_PREFIX_PATH`` or ``openPMD_DIR``. Use
+``-DHASE_BUILD_OPENPMD_FROM_SOURCE=ON`` only when HASEonGPU should fetch and
+build the pinned openPMD provider itself.
+
+Compiler Runtime
+----------------
+
+The Python extension is built with an ``$ORIGIN`` RPATH so libraries installed
+next to the wheel extension are preferred at import time. If you change the GCC
+or C++ runtime version used to build HASEonGPU, rebuild and reinstall the wheel:
 
 .. code-block:: bash
 
-   python3 -m pip install --force-reinstall --no-cache-dir -v .
+   python3 -m pip install --force-reinstall --no-cache-dir .
+
 
 Concept Pages
 -------------
@@ -59,116 +80,240 @@ Concept Pages
 Minimal Example Tutorial
 ------------------------
 
-The snippets below come from ``example/minimalExampleNewInterface.py`` and stay
-in sync with that runnable example.
+The Python interface guide is built around the objects that appear in a physical ASE
+simulation. First describe the crystal geometry.  Then attach material and
+state data to that geometry.  Then describe the spectra and pump.  Finally,
+configure the ASE solver and let ``Simulation`` advance the system in time.
 
-Geometry
-^^^^^^^^
+The code snippets in this section are taken from the minimal Python example so
+that the tutorial code and the runnable example stay in sync.  The
+snippets are included by named code markers instead of fixed line numbers, so
+the documentation follows the example when code is moved inside the file.
 
-Describe the transverse mesh and z-levels.  HASEonGPU currently uses a 2D
-triangular mesh extruded into prism layers.
+Describe the Crystal Geometry
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In order to simulate laser pump and ASE behavior, HASEonGPU first needs a
+geometry for the laser crystal. The Python interface calls this geometry a
+:doc:`python_interface/topology`: it contains the transverse mesh, the triangle
+connectivity, and the z-levels that are used to extrude the 2D mesh into prism
+cells.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: topology
    :end-before: # docs:end: topology
 
-``Grid`` is the shortest path for rectangular media.  ``MeshTopology`` can also
-be created from point clouds, planar STL files, legacy VTK wedge files, and
-gmsh triangle meshes; see :doc:`python_interface/topology`.
+Here ``Grid`` describes a rectangular crystal.  ``xExtent`` and ``yExtent`` are
+the transverse size of the mesh.  ``zExtent`` is the crystal length in the
+propagation direction.  ``tileSizeX`` and ``tileSizeY`` control the transverse
+mesh spacing, while ``tileSizeZ`` controls the spacing between z-levels.
 
-Material and State
-^^^^^^^^^^^^^^^^^^
+``MeshTopology.fromGrid(...)`` triangulates that rectangular grid and keeps the
+z-level information needed later by the gain medium. Since HASEonGPU currently does not support 3 dimensional input data,
+but rather infers three dimensionality by extruding a 2 dimensional mesh given the number of layers and the physical-distance
+called "thickness" between the layers. The same topology object
+can also be created from 2 dimensional point clouds, planar STL files, or gmsh triangle
+meshes; see :doc:`python_interface/topology`.
 
-Attach physical arrays and scalar material properties to the topology:
+Attach Material and State Data
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A topology only describes the dimensions and geometrical properties of the crystal. The :doc:`python_interface/gain_medium`
+adds what the crystal is made of and what state it is currently in.  This is
+where the population inversion, cladding, surface data, doping density, and
+fluorescence lifetime are assigned.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: gain-medium
    :end-before: # docs:end: gain-medium
 
-Use ``medium.get("...").expectedShape`` when allocating mesh-dependent arrays.
-The most important fields are ``betaCells`` for point-level excited-state
-fraction, ``betaVolume`` for prism-centered beta, cladding labels,
-reflectivities, active-ion density ``nTot``, and fluorescence lifetime
-``crystalTFluo``.  See :doc:`python_interface/gain_medium` for field shapes and
-openPMD metadata.
+The shape of most arrays depends on the mesh, so the example asks the medium
+for the expected shape before allocating data.  For example,
+``medium.get("betaCells").expectedShape`` returns
+``(numberOfPoints, numberOfLevels)``.  ``reflectivities`` returns
+``(numberOfTriangles, 2)`` because every triangle has one value for the bottom surface
+and one value for the top surface.
+The properties in this minimal setup are:
 
-Spectra
-^^^^^^^
+``betaCells``
+   Excited-state fraction :math:`\beta_i` at mesh points and z-levels.  The
+   time integration updates this array.
 
-Provide absorption and emission cross sections for pump and ASE calculations:
+``claddingCellTypes``
+   Triangle-wise cladding labels.  In an extruded 2D mesh this is how side
+   regions can be assigned to cladding groups.
+
+``refractiveIndices``
+   Refractive indices for the material transitions at the lower and upper
+   crystal surfaces.  The layout is
+   ``[bottomInside, bottomOutside, topInside, topOutside]`` and is used when
+   reflections are enabled.
+
+``reflectivities``
+   Surface reflectivity per triangle.  Column 0 describes the bottom surface and
+   column 1 describes the top surface.
+
+``nTot``
+   Active-ion concentration :math:`N_{\mathrm{tot}}` in the gain medium.  Pump
+   absorption, emission, and ASE depletion are scaled by this density.
+
+``crystalTFluo``
+   Fluorescence lifetime :math:`\tau`.  The time loop uses it for spontaneous
+   decay of the excited population.
+
+``claddingNumber`` and ``claddingAbsorption``
+   Select which triangle label is treated as cladding and how strongly that
+   cladding absorbs.
+
+See :doc:`python_interface/gain_medium` for the domain-level field shapes and
+layout rules used by the Python interface.
+
+Provide Absorption and Emission Spectra
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The pump and ASE calculation need material cross sections.  The pump uses the
+absorption cross section :math:`\sigma_a` at the pump wavelength
+:math:`\lambda` to update the excited population.  The ASE calculation uses
+the absorption and emission spectra, :math:`\sigma_a(\lambda)` and
+:math:`\sigma_e(\lambda)`, to compute wavelength-dependent amplification and
+loss. This enables mult-chromatic ASE calculation.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: spectral-decomposition
    :end-before: # docs:end: spectral-decomposition
 
-Each wavelength array must match the length of its cross-section array.  The
-``resolution`` value is passed to the ASE backend as spectral interpolation
-resolution.
+``SpectralDecomposition`` stores these tables in one object.  Each wavelength
+array must have the same length as its matching cross-section array:
+``wavelengthsAbsorption`` with ``crossSectionAbsorption`` and
+``wavelengthsEmission`` with ``crossSectionEmission``.  The ``resolution`` value
+is passed to the ASE backend as the spectral interpolation resolution.
 
-Pump
-^^^^
+Describe the Pump
+^^^^^^^^^^^^^^^^^
 
-``PumpProperties`` describes the physical pump sent to the compiled simulation:
-intensity, wavelength, cross sections, transverse radii, super-Gaussian
-exponent, and optional reflected pass. The backend implements the pump; a
-custom Python pump solver is not supported.
+The pump defines how energy is deposited into ``betaCells``
+(:math:`\beta_i`) during one time step.  In the minimal setup the pump is a
+super-Gaussian beam with wavelength :math:`\lambda`, intensity :math:`I`,
+radii, and exponent.  It uses the same spectral data object created above.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: pump-properties
    :end-before: # docs:end: pump-properties
 
-See :doc:`python_interface/pump_properties` for parameters and the model.
+``PumpProperties`` stores the parameters serialized to the compiled pump
+routine. Standard pump parameters such as ``intensity``, ``wavelength``,
+``radiusX``, ``radiusY``, and ``exponent`` are read by the compiled
+``one-dimensional-z-traversal`` routine. Additional keyword arguments are kept
+as custom properties for metadata or future compiled options, but custom Python
+pump solvers are rejected by compiled ``Simulation`` runs.
 
-PhiASE
-^^^^^^
+The compiled routine evaluates the super-Gaussian intensity profile
+:math:`I(x, y)` at each transverse topology point, propagates the pump through
+the z-levels, optionally adds back reflection, and contributes to the C++ beta
+time update. More pump construction details are covered in
+:doc:`python_interface/pump_properties`.
 
-``PhiASE`` configures the ASE backend: Monte Carlo ray limits, adaptive
-sampling, reflections, compute backend, openPMD backend, and parallel mode.
+Configure PhiASE
+^^^^^^^^^^^^^^^^
+
+At this point the geometry, material state, spectra, and pump are known.  The
+remaining question is how the ASE calculation should be executed.
+To answer that question, the interface provides a ``PhiASE`` object, which is a configuration object for the HASEonGPU ASE
+c++ backend, which sets sampling limits, adaptive convergence settings, reflection handling,
+compute backend name, and parallel execution mode.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: phi-ase
    :end-before: # docs:end: phi-ase
 
-Use a backend name reported by the installed build:
+``minRaysPerSample`` and ``maxRaysPerSample`` bound the Monte Carlo ray count
+per sample, the :math:`N` used in the estimator in the scientific background.
+``mseThreshold``, ``repetitions``, and ``adaptiveSteps`` control how adaptive
+sampling can increase the accuracy of the Monte Carlo integration.
+``useReflections`` enables the surface reflection model that
+uses ``reflectivities`` from the gain medium.
+
+``backend``, ``parallelMode``, and ``numDevices`` describe the compute
+configuration written into the openPMD input metadata. When
+``phi_ase.run(...)`` is called, ``PhiASE`` serializes the domain objects
+through the openPMD transport, runs the compiled ``calcPhiASE`` backend, and
+reads the result records back into Python. ``PhiASE`` can also be used for a
+one-shot ASE call without a time loop. This is shown in
+:doc:`python_interface/phi_ase`. Generated signatures and member lists are
+available in the :doc:`Python API Reference <pythonAPI>`.
+
+The backend value is a runtime selection string, not a fixed Python enum.
+The minimal example uses ``"Host_Cpu_CpuSerial"`` because that backend is
+available in a plain CPU build, but GPU and threaded CPU builds can expose
+additional names.  The Python interface exposes the CMake-built backend-name
+library through ``AlpakaBackends`` so scripts can query the names supported by
+the installed build:
 
 .. code-block:: python
 
    from HASEonGPU import AlpakaBackends
 
-   backend = AlpakaBackends.all()[0]
+   print(AlpakaBackends.all())
+   backend = AlpakaBackends.Host_Cpu_CpuSerial
 
-``backend`` is the Alpaka compute backend.  ``openpmdBackend`` is the openPMD
-storage/streaming backend such as ``adios-sst``.  See
-:doc:`Backend Selection <backendSelection>` and
-:doc:`openPMD Transport <openpmdTransport>`.
+Pass one of these strings to ``PhiASE(..., backend=...)``.  The same backend
+names are written into the openPMD metadata consumed by the command-line
+binary.  See :doc:`Backend Selection <backendSelection>` for build-time backend
+selection, runtime backend naming, and troubleshooting the backend-name helper
+library. See :doc:`openPMD Transport <openpmdTransport>` for the storage backend
+and openPMD record layout used between Python and C++.
 
-Simulation
-^^^^^^^^^^
+Assemble the Time Simulation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``Simulation`` sends the setup to the C++/Alpaka backend, which owns the pump,
-ASE, and time-integration loop. Python receives one ``TimeStepState`` snapshot
-per completed step and invokes ``onStep`` callbacks for each snapshot.
+``Simulation`` connects the objects above into a time-dependent calculation.
+It owns the current time and delegates the time loop to the compiled C++/Alpaka backend. The backend runs the pump routine, evaluates ASE, combines pump gain, ASE depletion, and fluorescence decay into :math:`d\beta/dt`, advances ``betaCells`` with the selected compiled integrator, and streams completed snapshots back to Python.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: simulation
    :end-before: # docs:end: simulation
 
-Use ``runSteps(150, pumpSteps=50)`` to pump only the first 50 outer steps, or
-``runUntil(endTime=1e-3)`` for a time target. ``pumpSubsteps`` instead controls
-the internal resolution of one pumped step. ``onInit`` is available before the
-backend launch; per-step Python mutation through ``beforeStep`` is unsupported.
+``RungeKutta4`` is the compiled time-integration descriptor in this example. Other supported descriptors and names are listed in :doc:`python_interface/utilities`.
 
-YAML Compute Settings
-^^^^^^^^^^^^^^^^^^^^^
+The three callback registrations are optional but useful:
 
-``PhiASE.fromYaml(...)`` can load run-control settings while keeping geometry,
-material arrays, spectra, and pump setup in Python:
+``onInit``
+   Runs once before the first step and receives the ``Simulation`` object.
+
+``onStep(printState)``
+   Runs after every completed step and receives a ``TimeStepState`` snapshot.
+
+``onStep(writeVtkState, "phi_{step:03d}.vtk")``
+   Registers a user callback. ``Simulation`` passes the ``TimeStepState`` as
+   the first argument and the filename as the second, so the callback can call
+   ``vtkWedge(filename, state)`` or compute derived fields before writing.
+
+One simulation step performs the physical update in this order: pump
+contribution, ASE calculation, fluorescence decay, time integration, beta
+volume update, latest-state update, and step callbacks.
+
+``simulation.runSteps(3)`` runs exactly three steps.  Pass
+``pumpSteps`` to limit pump action to the first outer simulation steps while
+ASE and fluorescence continue, for example ``simulation.runSteps(150,
+pumpSteps=50)``.  The same value may be stored on ``PumpProperties`` when the
+pump schedule belongs with the pump setup.  ``pumpSteps`` is distinct from
+``PumpProperties.pumpSubsteps``: ``pumpSubsteps`` is only the internal pump
+integration resolution inside one pumped outer step.  For a time-based run use
+``simulation.runUntil(endTime=1e-3)`` or set ``endTime`` in the constructor and
+call ``simulation.runUntil()``.
+
+Passing PhiASE Settings from YAML
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The Python interface can load the ASE compute settings from a YAML file.  This
+is useful when the physical setup is assembled in Python, but sampling,
+backend, MPI, and output settings should stay in a small run configuration.
 
 .. code-block:: yaml
 
@@ -179,29 +324,57 @@ material arrays, spectra, and pump setup in Python:
      repetitions: 2
      adaptive_steps: 4
      use_reflections: true
+     monochromatic: false
 
    compute:
      backend: Host_Cpu_CpuSerial
-     openpmd_backend: adios-sst
+     openpmd_backend: adios
      parallel_mode: single
      numDevices: 1
+     write_vtk: false  # must remain false for the openPMD transport
 
 .. code-block:: python
 
-   phi_ase = PhiASE.fromYaml("config/hase-phiase.yaml", spectralProperties=spectra)
+   phi_ase = PhiASE.fromYaml(
+       "phi_ase.yaml",
+       spectralProperties=spectra,
+   )
 
-Constructor keyword arguments override YAML values.  ``hase-configure`` writes a
-small YAML file with only the compute settings.
+   simulation = Simulation(
+       gainMedium=medium,
+       pump=pump,
+       phiASE=phi_ase,
+       timeIntegrationSolver=RungeKutta4(),
+       timeStep=1e-5,
+   )
 
-Results
-^^^^^^^
+``PhiASE.fromYaml(...)`` accepts the same keyword overrides as the constructor.
+Overrides are applied after reading the file, so they are the right place for
+objects that cannot be represented by the YAML settings, such as
+``spectralProperties``.  Keys can be written in the Python attribute style
+(``minRaysPerSample``) or in common snake-case style
+(``min_rays_per_sample``).  ``backend`` selects the Alpaka compute backend,
+while ``openpmd_backend`` selects the openPMD storage or streaming backend
+(``adios``, ``adios-sst``, or ``hdf5``).  The same settings may be placed at the YAML top
+level or grouped under ``phiASE``, ``phi_ase``, ``experiment``, or ``compute``.
+
+The YAML file configures ``PhiASE`` only.  Geometry, gain-medium arrays,
+spectral tables, pump properties, and the time-integration solver are still
+normal Python objects.  This keeps mesh parsing and array validation in the
+typed Python interface while letting run-control parameters live in a
+configuration file.  See :doc:`python_interface/phi_ase` for the complete list
+of accepted keys and command-line helper support.
+
+Inspect Results
+^^^^^^^^^^^^^^^
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: results
    :end-before: # docs:end: results
 
-``simulation.getLastState()`` returns the latest ``TimeStepState`` with step,
-time, ``betaCells``, ``betaVolume``, ``phiAse``, pump derivative, ASE
-derivative, and the raw ASE result object.  Use callbacks to store or export
-every step.
+``simulation.getLastState()`` returns the most recent ``TimeStepState``.  The
+state contains the completed step index, physical time, ``betaCells``,
+``betaVolume``, ``phiAse`` (:math:`\Phi_i`), pump derivative, ASE derivative,
+and the raw ASE result object.  ``Simulation`` keeps only this latest snapshot
+in memory. Use ``onStep`` callbacks to write, inspect, or store every step.
