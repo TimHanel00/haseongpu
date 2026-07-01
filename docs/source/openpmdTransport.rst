@@ -82,8 +82,12 @@ the caller owns the stream lifetime.
 ``Simulation.runSteps(...)`` and ``Simulation.runUntil(...)`` launch the
 compiled ``calcPhiASE --run-simulation`` path. Python writes one initial input
 iteration with run-control attributes, then reads the snapshot series produced
-by the C++ time loop. Caller-managed simulation openPMD sessions are not
-supported; the compiled run owns its transport lifetime.
+by the C++ time loop. For streaming backends, Python starts a dedicated
+snapshot receiver thread before sending the input iteration, so the C++ backend
+can drain its output stream and finish independently of slower Python
+``onStep`` callbacks such as VTK file writers. Caller-managed simulation
+openPMD sessions are not supported; the compiled run owns its transport
+lifetime.
 
 The Python transport requires the frontend ``openpmd_api`` module and the
 compiled ``calcPhiASE`` reader to use compatible openPMD-api providers. By
