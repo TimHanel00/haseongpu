@@ -6,7 +6,8 @@ frontend and the C++ ``calcPhiASE`` backend. The high-level Python objects
 remain the user-facing model; the transport serializes the data needed by the
 backend into openPMD records and attributes.
 
-The transport is used by ``PhiASE.run(...)`` and by the standalone
+The transport is used by ``PhiASE.run(...)``, by compiled
+``Simulation.runSteps(...)``/``Simulation.runUntil(...)``, and by the standalone
 ``calcPhiASE`` binary.  Advanced users can also import
 ``pyInclude.openpmd.transport`` to write input series, run the backend, and read
 result series explicitly.
@@ -78,10 +79,11 @@ cycle per call. Pass ``openpmdSession="persistent"`` to let the ``PhiASE``
 object open and reuse its own stream, or pass an existing session object when
 the caller owns the stream lifetime.
 
-``Simulation.runSteps(...)`` and ``Simulation.runUntil(...)`` keep one
-persistent stream automatically for ``adios-sst``. Pass
-``openpmdSession="interval"`` to force one-shot open/write/read/close behavior,
-or pass an existing session object to share caller-managed ownership.
+``Simulation.runSteps(...)`` and ``Simulation.runUntil(...)`` launch the
+compiled ``calcPhiASE --run-simulation`` path. Python writes one initial input
+iteration with run-control attributes, then reads the snapshot series produced
+by the C++ time loop. Caller-managed simulation openPMD sessions are not
+supported; the compiled run owns its transport lifetime.
 
 The Python transport requires the frontend ``openpmd_api`` module and the
 compiled ``calcPhiASE`` reader to use compatible openPMD-api providers. By
@@ -193,6 +195,31 @@ mesh-record path. They do not change the base openPMD contract: extra record
 names are valid openPMD records as long as the normal record metadata is
 present. The current ASE backend ignores user-defined records unless a future
 backend explicitly opts in.
+
+
+Compiled Simulation Run Control
+--------------------------------
+
+For compiled ``Simulation`` runs, iteration attributes also include run-control
+metadata:
+
+* ``time_step`` and ``number_of_steps``
+* ``pump_steps``
+* ``time_integrator`` (``explicit-euler``, ``heun``, ``midpoint``,
+  ``runge-kutta-4``, ``implicit-euler``, or ``exponential-euler``)
+* ``implicit_iterations`` and ``implicit_tolerance`` for implicit Euler
+* ``pump_routine`` (currently ``one-dimensional-z-traversal``)
+* pump parameters ``pump_intensity``, ``pump_wavelength``, ``pump_radius_x``,
+  ``pump_radius_y``, ``pump_exponent``, ``pump_duration``, ``pump_substeps``,
+  ``pump_sigma_absorption``, ``pump_sigma_emission``,
+  ``pump_back_reflection``, ``pump_reflectivity``, ``pump_extraction``, and
+  ``pump_temporary_fluorescence``
+
+The C++ backend writes one output iteration per completed step. Snapshot
+iterations contain dynamic beta records plus ``core_result_phi_ase``,
+``core_result_mse``, ``core_result_total_rays``, ``core_result_dndt_ase``, and
+``core_result_dndt_pump``. The first snapshot also includes the static canonical
+mesh/material/spectral records.
 
 Iteration Updates
 -----------------

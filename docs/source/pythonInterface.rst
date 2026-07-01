@@ -26,20 +26,16 @@ evolution of gain propagation and population inversion can be monitored.
 Installation
 ------------
 
-Install the HASEonGPU Python package from the repository root. The recommended
+Install the haseongpu Python package from the repository root. The recommended
 path for performance-sensitive use is a source build with native host
-optimizations enabled. The default install uses an external openPMD-api C++
-package plus a compatible ``openpmd_api`` Python module. The provider setup is
-documented in :doc:`Getting Started <gettingStarted>`:
+optimizations enabled. The default install uses an externally installed
+openPMD-api C++ package and the ``openpmd-api`` Python package from the active
+Python environment:
 
 .. code-block:: bash
 
-   conda install -c conda-forge openpmd-api
-   CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$CONDA_PREFIX -DHASE_NATIVE_OPTIMIZATIONS=ON" \
-     python3 -m pip install .
-
-Spack, modules, or manual source installs can be used instead by pointing
-``CMAKE_PREFIX_PATH`` or ``openPMD_DIR`` at that provider.
+   python3 -m pip install openpmd-api
+   CMAKE_ARGS="-DHASE_NATIVE_OPTIMIZATIONS=ON" python3 -m pip install .
 
 This builds and installs the C++ extension locally and installs the Python
 dependencies declared in ``pyproject.toml``. ``HASE_NATIVE_OPTIMIZATIONS=ON``
@@ -47,10 +43,12 @@ enables host-specific ``-march=native`` and ``-mtune=native`` tuning for the
 build machine. Disable it when building redistributable wheels or binaries for
 unknown CPUs.
 
-The default runtime openPMD backend is ``adios-sst``. Select another supported
-runtime backend with ``PhiASE.openpmdBackend`` or YAML ``openpmd_backend`` when
-your openPMD providers support it. Use ``-DHASE_BUILD_OPENPMD_FROM_SOURCE=ON``
-only when HASEonGPU should fetch and build the pinned openPMD provider itself.
+The external C++ ``openPMD::openPMD`` package and Python ``openpmd_api`` module
+must come from the same provider and must enable the same storage backends. If
+the C++ package is installed in a non-default prefix, pass its location through
+``CMAKE_PREFIX_PATH`` or ``openPMD_DIR``. Use
+``-DHASE_BUILD_OPENPMD_FROM_SOURCE=ON`` only when HASEonGPU should fetch and
+build the pinned openPMD provider itself.
 
 Compiler Runtime
 ----------------
@@ -180,7 +178,7 @@ absorption cross section :math:`\sigma_a` at the pump wavelength
 :math:`\lambda` to update the excited population.  The ASE calculation uses
 the absorption and emission spectra, :math:`\sigma_a(\lambda)` and
 :math:`\sigma_e(\lambda)`, to compute wavelength-dependent amplification and
-loss. This enables multichromatic ASE calculation.
+loss. This enables mult-chromatic ASE calculation.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
@@ -196,65 +194,28 @@ is passed to the ASE backend as the spectral interpolation resolution.
 Describe the Pump
 ^^^^^^^^^^^^^^^^^
 
-The pump defines how external radiation changes ``betaCells``
-(:math:`\beta_i`) during a time-dependent simulation.  HASEonGPU separates the
-radiation description from the solver: ``PumpProperties`` stores spectra, beam
-parameters, a solver object, and any custom values that a solver needs.
-
-The minimal example intentionally uses a toy custom solver to demonstrate the
-extension point rather than a physical pump model:
+The pump defines how energy is deposited into ``betaCells``
+(:math:`\beta_i`) during one time step.  In the minimal setup the pump is a
+super-Gaussian beam with wavelength :math:`\lambda`, intensity :math:`I`,
+radii, and exponent.  It uses the same spectral data object created above.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: pump-properties
    :end-before: # docs:end: pump-properties
 
-A custom pump solver only needs a ``step(input, pump)`` method.  It receives
-the current beta array :math:`\beta` as ``input["betaCell"]`` and returns an
-updated beta array with the same shape.  ``pump.getProperty(...)`` is how
-custom solver parameters are read:
+``PumpProperties`` stores the parameters serialized to the compiled pump
+routine. Standard pump parameters such as ``intensity``, ``wavelength``,
+``radiusX``, ``radiusY``, and ``exponent`` are read by the compiled
+``one-dimensional-z-traversal`` routine. Additional keyword arguments are kept
+as custom properties for metadata or future compiled options, but custom Python
+pump solvers are rejected by compiled ``Simulation`` runs.
 
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: custom-pump-solver
-   :end-before: # docs:end: custom-pump-solver
-
-For physical pumping, use one of the built-in solvers.  The continuous
-``OneDimensionalZTraversal`` solver takes a ``PumpRadiationProfile`` and
-computes :math:`d\beta/dt` from the local pump intensity, material cross
-sections, and photon flux:
-
-.. code-block:: python
-
-   from HASEonGPU import (
-       OneDimensionalZTraversal,
-       PumpProperties,
-       PumpRadiationProfile,
-   )
-
-   profile = PumpRadiationProfile(
-       intensity=16e3,
-       wavelengths=[940e-9],
-       waist=(1.5, 1.5),
-       propagationDirection=(0.0, 0.0, 1.0),
-       superGaussianOrder=40,
-       backReflection=True,
-       reflectivity=1.0,
-   )
-
-   pump = PumpProperties(
-       crossSections=cross_sections_data,
-       profile=profile,
-       solver=OneDimensionalZTraversal(),
-   )
-
-If no solver is supplied, ``Simulation`` uses the legacy
-``BetaIntegrationGaussianSolver``.  Both built-in solvers support a
-super-Gaussian transverse profile, but they differ in time treatment: the
-legacy solver integrates an analytical update over ``pumpSubsteps``, while the
-continuous solver evaluates an instantaneous pump rate once per derivative
-evaluation.  See :doc:`python_interface/pump_properties` for the detailed
-physics and parameter reference.
+The compiled routine evaluates the super-Gaussian intensity profile
+:math:`I(x, y)` at each transverse topology point, propagates the pump through
+the z-levels, optionally adds back reflection, and contributes to the C++ beta
+time update. More pump construction details are covered in
+:doc:`python_interface/pump_properties`.
 
 Configure PhiASE
 ^^^^^^^^^^^^^^^^
@@ -262,7 +223,7 @@ Configure PhiASE
 At this point the geometry, material state, spectra, and pump are known.  The
 remaining question is how the ASE calculation should be executed.
 To answer that question, the interface provides a ``PhiASE`` object, which is a configuration object for the HASEonGPU ASE
-C++ backend, which sets sampling limits, adaptive convergence settings, reflection handling,
+c++ backend, which sets sampling limits, adaptive convergence settings, reflection handling,
 compute backend name, and parallel execution mode.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
@@ -311,19 +272,14 @@ Assemble the Time Simulation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 ``Simulation`` connects the objects above into a time-dependent calculation.
-It owns the current time, evaluates the pump contribution, calls ``PhiASE`` for
-ASE when enabled, combines pump gain, ASE depletion, and fluorescence decay
-into :math:`d\beta/dt`, and advances ``betaCells`` with the selected time
-integration method.
+It owns the current time and delegates the time loop to the compiled C++/Alpaka backend. The backend runs the pump routine, evaluates ASE, combines pump gain, ASE depletion, and fluorescence decay into :math:`d\beta/dt`, advances ``betaCells`` with the selected compiled integrator, and streams completed snapshots back to Python.
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
    :start-after: # docs:start: simulation
    :end-before: # docs:end: simulation
 
-``RungeKutta4`` is the time integration solver in this example.  Other built-in
-solvers and the custom solver protocol are listed in
-:doc:`python_interface/utilities`.
+``RungeKutta4`` is the compiled time-integration descriptor in this example. Other supported descriptors and names are listed in :doc:`python_interface/utilities`.
 
 The three callback registrations are optional but useful:
 
@@ -338,12 +294,9 @@ The three callback registrations are optional but useful:
    the first argument and the filename as the second, so the callback can call
    ``vtkWedge(filename, state)`` or compute derived fields before writing.
 
-One simulation step runs ``onInit`` once, then ``beforeStep`` callbacks.  The
-time-integration solver evaluates the derivative as needed; each derivative
-evaluation updates ``betaVolume``, runs ASE if enabled, computes
-``dndtAse`` and ``dndtPump``, and adds fluorescence decay.  After integration,
-``Simulation`` clips beta to ``[0, 1]``, refreshes ``betaVolume``, stores the
-latest ``TimeStepState``, and runs ``onStep`` callbacks.
+One simulation step performs the physical update in this order: pump
+contribution, ASE calculation, fluorescence decay, time integration, beta
+volume update, latest-state update, and step callbacks.
 
 ``simulation.runSteps(3)`` runs exactly three steps.  Pass
 ``pumpSteps`` to limit pump action to the first outer simulation steps while
@@ -354,11 +307,6 @@ pump schedule belongs with the pump setup.  ``pumpSteps`` is distinct from
 integration resolution inside one pumped outer step.  For a time-based run use
 ``simulation.runUntil(endTime=1e-3)`` or set ``endTime`` in the constructor and
 call ``simulation.runUntil()``.
-
-Set ``prePump=True`` on ``Simulation`` to run the first outer step without ASE.
-This keeps pump and fluorescence active, then enables ASE normally from the
-second step onward.  The option is useful when a run should seed ``betaCells``
-before the first expensive ASE transport solve.
 
 Passing PhiASE Settings from YAML
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -380,7 +328,7 @@ backend, MPI, and output settings should stay in a small run configuration.
 
    compute:
      backend: Host_Cpu_CpuSerial
-     openpmd_backend: adios-sst
+     openpmd_backend: adios
      parallel_mode: single
      numDevices: 1
      write_vtk: false  # must remain false for the openPMD transport
@@ -407,9 +355,8 @@ objects that cannot be represented by the YAML settings, such as
 (``minRaysPerSample``) or in common snake-case style
 (``min_rays_per_sample``).  ``backend`` selects the Alpaka compute backend,
 while ``openpmd_backend`` selects the openPMD storage or streaming backend
-(``adios-sst``, ``adios``, or ``hdf5``).  The same settings may be placed at
-the YAML top level or grouped under ``phiASE``, ``phi_ase``, ``experiment``, or
-``compute``.
+(``adios``, ``adios-sst``, or ``hdf5``).  The same settings may be placed at the YAML top
+level or grouped under ``phiASE``, ``phi_ase``, ``experiment``, or ``compute``.
 
 The YAML file configures ``PhiASE`` only.  Geometry, gain-medium arrays,
 spectral tables, pump properties, and the time-integration solver are still

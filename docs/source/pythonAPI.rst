@@ -34,7 +34,6 @@ Spectra, pump, and ASE configuration
    CrossSectionData
    LaserProperties
    SpectralDecomposition
-   PumpRadiationProfile
    PumpProperties
    PhiASE
 
@@ -48,12 +47,9 @@ Simulation and time integration
    Simulation
    TimeStepState
    TimeSteppedSimulation
-   TimeDerivative
-   TimeIntegrationResult
    TimeIntegrationSolver
    ExplicitEuler
    ExponentialEuler
-   FrozenPhiAseRungeKutta4
    Heun
    ImplicitEuler
    Midpoint
@@ -66,12 +62,7 @@ Pump solvers, field helpers, and utilities
    :toctree: generated
    :nosignatures:
 
-   BetaInt3PumpSolver
-   BetaIntegrationSolver
-   BetaIntegrationGaussianSolver
-   OneDimensionalZTraversal
-   oneDimensionalZTraversalPumpRate
-   Constants
+   ConnectivityAverageBetaVolumeMapper
    LegacyGridDataBetaVolumeMapper
    calcGainFromState
    AlpakaBackends
@@ -88,16 +79,6 @@ The ``unitDimension`` namespace is exported from ``HASEonGPU`` and contains
 predefined openPMD unit-dimension tuples for HASE transport variables and common
 dimensions.
 
-Compatibility helpers
-^^^^^^^^^^^^^^^^^^^^^
-
-.. autosummary::
-   :toctree: generated
-   :nosignatures:
-
-   beta_int3Main
-   integrateLaserPump
-   runLaserPumpStep
 
 Module Summaries
 ----------------
@@ -115,7 +96,6 @@ inspect implementation helpers or extension points.
    geometry.msh
    geometry.vtk
    laser
-   pumping
    simulation
    gainMap
    timeIntegration
