@@ -1,0 +1,7 @@
+compute:
+  backend: Host_Cpu_CpuOmpBlocks
+  openpmd_backend: adios-sst
+  parallel_mode: single
+  numDevices: 1
+  n_per_node: 1
+  write_vtk: false
