@@ -31,6 +31,21 @@ After compilation, the ``calcPhiASE`` binary is available under:
 
 When Python bindings are enabled, they are built alongside the C++ backend.
 
+Installable C++ Interface
+-------------------------
+
+The install target installs the public headers, the ``hase`` library, the
+``calcPhiASE`` executable, and the backend-name helper library. When HASEonGPU is
+configured against system alpaka and system openPMD-api provider packages
+(``HASE_USE_SYSTEM_ALPAKA=ON`` and ``HASE_BUILD_OPENPMD_FROM_SOURCE=OFF``), the
+install tree also contains a CMake package export under
+``lib/cmake/HASEonGPU`` for downstream ``find_package(HASEonGPU)`` integration.
+
+Builds that fetch alpaka or openPMD-api into the local build tree still install
+headers, libraries, and executables, but skip the relocatable CMake package
+export because those fetched provider targets are not installed as reusable
+dependencies by HASEonGPU.
+
 Typical Build Variants
 ----------------------
 
@@ -65,14 +80,6 @@ The following CMake variables control important build options.
   * ``AUTO``: try to find MPI and continue without MPI if it is unavailable
   * ``OFF``: require MPI support; configuration fails if MPI is missing
   * ``ON``: disable MPI support
-
-``HASE_BUILD_PhiAse``
-^^^^^^^^^^^^^^^^^^^^^
-
-* Default: ``ON``
-* Description:
-  Builds the standalone ``calcPhiASE`` command-line executable.  Disable this
-  only when a build needs the libraries or Python package but not the binary.
 
 ``HASE_USE_SYSTEM_ALPAKA``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
