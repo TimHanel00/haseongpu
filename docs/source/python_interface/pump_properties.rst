@@ -52,9 +52,11 @@ by the compiled one-dimensional z-traversal pump routine.
    ``40.0``.
 
 ``pumpSubsteps``
-   Optional.  Number of time samples used by the default pump integration
-   inside one pumped simulation step.  Defaults to ``100`` and must be at
-   least 2 when supplied.
+   Optional compatibility field reserved for pump routines that perform inner
+   time integration.  The compiled ``one-dimensional-z-traversal`` routine
+   evaluates an instantaneous pump rate from the current ``betaCells`` instead
+   of using this value for the local beta update.  The value still defaults to
+   ``100`` and must be at least 2 when supplied.
 
    This is not the number of outer simulation steps that receive pump energy.
    Use ``Simulation.runSteps(steps, pumpSteps=...)`` or set ``pumpSteps`` on
@@ -114,8 +116,11 @@ Compiled simulations use the ``one-dimensional-z-traversal`` pump routine. It:
 3. Propagates pump intensity :math:`I` along the crystal levels.
 4. Optionally applies a backward reflected pump contribution when
    ``backReflection`` is true.
-5. Integrates the local beta update :math:`d\beta/dt` over ``pumpSubsteps``.
-6. Returns the beta array :math:`\beta` after pumping.
+5. Computes the local pump rate
+   :math:`d\beta/dt|_\mathrm{pump} =
+   [\sigma_a - \beta(\sigma_a + \sigma_e)] I\lambda/(hc)`.
+6. Returns an intermediate beta array used by the derivative-composition
+   kernel to expose that pump rate.
 
 The intensity profile :math:`I(x, y)` is:
 

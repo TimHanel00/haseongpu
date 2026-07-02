@@ -18,6 +18,7 @@ Import built-in solvers from ``HASEonGPU``:
        RungeKutta4,
        ImplicitEuler,
        ExponentialEuler,
+       FrozenPhiAseRungeKutta4,
    )
 
 Available solvers:
@@ -26,6 +27,7 @@ Available solvers:
 * ``Heun()``
 * ``Midpoint()``
 * ``RungeKutta4()``
+* ``FrozenPhiAseRungeKutta4()``
 * ``ImplicitEuler(iterations=8, tolerance=1e-10)``
 * ``ExponentialEuler()``
 
