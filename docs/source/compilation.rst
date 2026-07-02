@@ -34,6 +34,16 @@ CMake cache options through ``CMAKE_ARGS``:
    CMAKE_ARGS="-DHASE_OPENPMD_PROVIDER=system -DCMAKE_PREFIX_PATH=/path/to/openpmd" \
      python3 -m pip install -v .
 
+Installable C++ Interface
+-------------------------
+
+``cmake --install build --prefix /path/to/prefix`` installs the public headers,
+``hase`` library, ``calcPhiASE``, and backend-name helper. When the build uses
+system Alpaka and openPMD-api providers, it also installs a CMake package under
+``lib/cmake/HASEonGPU`` for downstream ``find_package(HASEonGPU)`` use. Builds
+that fetch providers still install the executable and library, but do not
+provide a relocatable CMake package because those dependencies are build-local.
+
 Common Configurations
 ---------------------
 
