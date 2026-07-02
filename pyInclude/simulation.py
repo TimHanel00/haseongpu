@@ -13,11 +13,22 @@ from pathlib import Path
 
 import numpy as np
 
+from .alpakaUtils import AlpakaBackends
 from .geometry import GainMedium
 from .laser import CrossSectionData, LaserProperties, PumpProperties, SpectralDecomposition
 from .openpmd import transport
 from .timeIntegration import TimeIntegrationSolver
 
+
+
+def _defaultBackend():
+    backends = AlpakaBackends.all()
+    if not backends:
+        raise RuntimeError(
+            "PhiASE.backend was not set and this HASEonGPU build reports no available Alpaka backend; "
+            "set backend explicitly after checking AlpakaBackends.all()"
+        )
+    return backends[0]
 
 
 @dataclass
@@ -216,7 +227,7 @@ class PhiASE:
             "adaptiveSteps": self.adaptiveSteps,
             "useReflections": self.useReflections,
             "monochromatic": self.monochromatic,
-            "backend": "gpu" if self.backend is None else self.backend,
+            "backend": _defaultBackend() if self.backend is None else self.backend,
             "maxGpus": self.numDevices,
             "parallelMode": self.parallelMode,
             "minSampleRange": min_sample,

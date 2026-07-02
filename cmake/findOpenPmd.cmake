@@ -245,8 +245,9 @@ if(HASE_OPENPMD_USE_HDF5 AND HASE_OPENPMD_SUPERBUILD)
         HDF5
         GIT_REPOSITORY "${HASE_HDF5_GIT_REPOSITORY}"
         GIT_TAG "${HASE_HDF5_GIT_TAG}"
+        ${HASE_FETCHCONTENT_EXCLUDE_FROM_ALL}
     )
-    FetchContent_MakeAvailable(HDF5)
+    hase_fetchcontent_make_available(HDF5)
 
     set(HASE_INTERNAL_HDF5_INCLUDE_DIRS
         "${hdf5_SOURCE_DIR}/src"
@@ -388,8 +389,9 @@ if(HASE_OPENPMD_USE_ADIOS2)
         GIT_REPOSITORY "${HASE_ADIOS2_GIT_REPOSITORY}"
         GIT_TAG "${HASE_ADIOS2_GIT_TAG}"
         OVERRIDE_FIND_PACKAGE
+        ${HASE_FETCHCONTENT_EXCLUDE_FROM_ALL}
     )
-    FetchContent_MakeAvailable(ADIOS2)
+    hase_fetchcontent_make_available(ADIOS2)
     if(EXISTS "${ADIOS2_BINARY_DIR}/adios2-config.cmake")
         set(ADIOS2_DIR
             "${ADIOS2_BINARY_DIR}"
@@ -497,8 +499,9 @@ FetchContent_Declare(
     openPMD
     GIT_REPOSITORY "${HASE_OPENPMD_GIT_REPOSITORY}"
     GIT_TAG "${HASE_OPENPMD_GIT_TAG}"
+    ${HASE_FETCHCONTENT_EXCLUDE_FROM_ALL}
 )
-FetchContent_MakeAvailable(openPMD)
+hase_fetchcontent_make_available(openPMD)
 
 if(NOT TARGET openPMD::openPMD)
     message(FATAL_ERROR "openPMD::openPMD target was not created")
