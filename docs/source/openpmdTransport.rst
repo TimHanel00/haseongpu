@@ -210,7 +210,8 @@ metadata:
 * ``time_step`` and ``number_of_steps``
 * ``pump_steps``
 * ``time_integrator`` (``explicit-euler``, ``heun``, ``midpoint``,
-  ``runge-kutta-4``, ``implicit-euler``, or ``exponential-euler``)
+  ``runge-kutta-4``, ``frozen-phi-ase-runge-kutta-4``,
+  ``implicit-euler``, or ``exponential-euler``)
 * ``implicit_iterations`` and ``implicit_tolerance`` for implicit Euler
 * ``pump_routine`` (currently ``one-dimensional-z-traversal``)
 * pump parameters ``pump_intensity``, ``pump_wavelength``, ``pump_radius_x``,
