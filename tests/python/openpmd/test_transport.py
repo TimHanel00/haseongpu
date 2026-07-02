@@ -1032,7 +1032,7 @@ def test_openPmdApiRejectsMissingModule(monkeypatch, tmp_path):
     monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([tmp_path / "missing"]))
     monkeypatch.setattr(
         transport,
-        "_binding_config",
+        "_native_config",
         lambda: SimpleNamespace(HASE_USE_SYSTEM_OPENPMD=False),
     )
 
@@ -1044,7 +1044,7 @@ def test_openPmdApiAllowsExternalImport(monkeypatch):
     monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([]))
     monkeypatch.setattr(
         transport,
-        "_binding_config",
+        "_native_config",
         lambda: SimpleNamespace(HASE_USE_SYSTEM_OPENPMD=True),
     )
 
