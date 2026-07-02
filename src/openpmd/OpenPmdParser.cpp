@@ -352,8 +352,9 @@ namespace
             double const value = values[index];
             if(!std::isfinite(value) || value < 0.0)
             {
-                validationError(name, "values must be finite and non-negative; invalid value at flat index "
-                                          + std::to_string(index));
+                validationError(
+                    name,
+                    "values must be finite and non-negative; invalid value at flat index " + std::to_string(index));
             }
         }
     }
@@ -368,15 +369,8 @@ namespace
         bool dynamic,
         bool backendRequired)
     {
-        auto values = loadScalar<double>(
-            series,
-            iteration,
-            name,
-            expectedExtent,
-            axes,
-            primitiveShape,
-            dynamic,
-            backendRequired);
+        auto values = loadScalar<
+            double>(series, iteration, name, expectedExtent, axes, primitiveShape, dynamic, backendRequired);
         validateNonNegativeFinite(name, values);
         return values;
     }
@@ -442,10 +436,10 @@ namespace
         auto const actual = attribute<T>(iteration, name);
         if(actual != expected)
         {
-                validationError(
-                    "dynamic iteration/" + name,
-                    "non-dynamic attribute changed after iteration 0; dynamic-only iterations may update only "
-                    "core_beta_volume");
+            validationError(
+                "dynamic iteration/" + name,
+                "non-dynamic attribute changed after iteration 0; dynamic-only iterations may update only "
+                "core_beta_volume");
         }
     }
 
@@ -739,7 +733,9 @@ namespace hase::openpmd
             core::Point center{0.0, 0.0, 0.0};
             for(unsigned localVertex = 0u; localVertex < core::tet4VertexCount; ++localVertex)
             {
-                center = center + pointAt(points, numberOfPoints, connectivity.at(cell * core::tet4VertexCount + localVertex));
+                center
+                    = center
+                      + pointAt(points, numberOfPoints, connectivity.at(cell * core::tet4VertexCount + localVertex));
             }
             center = center * (1.0 / static_cast<double>(core::tet4VertexCount));
             centers.at(cell) = center.x;
@@ -804,7 +800,8 @@ namespace hase::openpmd
         {
             validationError(
                 "dynamic iteration/haseStaticUpdate",
-                "static updates after iteration 0 are not supported; dynamic-only iterations may update only core_beta_volume");
+                "static updates after iteration 0 are not supported; dynamic-only iterations may update only "
+                "core_beta_volume");
         }
 
         validateComputeSettings(iteration);
@@ -847,7 +844,8 @@ namespace hase::openpmd
 
         auto const numberOfPoints = attribute<unsigned>(iteration, field::numberOfPoints);
         auto const numberOfCells = attribute<unsigned>(iteration, field::numberOfCells);
-        auto const propagationMode = attributeOr<std::string>(iteration, field::propagationMode, std::string{"forward"});
+        auto const propagationMode
+            = attributeOr<std::string>(iteration, field::propagationMode, std::string{"forward"});
         if(propagationMode != "forward")
         {
             validationError("propagation_mode", "only 'forward' is supported");
@@ -1076,10 +1074,7 @@ namespace hase::openpmd
             false,
             std::vector<unsigned>{},
             attributeOr<unsigned>(iteration, field::minSampleRange, 0u),
-            attributeOr<unsigned>(
-                iteration,
-                field::maxSampleRange,
-                numberOfCells - 1u),
+            attributeOr<unsigned>(iteration, field::maxSampleRange, numberOfCells - 1u),
             attributeOr<unsigned>(iteration, field::rngSeed, core::ComputeParameters::unspecifiedRngSeed));
 
         core::SimulationRunControl run;

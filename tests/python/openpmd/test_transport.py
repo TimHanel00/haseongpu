@@ -989,7 +989,7 @@ def test_openpmd_api_preference_rejects_missing_cmake_selected_module(monkeypatc
     monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([tmp_path / "missing"]))
     monkeypatch.setattr(
         transport,
-        "_binding_config",
+        "_native_config",
         lambda: SimpleNamespace(HASE_USE_SYSTEM_OPENPMD=False),
     )
 
@@ -1001,7 +1001,7 @@ def test_openpmd_api_preference_allows_normal_import_for_external_openpmd(monkey
     monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([]))
     monkeypatch.setattr(
         transport,
-        "_binding_config",
+        "_native_config",
         lambda: SimpleNamespace(HASE_USE_SYSTEM_OPENPMD=True),
     )
 

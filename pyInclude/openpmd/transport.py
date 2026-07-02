@@ -508,7 +508,7 @@ def _configured_openpmd_python_paths():
 
 
 def _using_external_openpmd():
-    return bool(getattr(_binding_config(), "HASE_USE_SYSTEM_OPENPMD", False))
+    return bool(getattr(_native_config(), "HASE_USE_SYSTEM_OPENPMD", False))
 
 
 def _candidate_python_paths(executable: Path):
