@@ -12,6 +12,7 @@ import pytest
 from HASEonGPU import (
     ExponentialEuler,
     ExplicitEuler,
+    FrozenPhiAseRungeKutta4,
     GainMedium,
     Heun,
     ImplicitEuler,
@@ -318,7 +319,15 @@ def testTimeIntegrationSolversCanStepSimulation(
     crossSections,
     smallTopology,
 ):
-    solvers = [ExplicitEuler(), Heun(), Midpoint(), RungeKutta4(), ImplicitEuler(iterations=2)]
+    solvers = [
+        ExplicitEuler(),
+        Heun(),
+        Midpoint(),
+        RungeKutta4(),
+        FrozenPhiAseRungeKutta4(),
+        ImplicitEuler(iterations=2),
+        ExponentialEuler(),
+    ]
 
     for solver in solvers:
         medium = GainMedium(topology=smallTopology).withPhysicalProperties(
