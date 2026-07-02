@@ -11,9 +11,10 @@ if(NOT pybind11_FOUND AND NOT TARGET pybind11::module)
         pybind11
         GIT_REPOSITORY https://github.com/pybind/pybind11.git
         GIT_TAG v3.0.4
+        ${HASE_FETCHCONTENT_EXCLUDE_FROM_ALL}
     )
 
-    FetchContent_MakeAvailable(pybind11)
+    hase_fetchcontent_make_available(pybind11)
 endif()
 pybind11_add_module(HASEonGPU HASEonGPU_Bindings/module.cpp)
 set(HASE_PYTHON_RUNTIME_DIR "${CMAKE_BINARY_DIR}/python/HASEonGPU_Bindings")
