@@ -332,11 +332,15 @@ def _write_artifact_manifest(path: Path, *, backend, input_path, output_path, in
 def _fieldContext(gainMedium):
     topology = gainMedium.topology
     if hasattr(topology, "cellPointIndices") and hasattr(topology, "neighborCells"):
+        number_of_levels = int(getattr(topology, "structuredNumberOfLevels", 1))
+        number_of_points = int(getattr(topology, "structuredNumberOfPoints", topology.numberOfSamplePoints))
         return SimpleNamespace(
-            numberOfPoints=topology.numberOfPoints,
+            numberOfMeshPoints=topology.numberOfPoints,
+            numberOfPoints=number_of_points,
             numberOfTriangles=topology.numberOfCells,
             numberOfCells=topology.numberOfCells,
-            numberOfLevels=1,
+            numberOfLevels=number_of_levels,
+            thickness=float(getattr(topology, "structuredThickness", 0.0)),
             numberOfSamplePoints=topology.numberOfSamplePoints,
         )
     raise TypeError("PhiASE openPMD transport requires a Tet4 VolumeTopology")
@@ -622,6 +626,7 @@ def _reset_scalar_record(
 
 def _record_metadata(record, spec: FieldSpec):
     record.set_attribute("haseTransportVersion", HASE_TRANSPORT_VERSION)
+    record.set_attribute("haseSchemaVersion", HASE_TRANSPORT_VERSION)
     record.set_attribute("haseEntity", spec.entity)
     record.set_attribute("haseAxes", list(spec.axes))
     # ADIOS2 SST has been observed to stream string-list attributes as an empty
@@ -674,10 +679,11 @@ def _resetComponent(record, component_name, data, axis_labels, unit_dimension, u
 def _explicit_topology_context(topology):
     return SimpleNamespace(
         numberOfMeshPoints=topology.numberOfPoints,
-        numberOfPoints=topology.numberOfPoints,
+        numberOfPoints=int(getattr(topology, "structuredNumberOfPoints", topology.numberOfSamplePoints)),
         numberOfCells=topology.numberOfCells,
         numberOfTriangles=topology.numberOfCells,
-        numberOfLevels=1,
+        numberOfLevels=int(getattr(topology, "structuredNumberOfLevels", 1)),
+        thickness=float(getattr(topology, "structuredThickness", 0.0)),
         numberOfFacesPerCell=topology.numberOfFacesPerCell,
         numberOfCellVertices=4,
         numberOfSamplePoints=topology.numberOfSamplePoints,
@@ -806,6 +812,7 @@ def _open_input_series(path, *, backend=None):
     for name, value in haseTransportAttributes.items():
         series.set_attribute(name, value)
     series.set_attribute("haseTransportVersion", HASE_TRANSPORT_VERSION)
+    series.set_attribute("haseSchemaVersion", HASE_TRANSPORT_VERSION)
     return series
 
 
@@ -969,15 +976,20 @@ def read_simulation_output(path):
         number_of_levels = int(iteration.get_attribute("number_of_levels"))
         number_of_cells = int(iteration.get_attribute("number_of_cells"))
         point_count = number_of_points * number_of_levels
-        prism_count = number_of_cells * (number_of_levels - 1)
+        beta_cells = _loadScalar(series, iteration, "core_point_beta", np.float64)
+        beta_volume = _loadScalar(series, iteration, "core_beta_volume", np.float64)
+        phi_ase = _loadScalar(series, iteration, "core_result_phi_ase", np.float32)
+        dndt_ase = _loadScalar(series, iteration, "core_result_dndt_ase", np.float64)
+        beta_volume_shape = (number_of_cells,) if beta_volume.size == number_of_cells else (number_of_cells, number_of_levels - 1)
+        result_shape = (number_of_points, number_of_levels)
         states.append(SimpleNamespace(
             iterationIndex=iteration_index,
             step=int(iteration.get_attribute("step_index")) if _has_attribute(iteration, "step_index") else iteration_index + 1,
             time=float(iteration.get_attribute("time")) if _has_attribute(iteration, "time") else float(iteration.time),
-            betaCells=_loadScalar(series, iteration, "core_point_beta", np.float64).reshape((number_of_points, number_of_levels), order="F"),
-            betaVolume=_loadScalar(series, iteration, "core_beta_volume", np.float64).reshape((number_of_cells, number_of_levels - 1), order="F"),
-            phiAse=_loadScalar(series, iteration, "core_result_phi_ase", np.float32).reshape((number_of_points, number_of_levels), order="F"),
-            dndtAse=_loadScalar(series, iteration, "core_result_dndt_ase", np.float64).reshape((number_of_points, number_of_levels), order="F"),
+            betaCells=beta_cells.reshape(result_shape, order="F"),
+            betaVolume=beta_volume.reshape(beta_volume_shape, order="F"),
+            phiAse=phi_ase.reshape(result_shape, order="F"),
+            dndtAse=dndt_ase.reshape(result_shape, order="F"),
             dndtPump=_read_optional_scalar(
                 series,
                 iteration,
