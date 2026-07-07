@@ -27,7 +27,6 @@ else()
         alpaka
         GIT_REPOSITORY "${HASE_ALPAKA_GIT_REPOSITORY}"
         GIT_TAG "${HASE_ALPAKA_GIT_TAG}"
-        ${HASE_FETCHCONTENT_EXCLUDE_FROM_ALL}
     )
-    hase_fetchcontent_make_available(alpaka)
+    FetchContent_MakeAvailable(alpaka)
 endif()
