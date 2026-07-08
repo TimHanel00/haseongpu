@@ -93,8 +93,7 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
-HASEonGPU_Bindings/*.so
-HASEonGPU_Bindings/calcPhiASE
+pyInclude/_native/
 utils/validity_checking/difference_plots/*
 tests/*.txt
 tests/data/*_results.csv

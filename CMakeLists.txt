@@ -113,7 +113,7 @@ option(HASE_TESTING "Build unit tests" OFF)
 option(HASE_BENCHMARK "Enable scoped PhiASE benchmark CSV output" OFF)
 option(
     HASE_FORWARD_LOGGING
-    "Forward captured calcPhiASE stdout and stderr through the Python openPMD launcher."
+    "Forward captured hase-cpp stdout and stderr through the Python openPMD launcher."
     OFF
 )
 
@@ -429,6 +429,11 @@ set(HASE_OPENPMD_RUNTIME_RPATH
     CACHE STRING
     "Additional runtime search paths for a non-vendored openPMD-api provider"
 )
+set(HASE_RUNTIME_DIR
+    ""
+    CACHE PATH
+    "External HASE native runtime root recorded for the installed Python frontend"
+)
 
 include(cmake/findOpenPmd.cmake)
 set(HASE_OPENPMD_PROVIDER_RPATH ${HASE_OPENPMD_RUNTIME_RPATH})
@@ -547,10 +552,11 @@ alpaka_finalize(hase)
 
 include(cmake/AlpakaBackendNames.cmake)
 include(cmake/OpenPmdBackendProbe.cmake)
-add_executable(calcPhiASE "${CMAKE_CURRENT_SOURCE_DIR}/src/openpmd_main.cpp")
+add_executable(hase-cpp "${CMAKE_CURRENT_SOURCE_DIR}/src/openpmd_main.cpp")
 set_target_properties(
-    calcPhiASE
+    hase-cpp
     PROPERTIES
+        OUTPUT_NAME hase-cpp
         BUILD_RPATH_USE_ORIGIN ON
         BUILD_RPATH "${HASE_BUILD_TREE_RPATH}"
         CUDA_SEPARABLE_COMPILATION ON
@@ -558,13 +564,13 @@ set_target_properties(
         INSTALL_RPATH "${HASE_INSTALL_RPATH}"
         INSTALL_RPATH_USE_LINK_PATH ON
 )
-target_link_libraries(calcPhiASE PRIVATE hase::hase)
+target_link_libraries(hase-cpp PRIVATE hase::hase)
 foreach(HASE_ADIOS2_RUNTIME_MODULE IN ITEMS cmselect cmsockets)
     if(TARGET ${HASE_ADIOS2_RUNTIME_MODULE})
-        add_dependencies(calcPhiASE ${HASE_ADIOS2_RUNTIME_MODULE})
+        add_dependencies(hase-cpp ${HASE_ADIOS2_RUNTIME_MODULE})
     endif()
 endforeach()
-alpaka_finalize(calcPhiASE)
+alpaka_finalize(hase-cpp)
 
 if(HASE_ENABLE_PYTHON)
     include(cmake/pythonBindings.cmake)

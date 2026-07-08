@@ -2,13 +2,13 @@ openPMD Transport
 =================
 
 HASEonGPU uses an openPMD series as the transport boundary between the Python
-frontend and the C++ ``calcPhiASE`` backend. The high-level Python objects
+frontend and the C++ ``hase-cpp`` backend. The high-level Python objects
 remain the user-facing model; the transport serializes the data needed by the
 backend into openPMD records and attributes.
 
 The transport is used by ``PhiASE.run(...)``, by compiled
 ``Simulation.runSteps(...)``/``Simulation.runUntil(...)``, and by the standalone
-``calcPhiASE`` binary.  Advanced users can also import
+``hase-cpp`` binary.  Advanced users can also import
 ``pyInclude.openpmd.transport`` to write input series, run the backend, and read
 result series explicitly.
 
@@ -80,7 +80,7 @@ object open and reuse its own stream, or pass an existing session object when
 the caller owns the stream lifetime.
 
 ``Simulation.runSteps(...)`` and ``Simulation.runUntil(...)`` launch the
-compiled ``calcPhiASE --run-simulation`` path. Python writes one initial input
+compiled ``hase-cpp --run-simulation`` path. Python writes one initial input
 iteration with run-control attributes, then reads the snapshot series produced
 by the C++ time loop. For streaming backends, Python starts a dedicated
 snapshot receiver thread before sending the input iteration, so the C++ backend
@@ -90,7 +90,7 @@ openPMD sessions are not supported; the compiled run owns its transport
 lifetime.
 
 The Python transport requires the frontend ``openpmd_api`` module and the
-compiled ``calcPhiASE`` reader to use compatible openPMD-api providers. By
+compiled ``hase-cpp`` reader to use compatible openPMD-api providers. By
 default, HASEonGPU uses an external C++ ``openPMD::openPMD`` package found by
 CMake and the ``openpmd_api`` module installed in the active Python
 environment. Both sides must support the runtime backend selected by Python or
@@ -264,12 +264,12 @@ for visualization output.
 MPI Launching
 -------------
 
-The standalone ``calcPhiASE`` binary can be launched under MPI and reads the
+The standalone ``hase-cpp`` binary can be launched under MPI and reads the
 same openPMD transport layout:
 
 .. code-block:: bash
 
-   mpiexec -npernode 4 ./build/calcPhiASE \
+   mpiexec -npernode 4 ./build/hase-cpp \
        --input-path=input.bp \
        --output-path=output.bp
 
@@ -288,7 +288,7 @@ the transport helper:
 
 The ``parallel_mode`` metadata is still written into the input series and
 consumed by the backend compute configuration. The process topology itself is
-controlled by how ``calcPhiASE`` is launched.
+controlled by how ``hase-cpp`` is launched.
 
 Artifact Retention
 ------------------
@@ -320,5 +320,13 @@ transport files:
    during session close before reporting a cleanup error. The default is ``10``
    seconds.
 
-``HASE_CALCPHIASE=/path/to/calcPhiASE``
-   Force the Python transport to use a specific openPMD ``calcPhiASE`` binary.
+``HASE_RUNTIME_DIR=/path/to/build-or-prefix``
+   Point an installed Python frontend at an external native HASE runtime. The
+   directory may be a CMake build tree, an install prefix, or a native artifact
+   directory containing ``hase-cpp`` and ``HaseAlpakaBackendNames``. The
+   ``hase-cpp`` binary keeps its own RPATH, so provider libraries should be
+   reachable from that native runtime in the same way as for direct CLI runs.
+
+``HASE_CPP_EXECUTABLE=/path/to/hase-cpp``
+   Force the Python transport to use a specific ``hase-cpp`` binary. This is
+   more specific than ``HASE_RUNTIME_DIR`` and is intended for one-off runs.

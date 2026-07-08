@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from .._runtime import runtime_executable_candidates
 from ..geometry import OpenPmdComponentField, OpenPmdScalarField
 from .backends import _clean_backend_names, _load_backend_names
 from . import (
@@ -164,9 +165,9 @@ def _forward_backend_logging(stdout="", stderr=""):
 def _backend_failure_detail(stdout="", stderr=""):
     sections = []
     if stdout and stdout.strip():
-        sections.append("calcPhiASE stdout:\n" + stdout.strip())
+        sections.append("hase-cpp stdout:\n" + stdout.strip())
     if stderr and stderr.strip():
-        sections.append("calcPhiASE stderr:\n" + stderr.strip())
+        sections.append("hase-cpp stderr:\n" + stderr.strip())
     return ": " + "\n".join(sections) if sections else ""
 
 
@@ -495,19 +496,33 @@ def _io(executable=None):
     except ImportError as exc:
         raise ImportError(
             "The openPMD transport requires an openpmd_api Python module matching "
-            "the calcPhiASE/openPMD C++ stack. Install openpmd-api in this Python "
+            "the hase-cpp/openPMD C++ stack. Install openpmd-api in this Python "
             "environment with the same backend/MPI options as the openPMD C++ "
             "package found by CMake, or build HASEonGPU with "
             "HASE_BUILD_OPENPMD_FROM_SOURCE=ON. " + HASE_CONFIGURE_HINT
         ) from exc
     return io
 
+def _native_backend_artifact_candidates(executable: Path):
+    executable = Path(executable)
+    yield executable.with_name(OPENPMD_BACKEND_ARTIFACT)
+    yield executable.parent / "python" / "pyInclude" / "_native" / OPENPMD_BACKEND_ARTIFACT
 
 def _ensure_backend_available(backend, executable=None):
     spec = _backend_spec(backend)
     executable = findCalcPhiAse() if executable is None else Path(executable)
     _ensure_compiled_backend_available(spec, executable)
     io = _io(executable)
+    executable = findCalcPhiAse()
+    native_backends = _native_supported_backends(executable)
+    if native_backends and spec.name not in native_backends:
+        raise RuntimeError(
+            f"openPMD backend '{spec.name}' is not supported by the selected hase-cpp binary "
+            f"{executable}. Native supported backends: {', '.join(native_backends)}. "
+            f"Reconfigure with a provider that supports '{spec.name}' or select one of the native backends. "
+            + HASE_CONFIGURE_HINT
+        )
+    io = _io()
     variants = getattr(io, "variants", {})
     extensions = set(getattr(io, "file_extensions", []))
 
@@ -590,7 +605,7 @@ def _prefer_matching_openpmd_api(executable: Path):
             return
         raise RuntimeError(
             "The openPMD transport requires an openpmd_api Python module "
-            "compatible with the openPMD C++ provider used by calcPhiASE. "
+            "compatible with the openPMD C++ provider used by hase-cpp. "
             "Install/load a matching provider, set "
             "-DHASE_OPENPMD_PYTHON_PACKAGE_DIR=<site-packages directory>, or set "
             "HASE_OPENPMD_PYTHONPATH at runtime. " + HASE_CONFIGURE_HINT
@@ -809,7 +824,7 @@ def _is_openpmd_calc_phi_ase(executable: Path):
 
 def _installed_calc_phi_ase_candidates():
     native_dir = Path(__file__).resolve().parents[1] / "_native"
-    return [native_dir / "calcPhiASE"]
+    return [native_dir / "hase-cpp"]
 
 
 def _build_dir_candidates(root: Path):
@@ -823,26 +838,27 @@ def _build_dir_candidates(root: Path):
 
 
 def findCalcPhiAse():
-    env = os.environ.get("HASE_CALCPHIASE")
+    env = os.environ.get("HASE_CPP_EXECUTABLE")
     if env:
         path = Path(env)
         if _is_openpmd_calc_phi_ase(path):
             return path
-        raise RuntimeError(f"HASE_CALCPHIASE does not point to an openPMD calcPhiASE binary: {path}")
+        raise RuntimeError(f"HASE_CPP_EXECUTABLE is not a HASE C++ backend binary: {path}")
 
     root = Path(__file__).resolve().parents[2]
-    candidates = list(_installed_calc_phi_ase_candidates())
+    candidates = list(runtime_executable_candidates(("hase-cpp",)))
+    candidates.extend(_installed_calc_phi_ase_candidates())
     for build_dir in _build_dir_candidates(root):
-        candidates.append(build_dir / "python" / "pyInclude" / "_native" / "calcPhiASE")
-        candidates.append(build_dir / "calcPhiASE")
+        candidates.append(build_dir / "python" / "pyInclude" / "_native" / "hase-cpp")
+        candidates.append(build_dir / "hase-cpp")
 
     for candidate in candidates:
         if _is_openpmd_calc_phi_ase(candidate):
             return candidate
 
     raise FileNotFoundError(
-        "Could not find an openPMD calcPhiASE binary in the installed package or HASE build tree. "
-        "Build the Python package or set HASE_CALCPHIASE. " + HASE_CONFIGURE_HINT
+        "Could not find a hase-cpp backend binary in the installed package or HASE build tree. "
+        "Build hase-cpp, set HASE_RUNTIME_DIR, or set HASE_CPP_EXECUTABLE. " + HASE_CONFIGURE_HINT
     )
 
 
@@ -1158,7 +1174,7 @@ class OpenPmdPhiAseSession:
         self._write_handles_and_manifest(status="completed" if return_code == 0 else "failed", return_code=return_code)
         if return_code != 0:
             detail = _backend_failure_detail(stderr=stderr)
-            raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
+            raise RuntimeError(f"hase-cpp failed with return code {return_code}{detail}")
 
     def _finish_backend_process(self):
         return_code = self._proc.wait()
@@ -1229,7 +1245,7 @@ class OpenPmdPhiAseSession:
 
         if return_code not in (None, 0) and close_error is None:
             detail = _backend_failure_detail(stderr=stderr)
-            close_error = RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
+            close_error = RuntimeError(f"hase-cpp failed with return code {return_code}{detail}")
 
         if self._watchdog_stop is not None:
             self._watchdog_stop.set()
@@ -1301,7 +1317,7 @@ class OpenPmdPhiAseSession:
             )
         if completed.returncode != 0:
             detail = _backend_failure_detail(stdout=completed.stdout, stderr=completed.stderr)
-            raise RuntimeError(f"calcPhiASE failed with return code {completed.returncode}{detail}")
+            raise RuntimeError(f"hase-cpp failed with return code {completed.returncode}{detail}")
         return read_result(output_path, expected_iteration_index=iteration_index)
 
     def _write_handles_and_manifest(self, *, status, return_code=None):
@@ -1374,7 +1390,7 @@ class OpenPmdPhiAseSession:
                     return
                 return_code = proc.poll()
                 if return_code is not None:
-                    self._watchdog_events.put((False, RuntimeError(f"calcPhiASE exited with return code {return_code}")))
+                    self._watchdog_events.put((False, RuntimeError(f"hase-cpp exited with return code {return_code}")))
                     return
                 os.kill(proc.pid, 0)
                 self._watchdog_events.put((True, None))
@@ -1450,7 +1466,7 @@ class OpenPmdPhiAseSession:
             )
         if self._proc is not None and self._proc.poll() == 0:
             raise RuntimeError(
-                f"calcPhiASE completed before result iteration {expected_iteration_index} was received{pending}"
+                f"hase-cpp completed before result iteration {expected_iteration_index} was received{pending}"
             )
 
     def _wait_for_result(self, expected_iteration_index):
@@ -1475,7 +1491,7 @@ class OpenPmdPhiAseSession:
             if self._proc is not None and self._proc.poll() not in (None, 0):
                 stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
                 detail = _backend_failure_detail(stderr=stderr)
-                raise RuntimeError(f"calcPhiASE failed with return code {self._proc.returncode}{detail}")
+                raise RuntimeError(f"hase-cpp failed with return code {self._proc.returncode}{detail}")
 
             try:
                 ok, payload = self._result_queue.get(timeout=_STREAMING_RESULT_POLL_SECONDS)
@@ -1662,7 +1678,7 @@ def _run_streaming_simulation(command, input_path, output_path, spec, simulation
         raise RuntimeError("openPMD simulation input writer failed") from input_error
     if proc.returncode != 0:
         detail = _backend_failure_detail(stdout=stdout, stderr=stderr)
-        raise RuntimeError(f"calcPhiASE failed with return code {proc.returncode}{detail}")
+        raise RuntimeError(f"hase-cpp failed with return code {proc.returncode}{detail}")
 
     try:
         ok, payload = result_queue.get_nowait()
@@ -1712,7 +1728,7 @@ def runSimulation(simulation, *, steps, pumpSteps=None, transport=None, command_
         _forward_backend_logging(stdout=completed.stdout, stderr=completed.stderr)
         if completed.returncode != 0:
             detail = _backend_failure_detail(stdout=completed.stdout, stderr=completed.stderr)
-            raise RuntimeError(f"calcPhiASE failed with return code {completed.returncode}{detail}")
+            raise RuntimeError(f"hase-cpp failed with return code {completed.returncode}{detail}")
         return read_simulation_output(output_path)
 
 

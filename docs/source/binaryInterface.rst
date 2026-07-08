@@ -2,7 +2,7 @@ Binary Interface
 ================
 
 This page documents the direct command-line usage of the generated
-``calcPhiASE`` binary.
+``hase-cpp`` binary.
 
 For general setup and dependency information, see
 :doc:`Getting Started <gettingStarted>`.
@@ -18,7 +18,7 @@ After compilation, the executable is available as:
 
 .. code-block:: text
 
-   ./build/calcPhiASE
+   ./build/hase-cpp
 
 Usage
 -----
@@ -27,7 +27,7 @@ The binary consumes an openPMD input series and writes an openPMD result series.
 
 .. code-block:: bash
 
-   ./build/calcPhiASE \
+   ./build/hase-cpp \
        --input-path=<openPMD-input-series> \
        --output-path=<openPMD-output-series>
 
@@ -44,7 +44,7 @@ Single-process run:
 
 .. code-block:: bash
 
-   ./build/calcPhiASE \
+   ./build/hase-cpp \
        --input-path=./input.bp \
        --output-path=./output.bp
 
@@ -52,7 +52,7 @@ MPI run:
 
 .. code-block:: bash
 
-   mpiexec -npernode 4 ./build/calcPhiASE \
+   mpiexec -npernode 4 ./build/hase-cpp \
        --input-path=./input.bp \
        --output-path=./output.bp
 
@@ -74,17 +74,17 @@ contain only ``core_beta_volume`` and reuse the cached static topology.
 ``--output-path``
 ^^^^^^^^^^^^^^^^^
 
-Path where ``calcPhiASE`` writes the result openPMD series. Results are written as ``core_result_phi_ase``, ``core_result_mse``, ``core_result_total_rays``, and ``core_result_dndt_ase`` mesh records.
+Path where ``hase-cpp`` writes the result openPMD series. Results are written as ``core_result_phi_ase``, ``core_result_mse``, ``core_result_total_rays``, and ``core_result_dndt_ase`` mesh records.
 
 Compiled Simulation Mode
 ------------------------
 
-``calcPhiASE`` can also own the full C++/Alpaka time loop when the input
+``hase-cpp`` can also own the full C++/Alpaka time loop when the input
 iteration contains simulation run-control attributes:
 
 .. code-block:: bash
 
-   ./build/calcPhiASE \
+   ./build/hase-cpp \
        --input-path=./simulation-input.bp \
        --output-path=./simulation-output.bp \
        --run-simulation

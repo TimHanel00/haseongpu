@@ -626,7 +626,7 @@ def test_streamingWaitFailsWhenBackendFinishesBeforeExpected(monkeypatch):
     session._result_queue = transport.queue.Queue()
     session._proc = SimpleNamespace(poll=lambda: 0)
 
-    with pytest.raises(RuntimeError, match="calcPhiASE completed before result iteration 2"):
+    with pytest.raises(RuntimeError, match="hase-cpp completed before result iteration 2"):
         session._wait_for_result(2)
 
 
@@ -978,8 +978,8 @@ def test_runPhiAseUsesProvidedSession(monkeypatch):
 def test_openPmdSessionAssignsMonotonicRequestIterations(monkeypatch):
     calls = []
 
-    monkeypatch.setattr(transport, "findCalcPhiAse", lambda: Path("calcPhiASE"))
-    monkeypatch.setattr(transport, "_ensure_backend_available", lambda backend, executable=None: None)
+    monkeypatch.setattr(transport, "findCalcPhiAse", lambda: Path("hase-cpp"))
+    monkeypatch.setattr(transport, "_ensure_backend_available", lambda backend: None)
 
     def fake_run_file_iteration(self, iteration_index, phi_ase, gain_medium, cross_sections):
         calls.append((iteration_index, phi_ase, gain_medium, cross_sections))
@@ -1022,8 +1022,8 @@ def test_backendFailureDetailIncludesStdoutAndStderr():
         stderr=" backend error \n",
     )
 
-    assert "calcPhiASE stdout:\nparser progress" in detail
-    assert "calcPhiASE stderr:\nbackend error" in detail
+    assert "hase-cpp stdout:\nparser progress" in detail
+    assert "hase-cpp stderr:\nbackend error" in detail
 
 
 def test_openPmdApiRejectsMissingModule(monkeypatch, tmp_path):
@@ -1037,7 +1037,7 @@ def test_openPmdApiRejectsMissingModule(monkeypatch, tmp_path):
     )
 
     with pytest.raises(RuntimeError, match=r"compatible with the openPMD C\+\+ provider"):
-        transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
+        transport._prefer_matching_openpmd_api(Path("hase-cpp"))
 
 
 def test_openPmdApiAllowsExternalImport(monkeypatch):
@@ -1048,7 +1048,7 @@ def test_openPmdApiAllowsExternalImport(monkeypatch):
         lambda: SimpleNamespace(HASE_USE_SYSTEM_OPENPMD=True),
     )
 
-    transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
+    transport._prefer_matching_openpmd_api(Path("hase-cpp"))
 
 
 def test_openPmdApiCandidatePathsIncludeConfiguredProvider(monkeypatch, tmp_path):
@@ -1062,7 +1062,7 @@ def test_openPmdApiCandidatePathsIncludeConfiguredProvider(monkeypatch, tmp_path
         lambda: SimpleNamespace(HASE_OPENPMD_PYTHON_PACKAGE_DIR=str(configured)),
     )
 
-    candidates = list(transport._candidate_python_paths(tmp_path / "build" / "calcPhiASE"))
+    candidates = list(transport._candidate_python_paths(tmp_path / "build" / "hase-cpp"))
 
     assert configured in candidates
 
@@ -1078,7 +1078,7 @@ def test_openPmdApiUsesRuntimeOverride(monkeypatch, tmp_path):
         lambda: SimpleNamespace(HASE_OPENPMD_PYTHON_PACKAGE_DIR=str(configured)),
     )
 
-    candidates = list(transport._candidate_python_paths(tmp_path / "build" / "calcPhiASE"))
+    candidates = list(transport._candidate_python_paths(tmp_path / "build" / "hase-cpp"))
 
     assert candidates[0] == runtime_package.parent
 
@@ -1091,7 +1091,20 @@ def test_openPmdApiPreferenceRejectsMismatchedBundledBuild(monkeypatch, tmp_path
     monkeypatch.setattr(transport, "_candidate_python_paths", lambda executable: iter([candidate]))
 
     with pytest.raises(RuntimeError, match="same openPMD-api build"):
-        transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
+        transport._prefer_matching_openpmd_api(Path("hase-cpp"))
+
+
+def test_findCalcPhiAseUsesRuntimeDir(monkeypatch, tmp_path):
+    executable = tmp_path / "runtime" / "bin" / "hase-cpp"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setenv("HASE_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.delenv("HASE_CPP_EXECUTABLE", raising=False)
+    monkeypatch.setattr(transport, "_installed_calc_phi_ase_candidates", lambda: [])
+    monkeypatch.setattr(transport, "_build_dir_candidates", lambda root: iter(()))
+
+    assert transport.findCalcPhiAse() == executable
 
 
 def test_layoutHelpersRejectAccidentalTransposeViews():
@@ -1320,17 +1333,17 @@ def _target_uses_openpmd_main(build_dir):
 
 def _installed_calc_phi_ase_candidates():
     native_dir = Path(transport.__file__).resolve().parents[1] / "_native"
-    return [native_dir / "calcPhiASE"]
+    return [native_dir / "hase-cpp"]
 
 
 def _calc_phi_ase_candidates():
-    env = os.environ.get("HASE_OPENPMD_CALCPHIASE") or os.environ.get("HASE_CALCPHIASE")
+    env = os.environ.get("HASE_CPP_EXECUTABLE")
     if env:
         yield Path(env)
     yield from _installed_calc_phi_ase_candidates()
     for build_dir in _build_dir_candidates():
-        yield build_dir / "python" / "pyInclude" / "_native" / "calcPhiASE"
-        yield build_dir / "calcPhiASE"
+        yield build_dir / "python" / "pyInclude" / "_native" / "hase-cpp"
+        yield build_dir / "hase-cpp"
 
 
 def _openpmd_transport_sources():
@@ -1353,7 +1366,7 @@ def _is_current_openpmd_calc_phi_ase(executable):
 
 
 def _openpmd_calc_phi_ase():
-    configured = os.environ.get("HASE_OPENPMD_CALCPHIASE") or os.environ.get("HASE_CALCPHIASE")
+    configured = os.environ.get("HASE_CPP_EXECUTABLE")
     for executable in _calc_phi_ase_candidates():
         if (
             executable.is_file()
@@ -1362,8 +1375,8 @@ def _openpmd_calc_phi_ase():
         ):
             return executable.resolve(), _build_dir_for_executable(executable)
     if configured:
-        pytest.fail(f"configured openPMD calcPhiASE is missing, not executable, or stale: {configured}")
-    pytest.skip("no current openPMD calcPhiASE binary found; build calcPhiASE from src/openpmd_main.cpp or set HASE_CALCPHIASE")
+        pytest.fail(f"configured hase-cpp is missing, not executable, or stale: {configured}")
+    pytest.skip("no current hase-cpp binary found; build the hase-cpp target or set HASE_CPP_EXECUTABLE")
 
 
 @pytest.mark.integration
@@ -1377,7 +1390,7 @@ def test_adiosSstWatchdogBeats(monkeypatch):
         pytest.skip("openPMD-api was not built with ADIOS2 SST support")
 
     executable, _ = _openpmd_calc_phi_ase()
-    monkeypatch.setenv("HASE_CALCPHIASE", str(executable))
+    monkeypatch.setenv("HASE_CPP_EXECUTABLE", str(executable))
 
     expectedBeats = 5
     aliveBeats = 0
@@ -1516,9 +1529,9 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
 @pytest.mark.parametrize("openpmd_backend", _openpmd_backend_values())
 def test_pythonApiLaunchesConfiguredOpenPmdBackendOnce(monkeypatch, tmp_path, openpmd_backend):
     _require_openpmd_transport_io()
-    executable, build_dir = _openpmd_calc_phi_ase()
-    monkeypatch.setenv("HASE_CALCPHIASE", str(executable))
-    phi_ase = launch_smoke_phi_ase(parallel_mode=_backend_execution_parallel_mode())
+    executable, _ = _openpmd_calc_phi_ase()
+    monkeypatch.setenv("HASE_CPP_EXECUTABLE", str(executable))
+    phi_ase = launch_smoke_phi_ase()
     phi_ase.openpmdBackend = openpmd_backend
     command_prefix = _backend_execution_command_prefix(build_dir)
     if command_prefix is None:
@@ -1556,9 +1569,9 @@ def test_mpiMatrixRoundTrip(monkeypatch, tmp_path):
     ranks = _matrix_mpi_rank_count()
     executable, build_dir = _openpmd_calc_phi_ase()
     if not _mpi_enabled(build_dir):
-        pytest.fail("HASE_MPI_TEST_RANKS is configured, but calcPhiASE was not built with MPI")
+        pytest.fail("HASE_MPI_TEST_RANKS is configured, but hase-cpp was not built with MPI")
 
-    monkeypatch.setenv("HASE_CALCPHIASE", str(executable))
+    monkeypatch.setenv("HASE_CPP_EXECUTABLE", str(executable))
     phi_ase = launch_smoke_phi_ase()
     phi_ase.parallelMode = "mpi"
 
@@ -1770,7 +1783,7 @@ def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypat
 
     spec = SimpleNamespace(name="adios-sst")
     states = transport._run_streaming_simulation(
-        ["calcPhiASE", "--run-simulation"],
+        ["hase-cpp", "--run-simulation"],
         tmp_path / "input.sst",
         tmp_path / "output.sst",
         spec,

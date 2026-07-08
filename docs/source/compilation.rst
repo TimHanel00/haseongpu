@@ -23,11 +23,11 @@ Clone the repository and build HASEonGPU with CMake:
    cmake -S . -B build
    cmake --build build
 
-After compilation, the ``calcPhiASE`` binary is available under:
+After compilation, the ``hase-cpp`` binary is available under:
 
 .. code-block:: text
 
-   ./build/calcPhiASE
+   ./build/hase-cpp
 
 When Python bindings are enabled, they are built alongside the C++ backend.
 

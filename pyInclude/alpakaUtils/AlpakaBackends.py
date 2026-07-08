@@ -11,6 +11,8 @@ import ctypes.util
 import sys
 from pathlib import Path
 
+from .._runtime import runtime_library_candidates
+
 
 def _libraryNames():
     if sys.platform == "win32":
@@ -30,6 +32,11 @@ def _candidatePaths():
             return
         seen.add(normalized)
         return path
+
+    for candidate in runtime_library_candidates(_libraryNames()):
+        candidate = yieldPath(candidate)
+        if candidate is not None:
+            yield candidate
 
     for name in _libraryNames():
         candidate = yieldPath(moduleDir.parent / "_native" / name)
@@ -94,7 +101,7 @@ def _loadBackendNames():
 
 
 class AlpakaBackends:
-    """Namespace of backend strings accepted by ``PhiASE`` and ``calcPhiASE``.
+    """Namespace of backend strings accepted by ``PhiASE`` and ``hase-cpp``.
 
     Backend availability depends on how the C++ extension was compiled. Use
     ``AlpakaBackends.all()`` to inspect the strings for this environment.

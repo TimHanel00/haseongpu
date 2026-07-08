@@ -243,7 +243,7 @@ uses ``reflectivities`` from the gain medium.
 ``backend``, ``parallelMode``, and ``numDevices`` describe the compute
 configuration written into the openPMD input metadata. When
 ``phi_ase.run(...)`` is called, ``PhiASE`` serializes the domain objects
-through the openPMD transport, runs the compiled ``calcPhiASE`` backend, and
+through the openPMD transport, runs the compiled ``hase-cpp`` backend, and
 reads the result records back into Python. ``PhiASE`` can also be used for a
 one-shot ASE call without a time loop. This is shown in
 :doc:`python_interface/phi_ase`. Generated signatures and member lists are

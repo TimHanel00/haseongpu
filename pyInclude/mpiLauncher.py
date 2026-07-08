@@ -157,7 +157,7 @@ def _packedFromModernInputs(gainMedium, laser):
 
 
 def runPhiaseMPI(phiAse, gainMedium, laser, laserProperties):
-    """Run ``calcPhiASE`` through ``mpiexec`` and return arrays to Python.
+    """Run ``hase-cpp`` through ``mpiexec`` and return arrays to Python.
 
     The launcher writes an openPMD input series below ``IO/phiase_mpi`` so every
     MPI rank can see the same directory, then reads the openPMD result series
