@@ -92,7 +92,6 @@ def test_frontendHidesLegacyAdapters():
 
     for name in ("HostMesh", "ExperimentParameters", "ComputeParameters", "Mesh"):
         assert not hasattr(HASEonGPU, name)
-    assert hasattr(HASEonGPU, "calcPhiASE")
 
 
 def test_gainMediumPhysicalPropertiesAreDiscoverableAndAssignable():

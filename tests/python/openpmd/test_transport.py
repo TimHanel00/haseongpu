@@ -979,7 +979,7 @@ def test_openPmdSessionAssignsMonotonicRequestIterations(monkeypatch):
     calls = []
 
     monkeypatch.setattr(transport, "findCalcPhiAse", lambda: Path("hase-cpp"))
-    monkeypatch.setattr(transport, "_ensure_backend_available", lambda backend: None)
+    monkeypatch.setattr(transport, "_ensure_backend_available", lambda backend, executable=None: None)
 
     def fake_run_file_iteration(self, iteration_index, phi_ase, gain_medium, cross_sections):
         calls.append((iteration_index, phi_ase, gain_medium, cross_sections))
