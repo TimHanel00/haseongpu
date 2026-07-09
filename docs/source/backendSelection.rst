@@ -66,11 +66,12 @@ and alpaka configuration as the simulation code.  It enumerates alpaka's
 enabled APIs and executors, filters them to backends for which a device can be
 created, and exposes the resulting names through a small C ABI.
 
-For Python builds, CMake copies this library into the native runtime package:
+For Python builds, CMake writes this library to the native runtime library
+directory:
 
 .. code-block:: text
 
-   build/python/pyInclude/_native/libHaseAlpakaBackendNames.so
+   build/lib/libHaseAlpakaBackendNames.so
 
 On macOS the filename ends in ``.dylib``.  On Windows it is
 ``HaseAlpakaBackendNames.dll``.
@@ -87,8 +88,8 @@ explicitly:
 
    cmake --build build --target HaseAlpakaBackendNames
 
-When the Python interface is built, the native packaging hook also copies the
-helper library into the Python runtime package.
+When the Python interface is installed, its generated runtime configuration
+points to the build or install root that contains this helper library.
 
 
 Runtime backend selection
@@ -159,8 +160,7 @@ The returned strings are the values to pass to the Python interface:
 If importing ``AlpakaBackends`` raises an error about the backend-name library,
 the Python package can see the Python files but not the compiled helper
 library.  Build ``HaseAlpakaBackendNames`` and make sure the generated library
-is either installed with the Python package or present under
-``build/python/pyInclude/_native``.
+is available below the configured ``HASE_RUNTIME_DIR`` or under ``build/lib``.
 
 The available APIs, device kinds, and executors are documented in the
 `alpaka cheatsheet <https://alpaka3.readthedocs.io/en/latest/basic/cheatsheet.html#accelerator-platform-and-device>`__.

@@ -48,6 +48,11 @@ project(
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 include(CMakePrintHelpers)
+include(GNUInstallDirs)
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # dependencies
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.30")
@@ -115,6 +120,11 @@ option(
     HASE_FORWARD_LOGGING
     "Forward captured hase-cpp stdout and stderr through the Python openPMD launcher."
     OFF
+)
+set(HASE_RUNTIME_DIR
+    ""
+    CACHE PATH
+    "External HASE native runtime root recorded for the installed Python frontend"
 )
 
 set(HASE_CUDA_ARCHITECTURES native CACHE STRING "CUDA Architectures")
@@ -420,7 +430,7 @@ set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
 set(CMAKE_INSTALL_RPATH "$ORIGIN")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 set(HASE_BUILD_TREE_RPATH
-    "$ORIGIN/lib;$ORIGIN/_deps/adios2-build/lib;$ORIGIN/../../lib;$ORIGIN/../../_deps/adios2-build/lib"
+    "$ORIGIN;$ORIGIN/../lib;$ORIGIN/../_deps/adios2-build/lib"
 )
 set(HASE_INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib")
 set(HASE_INSTALL_LIB_RPATH "$ORIGIN")
@@ -429,12 +439,6 @@ set(HASE_OPENPMD_RUNTIME_RPATH
     CACHE STRING
     "Additional runtime search paths for a non-vendored openPMD-api provider"
 )
-set(HASE_RUNTIME_DIR
-    ""
-    CACHE PATH
-    "External HASE native runtime root recorded for the installed Python frontend"
-)
-
 include(cmake/findOpenPmd.cmake)
 set(HASE_OPENPMD_PROVIDER_RPATH ${HASE_OPENPMD_RUNTIME_RPATH})
 function(hase_append_openpmd_rpath_from_target target)

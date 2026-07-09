@@ -52,9 +52,6 @@ def native_dirs_from_root(root):
     yield root / "bin"
     yield root / "lib"
     yield root / "pyInclude" / "_native"
-    yield root / "python" / "pyInclude" / "_native"
-    for native_dir in sorted(root.glob("*/python/pyInclude/_native")):
-        yield native_dir
 
 
 def runtime_native_dirs():
@@ -65,13 +62,17 @@ def runtime_native_dirs():
 
 def runtime_executable_candidates(names):
     """Return executable candidates below configured runtime roots."""
-    for native_dir in runtime_native_dirs():
-        for name in names:
-            yield native_dir / name
+    for root in runtime_roots():
+        root = Path(root).expanduser()
+        for native_dir in _unique((root / "bin", root, root / "pyInclude" / "_native", root / "lib")):
+            for name in names:
+                yield native_dir / name
 
 
 def runtime_library_candidates(names):
     """Return shared-library candidates below configured runtime roots."""
-    for native_dir in runtime_native_dirs():
-        for name in names:
-            yield native_dir / name
+    for root in runtime_roots():
+        root = Path(root).expanduser()
+        for native_dir in _unique((root / "lib", root / "bin", root, root / "pyInclude" / "_native")):
+            for name in names:
+                yield native_dir / name

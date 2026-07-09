@@ -1,4 +1,6 @@
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -6,9 +8,21 @@ import pytest
 
 def _source_backends_module():
     root = Path(__file__).resolve().parents[3]
+    package = types.ModuleType("pyInclude")
+    package.__path__ = [str(root / "pyInclude")]
+    openpmd_package = types.ModuleType("pyInclude.openpmd")
+    openpmd_package.__path__ = [str(root / "pyInclude" / "openpmd")]
+    sys.modules.setdefault("pyInclude", package)
+    sys.modules.setdefault("pyInclude.openpmd", openpmd_package)
+    runtime_path = root / "pyInclude" / "_runtime.py"
+    runtime_spec = importlib.util.spec_from_file_location("pyInclude._runtime", runtime_path)
+    runtime_module = importlib.util.module_from_spec(runtime_spec)
+    sys.modules["pyInclude._runtime"] = runtime_module
+    runtime_spec.loader.exec_module(runtime_module)
     path = root / "pyInclude" / "openpmd" / "backends.py"
-    spec = importlib.util.spec_from_file_location("hase_source_openpmd_backends", path)
+    spec = importlib.util.spec_from_file_location("pyInclude.openpmd.backends", path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules["pyInclude.openpmd.backends"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -72,3 +86,11 @@ def test_openPmdBackendsFailsWhenProbeReportsNoKnownBackends(monkeypatch, tmp_pa
 
     with pytest.raises(RuntimeError, match="did not report any supported backends"):
         backends._load_backend_names()
+
+
+def test_openPmdProbeCandidatesUseConfiguredRuntimeLib(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime"
+    probe_path = runtime / "lib" / "libHaseOpenPmdBackendProbe.so"
+    monkeypatch.setenv("HASE_RUNTIME_DIR", str(runtime))
+
+    assert next(backends._candidate_paths()) == probe_path

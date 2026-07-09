@@ -849,6 +849,7 @@ def findCalcPhiAse():
     candidates = list(runtime_executable_candidates(("hase-cpp",)))
     candidates.extend(_installed_calc_phi_ase_candidates())
     for build_dir in _build_dir_candidates(root):
+        candidates.append(build_dir / "bin" / "hase-cpp")
         candidates.append(build_dir / "python" / "pyInclude" / "_native" / "hase-cpp")
         candidates.append(build_dir / "hase-cpp")
 

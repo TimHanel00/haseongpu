@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
-import importlib.util
 import os
 import sys
 from pathlib import Path
+
+from .._runtime import runtime_library_candidates
 
 
 BACKEND_PRIORITY = ("adios-sst", "adios", "hdf5")
@@ -25,13 +26,6 @@ def _library_names():
     if sys.platform == "darwin":
         return ("libHaseOpenPmdBackendProbe.dylib",)
     return ("libHaseOpenPmdBackendProbe.so",)
-
-
-def _binding_package_dirs():
-    spec = importlib.util.find_spec("HASEonGPU_Bindings")
-    if spec is None or spec.submodule_search_locations is None:
-        return ()
-    return tuple(Path(path) for path in spec.submodule_search_locations)
 
 
 def _candidate_paths(extra_dirs=()):
@@ -51,37 +45,31 @@ def _candidate_paths(extra_dirs=()):
         if candidate is not None:
             yield candidate
 
+    for candidate in runtime_library_candidates(_library_names()):
+        candidate = yield_path(candidate)
+        if candidate is not None:
+            yield candidate
+
     for directory in extra_dirs:
         for name in _library_names():
             candidate = yield_path(Path(directory) / name)
             if candidate is not None:
                 yield candidate
 
-    for package_dir in _binding_package_dirs():
-        for name in _library_names():
-            candidate = yield_path(package_dir / name)
-            if candidate is not None:
-                yield candidate
-
     for parent in module_dir.parents:
         for name in _library_names():
-            candidate = yield_path(parent / "build" / "python" / "HASEonGPU_Bindings" / name)
-            if candidate is not None:
-                yield candidate
-            candidate = yield_path(parent / "build" / "ci" / "python" / "HASEonGPU_Bindings" / name)
+            candidate = yield_path(parent / "build" / "lib" / name)
             if candidate is not None:
                 yield candidate
 
         build_root = parent / "build"
         if not build_root.is_dir():
             continue
-        for binding_dir in sorted(build_root.glob("*/python/HASEonGPU_Bindings")):
-            for name in _library_names():
-                candidate = yield_path(binding_dir / name)
-                if candidate is not None:
-                    yield candidate
         for build_dir in sorted(build_root.glob("cp*")):
             for name in _library_names():
+                candidate = yield_path(build_dir / "lib" / name)
+                if candidate is not None:
+                    yield candidate
                 candidate = yield_path(build_dir / name)
                 if candidate is not None:
                     yield candidate

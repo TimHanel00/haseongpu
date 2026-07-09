@@ -48,19 +48,17 @@ def _candidatePaths():
 
     for parent in moduleDir.parents:
         for name in _libraryNames():
-            candidate = yieldPath(parent / "build" / "python" / "pyInclude" / "_native" / name)
+            candidate = yieldPath(parent / "build" / "lib" / name)
             if candidate is not None:
                 yield candidate
         buildRoot = parent / "build"
         if not buildRoot.is_dir():
             continue
-        for bindingDir in sorted(buildRoot.glob("*/python/pyInclude/_native")):
-            for name in _libraryNames():
-                candidate = yieldPath(bindingDir / name)
-                if candidate is not None:
-                    yield candidate
         for buildDir in sorted(buildRoot.glob("cp*")):
             for name in _libraryNames():
+                candidate = yieldPath(buildDir / "lib" / name)
+                if candidate is not None:
+                    yield candidate
                 candidate = yieldPath(buildDir / name)
                 if candidate is not None:
                     yield candidate

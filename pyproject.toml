@@ -66,6 +66,7 @@ Changelog = "https://github.com/computationalradiationphysics/haseongpu/releases
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["pyInclude"]
+install.components = ["python"]
 
 [[tool.scikit-build.generate]]
 path = "HASEonGPU.py"
