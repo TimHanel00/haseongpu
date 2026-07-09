@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
 """Print openPMD backends supported by the installed HASE frontend."""
 
-from __future__ import annotations
-
-import argparse
+# Copyright 2026 Tim Hanel
+#
+# This file is part of HASEonGPU
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from HASEonGPU import OpenPmdBackends
 
 
-def available_backends() -> list[str]:
+def available_backends():
     return OpenPmdBackends.all()
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--csv", action="store_true", help="print a comma-separated backend list")
-    args = parser.parse_args(argv)
-
-    backends = available_backends()
-    if args.csv:
-        print(",".join(backends))
-    else:
-        for backend in backends:
-            print(backend)
-    return 0
+def main():
+    for backend in available_backends():
+        print(backend)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

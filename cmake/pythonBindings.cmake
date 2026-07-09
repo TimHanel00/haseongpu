@@ -114,7 +114,8 @@ install(TARGETS calcPhiASE RUNTIME DESTINATION HASEonGPU_Bindings)
 install(TARGETS HaseAlpakaBackendNames LIBRARY DESTINATION HASEonGPU_Bindings)
 install(TARGETS HaseOpenPmdBackendProbe LIBRARY DESTINATION HASEonGPU_Bindings)
 install(
-    FILES "${HASE_PYTHON_RUNTIME_DIR}/_config.py"
+    FILES
+        "${HASE_PYTHON_RUNTIME_DIR}/_config.py"
     DESTINATION HASEonGPU_Bindings
 )
 install(FILES HASEonGPU.py DESTINATION .)
