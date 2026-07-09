@@ -112,10 +112,9 @@ propagation direction.  ``tileSizeX`` and ``tileSizeY`` control the transverse
 mesh spacing, while ``tileSizeZ`` controls the spacing between z-levels.
 
 ``MeshTopology.fromGrid(...)`` triangulates that rectangular grid and keeps the
-z-level information needed later by the gain medium. Since HASEonGPU currently does not support 3 dimensional input data,
-but rather infers three dimensionality by extruding a 2 dimensional mesh given the number of layers and the physical-distance
-called "thickness" between the layers. The same topology object
-can also be created from 2 dimensional point clouds, planar STL files, or gmsh triangle
+z-level information needed later by legacy planar workflows.  Tet4 runtime
+geometry uses ``VolumeTopology`` instead.  ``MeshTopology`` can also be created
+from 2 dimensional point clouds, legacy VTK wedge files, or gmsh triangle
 meshes; see :doc:`python_interface/topology`.
 
 Attach Material and State Data
