@@ -7,12 +7,13 @@ if(HASE_FORWARD_LOGGING)
 else()
     set(HASE_FORWARD_LOGGING_PY False)
 endif()
-# HASE wheels do not vendor openPMD-api runtime libraries or Python bindings.
-# Even when CMake fetches openPMD-api for the build, the installed package uses
-# the runtime environment's openpmd_api module and dynamic libraries.
-set(HASE_USE_SYSTEM_OPENPMD_PY True)
 if(NOT DEFINED HASE_OPENPMD_PYTHON_PACKAGE_DIR)
     set(HASE_OPENPMD_PYTHON_PACKAGE_DIR "")
+endif()
+if(HASE_OPENPMD_PYTHON_PACKAGE_DIR)
+    set(HASE_USE_SYSTEM_OPENPMD_PY False)
+else()
+    set(HASE_USE_SYSTEM_OPENPMD_PY True)
 endif()
 
 set(HASE_CONFIGURED_RUNTIME_DIR "${HASE_RUNTIME_DIR}")

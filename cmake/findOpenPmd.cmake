@@ -264,7 +264,10 @@ function(hase_openpmd_find_bundled_python out_var)
         GLOB_RECURSE HASE_OPENPMD_BUNDLED_PYTHON_MARKERS
         LIST_DIRECTORIES FALSE
         "${HASE_OPENPMD_BUNDLED_PREFIX}/openpmd_api/__init__.py"
-        "${HASE_OPENPMD_BUNDLED_PREFIX}/*/openpmd_api/__init__.py"
+        "${HASE_OPENPMD_BUNDLED_PREFIX}/site-packages/openpmd_api/__init__.py"
+        "${HASE_OPENPMD_BUNDLED_PREFIX}/python*/site-packages/openpmd_api/__init__.py"
+        "${HASE_OPENPMD_BUNDLED_PREFIX}/lib/python*/site-packages/openpmd_api/__init__.py"
+        "${HASE_OPENPMD_BUNDLED_PREFIX}/lib64/python*/site-packages/openpmd_api/__init__.py"
     )
     list(SORT HASE_OPENPMD_BUNDLED_PYTHON_MARKERS)
     if(HASE_OPENPMD_BUNDLED_PYTHON_MARKERS)

@@ -513,16 +513,6 @@ def _ensure_backend_available(backend, executable=None):
     executable = findCalcPhiAse() if executable is None else Path(executable)
     _ensure_compiled_backend_available(spec, executable)
     io = _io(executable)
-    executable = findCalcPhiAse()
-    native_backends = _native_supported_backends(executable)
-    if native_backends and spec.name not in native_backends:
-        raise RuntimeError(
-            f"openPMD backend '{spec.name}' is not supported by the selected hase-cpp binary "
-            f"{executable}. Native supported backends: {', '.join(native_backends)}. "
-            f"Reconfigure with a provider that supports '{spec.name}' or select one of the native backends. "
-            + HASE_CONFIGURE_HINT
-        )
-    io = _io()
     variants = getattr(io, "variants", {})
     extensions = set(getattr(io, "file_extensions", []))
 
