@@ -111,11 +111,12 @@ the transverse size of the mesh.  ``zExtent`` is the crystal length in the
 propagation direction.  ``tileSizeX`` and ``tileSizeY`` control the transverse
 mesh spacing, while ``tileSizeZ`` controls the spacing between z-levels.
 
-``MeshTopology.fromGrid(...)`` triangulates that rectangular grid and keeps the
+``MeshTopology.fromGrid(...)`` accepts a three-dimensional ``Grid``
+description, triangulates the transverse ``(x, y)`` footprint, and keeps the
 z-level information needed later by legacy planar workflows.  Tet4 runtime
-geometry uses ``VolumeTopology`` instead.  ``MeshTopology`` can also be created
-from 2 dimensional point clouds, legacy VTK wedge files, or gmsh triangle
-meshes; see :doc:`python_interface/topology`.
+geometry uses ``VolumeTopology`` instead.  Legacy planar topologies can also be
+loaded from VTK wedge files or gmsh triangle meshes; see
+:doc:`python_interface/topology`.
 
 Attach Material and State Data
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
