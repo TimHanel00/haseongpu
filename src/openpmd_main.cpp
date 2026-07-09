@@ -14,6 +14,7 @@ namespace
     {
         std::filesystem::path input;
         std::filesystem::path output;
+        bool cppControl = false;
     };
 
     std::optional<std::string_view> valueFor(std::string_view arg, std::string_view name)
@@ -42,9 +43,14 @@ namespace
                 paths.output = std::string(*value);
                 continue;
             }
+            if(arg == "--cpp-control")
+            {
+                paths.cppControl = true;
+                continue;
+            }
             throw std::runtime_error(
                 "Unsupported argument '" + std::string(arg)
-                + "'. calcPhiASE only accepts --input-path, --output-path, and --run-simulation.");
+                + "'. calcPhiASE only accepts --input-path, --output-path, and --cpp-control.");
         }
 
         if(paths.input.empty())
@@ -70,20 +76,26 @@ int main(int argc, char** argv)
 #else
         hase::openpmd::Parser openPmdParser{paths.input, paths.output};
 #endif
-
-        openPmdParser.processAll(
-            [](hase::core::SimulationContext& simulation)
-            {
-                int const result = hase::core::startSimulation<false>(
-                    simulation.experiment,
-                    simulation.compute,
-                    simulation.result,
-                    simulation.mesh);
-                if(result != 0)
+        if(paths.cppControl)
+        {
+            openPmdParser.runTimeSteppedSimulation();
+        }
+        else
+        {
+            openPmdParser.processAll(
+                [](hase::core::SimulationContext& simulation)
                 {
-                    throw std::runtime_error("simulation failed with return code " + std::to_string(result));
-                }
-            });
+                    int const result = hase::core::startSimulation<false>(
+                        simulation.experiment,
+                        simulation.compute,
+                        simulation.result,
+                        simulation.mesh);
+                    if(result != 0)
+                    {
+                        throw std::runtime_error("simulation failed with return code " + std::to_string(result));
+                    }
+                });
+        }
 
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
         MPI_Finalize();

@@ -87,7 +87,7 @@ iteration contains simulation run-control attributes:
    ./build/hase-cpp \
        --input-path=./simulation-input.bp \
        --output-path=./simulation-output.bp \
-       --run-simulation
+       --cpp-control
 
 In this mode Python sends the initial mesh/material/spectra/beta state and the
 binary writes one output iteration per completed time step. The output snapshot

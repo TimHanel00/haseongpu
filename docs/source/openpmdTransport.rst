@@ -80,7 +80,7 @@ object open and reuse its own stream, or pass an existing session object when
 the caller owns the stream lifetime.
 
 ``Simulation.runSteps(...)`` and ``Simulation.runUntil(...)`` launch the
-compiled ``hase-cpp --run-simulation`` path. Python writes one initial input
+compiled ``hase-cpp --cpp-control`` path. Python writes one initial input
 iteration with run-control attributes, then reads the snapshot series produced
 by the C++ time loop. For streaming backends, Python starts a dedicated
 snapshot receiver thread before sending the input iteration, so the C++ backend
