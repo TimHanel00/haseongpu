@@ -1307,76 +1307,8 @@ def _cache_value(cache_path, name):
     return None
 
 
-def _build_dir_for_executable(executable):
-    path = Path(executable).resolve()
-    for parent in [path.parent, *path.parents]:
-        if (parent / "CMakeCache.txt").is_file():
-            return parent
-        if parent == Path.cwd().resolve():
-            break
-
-    for build_dir in _build_dir_candidates():
-        if (build_dir / "CMakeCache.txt").is_file():
-            return build_dir
-    return None
-
-
-def _target_uses_openpmd_main(build_dir):
-    if build_dir is None:
-        return True
-    manifests = [build_dir / name for name in ("build.ninja", "Makefile", "compile_commands.json")]
-    existing = [path for path in manifests if path.is_file()]
-    if not existing:
-        return True
-    return any("src/openpmd_main.cpp" in path.read_text(encoding="utf-8", errors="ignore") for path in existing)
-
-
-def _installed_calc_phi_ase_candidates():
-    native_dir = Path(transport.__file__).resolve().parents[1] / "_native"
-    return [native_dir / "hase-cpp"]
-
-
-def _calc_phi_ase_candidates():
-    env = os.environ.get("HASE_CPP_EXECUTABLE")
-    if env:
-        yield Path(env)
-    yield from _installed_calc_phi_ase_candidates()
-    for build_dir in _build_dir_candidates():
-        yield build_dir / "python" / "pyInclude" / "_native" / "hase-cpp"
-        yield build_dir / "hase-cpp"
-
-
-def _openpmd_transport_sources():
-    root = Path(__file__).resolve().parents[3]
-    yield root / "src" / "openpmd_main.cpp"
-    yield root / "src" / "openpmd" / "OpenPmdParser.cpp"
-    yield root / "include" / "openpmd" / "OpenPmdParser.hpp"
-
-
-def _is_current_openpmd_calc_phi_ase(executable):
-    build_dir = _build_dir_for_executable(executable)
-    if not _target_uses_openpmd_main(build_dir):
-        return False
-    executable_mtime = executable.stat().st_mtime
-    return all(
-        source.stat().st_mtime <= executable_mtime
-        for source in _openpmd_transport_sources()
-        if source.is_file()
-    )
-
-
-def _openpmd_calc_phi_ase():
-    configured = os.environ.get("HASE_CPP_EXECUTABLE")
-    for executable in _calc_phi_ase_candidates():
-        if (
-            executable.is_file()
-            and os.access(executable, os.X_OK)
-            and _is_current_openpmd_calc_phi_ase(executable)
-        ):
-            return executable.resolve(), _build_dir_for_executable(executable)
-    if configured:
-        pytest.fail(f"configured hase-cpp is missing, not executable, or stale: {configured}")
-    pytest.skip("no current hase-cpp binary found; build the hase-cpp target or set HASE_CPP_EXECUTABLE")
+def _build_dir_for_runtime_executable(executable):
+    return transport._build_dir_for_executable(executable)
 
 
 @pytest.mark.integration
@@ -1389,7 +1321,7 @@ def test_adiosSstWatchdogBeats(monkeypatch):
     if "sst" not in getattr(io, "file_extensions", []):
         pytest.skip("openPMD-api was not built with ADIOS2 SST support")
 
-    executable, _ = _openpmd_calc_phi_ase()
+    executable = transport.findCalcPhiAse()
     monkeypatch.setenv("HASE_CPP_EXECUTABLE", str(executable))
 
     expectedBeats = 5
@@ -1491,7 +1423,8 @@ def _assert_launch_smoke_result(result):
 
 def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
     _require_openpmd_transport_io()
-    executable, build_dir = _openpmd_calc_phi_ase()
+    executable = transport.findCalcPhiAse()
+    build_dir = _build_dir_for_runtime_executable(executable)
     if parallel_mode == "mpi" and not _mpi_enabled(build_dir):
         return _assert_mpi_mode_rejected_by_non_mpi_build(tmp_path, executable)
     command_prefix = []
@@ -1529,7 +1462,8 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
 @pytest.mark.parametrize("openpmd_backend", _openpmd_backend_values())
 def test_pythonApiLaunchesConfiguredOpenPmdBackendOnce(monkeypatch, tmp_path, openpmd_backend):
     _require_openpmd_transport_io()
-    executable, _ = _openpmd_calc_phi_ase()
+    executable = transport.findCalcPhiAse()
+    build_dir = _build_dir_for_runtime_executable(executable)
     monkeypatch.setenv("HASE_CPP_EXECUTABLE", str(executable))
     phi_ase = launch_smoke_phi_ase()
     phi_ase.openpmdBackend = openpmd_backend
@@ -1567,7 +1501,8 @@ def test_mpiRoundTripWhenEnabled(tmp_path):
 def test_mpiMatrixRoundTrip(monkeypatch, tmp_path):
     _require_openpmd_transport_io()
     ranks = _matrix_mpi_rank_count()
-    executable, build_dir = _openpmd_calc_phi_ase()
+    executable = transport.findCalcPhiAse()
+    build_dir = _build_dir_for_runtime_executable(executable)
     if not _mpi_enabled(build_dir):
         pytest.fail("HASE_MPI_TEST_RANKS is configured, but hase-cpp was not built with MPI")
 
