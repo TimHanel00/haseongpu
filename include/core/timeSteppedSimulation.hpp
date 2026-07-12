@@ -183,7 +183,8 @@ namespace hase::core
             for(unsigned step = 0u; step < m_run.numberOfSteps; ++step)
             {
                 bool const pumpEnabled = step < m_run.pumpSteps;
-                advanceOneStep(pumpEnabled);
+                bool const aseEnabled = m_run.enableAse && !(m_run.prePump && step == 0u);
+                advanceOneStep(pumpEnabled, aseEnabled);
                 callback(makeSnapshot(step + 1u));
                 alpaka::onHost::memcpy(m_queue, m_beta, m_betaNext);
                 alpaka::onHost::wait(m_queue);
@@ -191,7 +192,18 @@ namespace hase::core
         }
 
     private:
-        void evaluateDerivative(auto& beta, bool pumpEnabled, bool refreshAse = true)
+        struct DerivativeBuffers
+        {
+            T_DoubleBuffer& betaCells;
+            T_DoubleBuffer& pumpedBeta;
+            T_FloatBuffer& phiAse;
+            T_UnsignedBuffer& activeMask;
+            T_DoubleBuffer& dndtPump;
+            T_DoubleBuffer& dndtAse;
+            T_DoubleBuffer& derivative;
+        };
+
+        void evaluateDerivative(auto& beta, bool pumpEnabled, bool aseEnabled, bool refreshAse = true)
         {
             hase::kernels::enqueueMapPointBetaToPrismBeta(m_devBundle, m_queue, m_mesh, beta, m_betaVolume);
             alpaka::onHost::wait(m_queue);
@@ -200,18 +212,22 @@ namespace hase::core
             m_hostMesh.betaVolume = detail::copyToVector(m_queue, m_betaVolume);
             if(refreshAse)
             {
-                initializeResult(m_run.enableAse ? 100000.0 : 0.0);
+                initializeResult(aseEnabled ? 100000.0 : 0.0, m_hostMesh.numberOfCells);
 
-                if(m_run.enableAse)
+                if(aseEnabled)
                 {
-                    int const result
-                        = hase::core::startSimulation<false>(m_experiment, m_compute, m_lastAseResult, m_hostMesh);
+                    int const result = hase::core::startSimulation<false>(
+                        m_experiment,
+                        m_compute,
+                        m_lastVolumeAseResult,
+                        m_hostMesh);
                     if(result != 0)
                     {
                         throw std::runtime_error("ASE evaluation failed with return code " + std::to_string(result));
                     }
                 }
-                m_lastAseResult.phiAse = detail::mapVolumePhiToSamples(m_hostMesh, m_lastAseResult.phiAse);
+                m_lastAseResult = m_lastVolumeAseResult;
+                m_lastAseResult.phiAse = detail::mapVolumePhiToSamples(m_hostMesh, m_lastVolumeAseResult.phiAse);
                 m_lastAseResult.mse.assign(m_hostMesh.numberOfSamples, 0.0);
                 m_lastAseResult.totalRays.assign(m_hostMesh.numberOfSamples, 0u);
                 m_lastAseResult.droppedRays.assign(m_hostMesh.numberOfSamples, 0u);
@@ -231,6 +247,8 @@ namespace hase::core
                     m_pumpBackward);
             }
 
+            DerivativeBuffers
+                derivativeBuffers{beta, m_pumpedBeta, m_phiAse, m_activeMask, m_dndtPump, m_dndtAse, m_derivative};
             hase::kernels::enqueueComposeDerivative(
                 m_devBundle,
                 m_queue,
@@ -240,54 +258,48 @@ namespace hase::core
                 std::max(static_cast<double>(m_hostMesh.crystalTFluo), std::numeric_limits<double>::min()),
                 m_run.pump.duration,
                 pumpEnabled,
-                beta,
-                m_pumpedBeta,
-                m_phiAse,
-                m_activeMask,
-                m_dndtPump,
-                m_dndtAse,
-                m_derivative);
+                derivativeBuffers);
             alpaka::onHost::wait(m_queue);
         }
 
-        void advanceOneStep(bool pumpEnabled)
+        void advanceOneStep(bool pumpEnabled, bool aseEnabled)
         {
             auto const& method = m_run.timeIntegration.method;
             if(method == TimeIntegrator::EXPLICIT_EULER)
             {
-                evaluateDerivative(m_beta, pumpEnabled);
+                evaluateDerivative(m_beta, pumpEnabled, aseEnabled);
                 enqueueAddScaled(m_beta, m_derivative, m_betaNext, m_run.timeStep);
             }
             else if(method == TimeIntegrator::HEUN)
             {
-                evaluateDerivative(m_beta, pumpEnabled);
+                evaluateDerivative(m_beta, pumpEnabled, aseEnabled);
                 alpaka::onHost::memcpy(m_queue, m_k1, m_derivative);
                 enqueueAddScaled(m_beta, m_k1, m_stage, m_run.timeStep);
-                evaluateDerivative(m_stage, pumpEnabled);
+                evaluateDerivative(m_stage, pumpEnabled, aseEnabled);
                 enqueueHeun(m_beta, m_k1, m_derivative, m_betaNext);
             }
             else if(method == TimeIntegrator::MIDPOINT)
             {
-                evaluateDerivative(m_beta, pumpEnabled);
+                evaluateDerivative(m_beta, pumpEnabled, aseEnabled);
                 enqueueAddScaled(m_beta, m_derivative, m_stage, 0.5 * m_run.timeStep);
-                evaluateDerivative(m_stage, pumpEnabled);
+                evaluateDerivative(m_stage, pumpEnabled, aseEnabled);
                 enqueueAddScaled(m_beta, m_derivative, m_betaNext, m_run.timeStep);
             }
             else if(method == TimeIntegrator::RUNGE_KUTTA_4)
             {
-                stepRungeKutta4(pumpEnabled);
+                stepRungeKutta4(pumpEnabled, aseEnabled);
             }
             else if(method == TimeIntegrator::FROZEN_PHI_ASE_RUNGE_KUTTA_4)
             {
-                stepFrozenPhiAseRungeKutta4(pumpEnabled);
+                stepFrozenPhiAseRungeKutta4(pumpEnabled, aseEnabled);
             }
             else if(method == TimeIntegrator::IMPLICIT_EULER)
             {
-                stepImplicitEuler(pumpEnabled);
+                stepImplicitEuler(pumpEnabled, aseEnabled);
             }
             else if(method == TimeIntegrator::EXPONENTIAL_EULER)
             {
-                evaluateDerivative(m_beta, pumpEnabled);
+                evaluateDerivative(m_beta, pumpEnabled, aseEnabled);
                 enqueueExponentialEuler();
             }
             else
@@ -302,64 +314,64 @@ namespace hase::core
             m_hostMesh.betaVolume = detail::copyToVector(m_queue, m_betaVolume);
         }
 
-        void stepRungeKutta4(bool pumpEnabled)
+        void stepRungeKutta4(bool pumpEnabled, bool aseEnabled)
         {
-            evaluateDerivative(m_beta, pumpEnabled);
+            evaluateDerivative(m_beta, pumpEnabled, aseEnabled);
             alpaka::onHost::memcpy(m_queue, m_k1, m_derivative);
             enqueueAddScaled(m_beta, m_k1, m_stage, 0.5 * m_run.timeStep);
 
-            evaluateDerivative(m_stage, pumpEnabled);
+            evaluateDerivative(m_stage, pumpEnabled, aseEnabled);
             alpaka::onHost::memcpy(m_queue, m_k2, m_derivative);
             enqueueAddScaled(m_beta, m_k2, m_stage, 0.5 * m_run.timeStep);
 
-            evaluateDerivative(m_stage, pumpEnabled);
+            evaluateDerivative(m_stage, pumpEnabled, aseEnabled);
             alpaka::onHost::memcpy(m_queue, m_k3, m_derivative);
             enqueueAddScaled(m_beta, m_k3, m_stage, m_run.timeStep);
 
-            evaluateDerivative(m_stage, pumpEnabled);
+            evaluateDerivative(m_stage, pumpEnabled, aseEnabled);
             alpaka::onHost::memcpy(m_queue, m_k4, m_derivative);
             enqueueRungeKutta4();
         }
 
-        void stepFrozenPhiAseRungeKutta4(bool pumpEnabled)
+        void stepFrozenPhiAseRungeKutta4(bool pumpEnabled, bool aseEnabled)
         {
-            evaluateDerivative(m_beta, pumpEnabled, true);
+            evaluateDerivative(m_beta, pumpEnabled, aseEnabled, true);
             alpaka::onHost::memcpy(m_queue, m_k1, m_derivative);
             enqueueAddScaled(m_beta, m_k1, m_stage, 0.5 * m_run.timeStep);
 
-            evaluateDerivative(m_stage, pumpEnabled, false);
+            evaluateDerivative(m_stage, pumpEnabled, aseEnabled, false);
             alpaka::onHost::memcpy(m_queue, m_k2, m_derivative);
             enqueueAddScaled(m_beta, m_k2, m_stage, 0.5 * m_run.timeStep);
 
-            evaluateDerivative(m_stage, pumpEnabled, false);
+            evaluateDerivative(m_stage, pumpEnabled, aseEnabled, false);
             alpaka::onHost::memcpy(m_queue, m_k3, m_derivative);
             enqueueAddScaled(m_beta, m_k3, m_stage, m_run.timeStep);
 
-            evaluateDerivative(m_stage, pumpEnabled, false);
+            evaluateDerivative(m_stage, pumpEnabled, aseEnabled, false);
             alpaka::onHost::memcpy(m_queue, m_k4, m_derivative);
             enqueueRungeKutta4();
         }
 
-        void stepImplicitEuler(bool pumpEnabled)
+        void stepImplicitEuler(bool pumpEnabled, bool aseEnabled)
         {
             alpaka::onHost::memcpy(m_queue, m_stage, m_beta);
             for(unsigned iteration = 0u; iteration < std::max(1u, m_run.timeIntegration.implicitIterations);
                 ++iteration)
             {
-                evaluateDerivative(m_stage, pumpEnabled);
+                evaluateDerivative(m_stage, pumpEnabled, aseEnabled);
                 enqueueAddScaled(m_beta, m_derivative, m_betaNext, m_run.timeStep);
                 alpaka::onHost::memcpy(m_queue, m_stage, m_betaNext);
             }
         }
 
-        void initializeResult(double mseValue)
+        void initializeResult(double mseValue, unsigned resultSize)
         {
-            auto const numberOfSamples = m_hostMesh.numberOfPoints * m_hostMesh.numberOfLevels;
             m_lastAseResult = Result(
-                std::vector<float>(numberOfSamples, 0.0f),
-                std::vector<double>(numberOfSamples, mseValue),
-                std::vector<unsigned>(numberOfSamples, 0u),
-                std::vector<double>(numberOfSamples, 0.0));
+                std::vector<float>(resultSize, 0.0f),
+                std::vector<double>(resultSize, mseValue),
+                std::vector<unsigned>(resultSize, 0u),
+                std::vector<double>(resultSize, 0.0));
+            m_lastVolumeAseResult = m_lastAseResult;
         }
 
         SimulationSnapshot makeSnapshot(unsigned step)
@@ -372,6 +384,7 @@ namespace hase::core
                 static_cast<double>(step) * m_run.timeStep,
                 m_hostMesh,
                 m_lastAseResult,
+                m_lastVolumeAseResult,
                 std::move(dndtPump),
                 std::move(dndtAse)};
         }
@@ -466,6 +479,7 @@ namespace hase::core
         T_DoubleBuffer m_pumpedBeta;
         T_DoubleBuffer m_betaVolume;
         T_FloatBuffer m_phiAse;
+        Result m_lastVolumeAseResult;
         T_UnsignedBuffer m_activeMask;
         T_DoubleBuffer m_derivative;
         T_DoubleBuffer m_dndtPump;
