@@ -89,6 +89,7 @@ CMAKE_INSTALL_RPATH = "$ORIGIN;$ORIGIN/../lib"
 CMAKE_INSTALL_RPATH_USE_LINK_PATH = "ON"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "integration: tests that invoke external binaries or full example scripts",
 ]
