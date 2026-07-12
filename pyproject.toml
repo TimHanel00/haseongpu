@@ -37,7 +37,6 @@ dependencies=[
     "vtk",
     "matplotlib",
     "pyyaml",
-    "openpmd-api",
 ]
 
 [project.optional-dependencies]

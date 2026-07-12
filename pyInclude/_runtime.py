@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 from pathlib import Path
 
 
@@ -19,6 +20,40 @@ def _configured_runtime_dir():
     except ImportError:
         return ""
     return str(getattr(native_config, "HASE_RUNTIME_DIR", "") or "")
+
+
+def _configured_openpmd_python_package_dir():
+    try:
+        native_config = importlib.import_module("pyInclude._native_config")
+    except ImportError:
+        return ""
+    return str(getattr(native_config, "HASE_OPENPMD_PYTHON_PACKAGE_DIR", "") or "")
+
+
+def activate_configured_openpmd_python_package():
+    """Make the selected bundled openPMD Python provider importable.
+
+    The generated package configuration records the Python bindings paired with
+    HASE's compiled openPMD provider.  Activate that directory before frontend
+    backend discovery imports ``openpmd_api``.  Do not change an already-loaded
+    provider: the transport compatibility check will report that mismatch.
+    """
+    if "openpmd_api" in sys.modules:
+        return None
+
+    package_dir = _configured_openpmd_python_package_dir()
+    if not package_dir:
+        return None
+
+    path = Path(package_dir).expanduser()
+    if not (path / "openpmd_api").is_dir():
+        return None
+
+    resolved = str(path.resolve())
+    if resolved in sys.path:
+        return path
+    sys.path.insert(0, resolved)
+    return path
 
 
 def _path_entries(value):

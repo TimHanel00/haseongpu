@@ -8,26 +8,35 @@ import pytest
 
 def _source_backends_module():
     root = Path(__file__).resolve().parents[3]
+    names = ("pyInclude", "pyInclude.openpmd", "pyInclude._runtime", "pyInclude.openpmd.backends")
+    previous = {name: sys.modules.get(name) for name in names}
     package = types.ModuleType("pyInclude")
     package.__path__ = [str(root / "pyInclude")]
     openpmd_package = types.ModuleType("pyInclude.openpmd")
     openpmd_package.__path__ = [str(root / "pyInclude" / "openpmd")]
-    sys.modules.setdefault("pyInclude", package)
-    sys.modules.setdefault("pyInclude.openpmd", openpmd_package)
-    runtime_path = root / "pyInclude" / "_runtime.py"
-    runtime_spec = importlib.util.spec_from_file_location("pyInclude._runtime", runtime_path)
-    runtime_module = importlib.util.module_from_spec(runtime_spec)
-    sys.modules["pyInclude._runtime"] = runtime_module
-    runtime_spec.loader.exec_module(runtime_module)
-    path = root / "pyInclude" / "openpmd" / "backends.py"
-    spec = importlib.util.spec_from_file_location("pyInclude.openpmd.backends", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["pyInclude.openpmd.backends"] = module
-    spec.loader.exec_module(module)
-    return module
+    try:
+        sys.modules["pyInclude"] = package
+        sys.modules["pyInclude.openpmd"] = openpmd_package
+        runtime_path = root / "pyInclude" / "_runtime.py"
+        runtime_spec = importlib.util.spec_from_file_location("pyInclude._runtime", runtime_path)
+        runtime_module = importlib.util.module_from_spec(runtime_spec)
+        sys.modules["pyInclude._runtime"] = runtime_module
+        runtime_spec.loader.exec_module(runtime_module)
+        path = root / "pyInclude" / "openpmd" / "backends.py"
+        spec = importlib.util.spec_from_file_location("pyInclude.openpmd.backends", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["pyInclude.openpmd.backends"] = module
+        spec.loader.exec_module(module)
+        return module, runtime_module
+    finally:
+        for name, original in previous.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
 
-backends = _source_backends_module()
+backends, runtime = _source_backends_module()
 
 
 class FakeProbeFunction:
@@ -94,3 +103,14 @@ def test_openPmdProbeCandidatesUseConfiguredRuntimeLib(monkeypatch, tmp_path):
     monkeypatch.setenv("HASE_RUNTIME_DIR", str(runtime))
 
     assert next(backends._candidate_paths()) == probe_path
+
+
+def testConfiguredOpenPmdPythonPackageIsActivatedBeforeImport(monkeypatch, tmp_path):
+    provider = tmp_path / "site-packages"
+    (provider / "openpmd_api").mkdir(parents=True)
+    monkeypatch.delitem(sys.modules, "openpmd_api", raising=False)
+    monkeypatch.setattr(runtime, "_configured_openpmd_python_package_dir", lambda: str(provider))
+    monkeypatch.setattr(sys, "path", [entry for entry in sys.path if entry != str(provider.resolve())])
+
+    assert runtime.activate_configured_openpmd_python_package() == provider
+    assert sys.path[0] == str(provider.resolve())
