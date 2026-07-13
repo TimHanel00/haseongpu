@@ -29,8 +29,10 @@ class PhiAseMpiResult:
 
     phiAse: np.ndarray
     r"""Flattened ASE flux :math:`\Phi_i` for each beta sample."""
-    mse: np.ndarray
-    """Monte Carlo mean-squared-error estimate per sample."""
+    standardError: np.ndarray
+    """Absolute one-sigma Monte Carlo sampling uncertainty per sample."""
+    relativeStandardError: np.ndarray
+    """Relative one-sigma Monte Carlo sampling uncertainty per sample."""
     totalRays: np.ndarray
     """Number of rays used per sample."""
     droppedRays: np.ndarray
@@ -183,7 +185,8 @@ def runPhiaseMPI(phiAse, gainMedium, laser, laserProperties):
 
     return PhiAseMpiResult(
         phiAse=np.asarray(result.phiAse, dtype=np.float64).reshape(-1),
-        mse=np.asarray(result.mse, dtype=np.float64).reshape(-1),
+        standardError=np.asarray(result.standardError, dtype=np.float64).reshape(-1),
+        relativeStandardError=np.asarray(result.relativeStandardError, dtype=np.float64).reshape(-1),
         totalRays=np.asarray(result.totalRays, dtype=np.uint32).reshape(-1),
         droppedRays=np.asarray(getattr(result, "droppedRays", np.zeros_like(result.totalRays)), dtype=np.uint32).reshape(-1),
         dndtAse=np.asarray(result.dndtAse, dtype=np.float64).reshape(-1),
