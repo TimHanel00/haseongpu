@@ -162,6 +162,14 @@ not represent sampled mesh data. They therefore are not part of ``/meshes``
 and do not carry record metadata such as ``axisLabels`` or component
 ``position``.
 
+Forward-reflection request attributes follow the same HASE openPMD extension
+schema: ``use_reflections``, ``reflection_max_iterations``,
+``reflection_tolerance``, and ``surface_reservoir_size``. The parser rejects
+the retired ``forward_ray_length`` attribute; forward rays now traverse to a
+physical boundary. Runtime environment overrides ``HASE_SRM_MAX_ITERATIONS``
+and ``HASE_SRM_DIVERGENCE_STREAK`` are deliberately not serialized because
+they are local execution policy rather than portable request data.
+
 The topology convention inside ``/meshes`` follows VTK's unstructured-grid
 model and ``vtkWedge`` cell. openPMD provides the mesh-record model, but it
 does not standardize VTK-style wedge connectivity itself. HASEonGPU therefore
@@ -191,6 +199,13 @@ Static material and spectral records include ``core_cladding_cell_type``,
 The C++ backend writes result records under ``core_result_``:
 ``phi_ase``, ``mse``, ``total_rays``, and ``dndt_ase``. Result records use
 record-C layout with openPMD ``axisLabels`` ``["cell"]``.
+
+Result iterations also carry registered HASE extension attributes for SRM
+termination: ``srm_status``, ``srm_passes``, ``srm_remaining_fraction``,
+``srm_max_iterations``, and ``srm_divergence_streak``. They are scalar
+iteration metadata, not mesh records. Python readers expose them as
+``Result.srmStatus``, ``srmPasses``, ``srmRemainingFraction``,
+``srmMaxIterations``, and ``srmDivergenceStreak``.
 
 User-defined fields from ``GainMedium.defineField(...)`` or
 ``PrimitiveFieldSpec`` inheritance are serialized through the same scalar

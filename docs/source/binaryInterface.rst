@@ -37,6 +37,14 @@ transport metadata. The command line accepts only the openPMD transport
 entrypoint options for those values. Unsupported metadata such as ``write_vtk = true`` or
 explicit ``devices`` is rejected by the parser.
 
+For forward reflections, the request uses the schema-defined iteration
+attributes ``use_reflections``, ``reflection_max_iterations``,
+``reflection_tolerance``, and ``surface_reservoir_size``. ``forward_ray_length``
+is retired and rejected. The local environment variables
+``HASE_SRM_MAX_ITERATIONS`` and ``HASE_SRM_DIVERGENCE_STREAK`` override the
+maximum reflected-pass count and the consecutive-growth divergence threshold;
+both must be positive integers. The latter defaults to ``3``.
+
 Example
 -------
 
@@ -74,7 +82,7 @@ contain only ``core_beta_volume`` and reuse the cached static topology.
 ``--output-path``
 ^^^^^^^^^^^^^^^^^
 
-Path where ``hase-cpp`` writes the result openPMD series. Results are written as ``core_result_phi_ase``, ``core_result_mse``, ``core_result_total_rays``, and ``core_result_dndt_ase`` mesh records.
+Path where ``hase-cpp`` writes the result openPMD series. Results are written as ``core_result_phi_ase``, ``core_result_mse``, ``core_result_total_rays``, and ``core_result_dndt_ase`` mesh records. Result iterations also report SRM termination through ``srm_status``, ``srm_passes``, ``srm_remaining_fraction``, ``srm_max_iterations``, and ``srm_divergence_streak`` attributes.
 
 Compiled Simulation Mode
 ------------------------
