@@ -77,17 +77,34 @@ The following CMake variables control important build options.
 ``HASE_CUDA_ARCHITECTURES``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* Default: ``native`` with fallback to ``70;80;90;100`` when no local NVIDIA GPU is visible
+* Default: ``native``. When no local NVIDIA GPU is visible, the fallback is
+  ``75;80;90`` with CUDA 13 or newer, or ``60;70;80;90`` with an older CUDA
+  toolkit.
 * Description:
   Selects the CUDA target architecture used for compilation.
 
 * Typical values:
 
-  * ``native``: detect the local GPU architecture automatically
-  * explicit CUDA architectures such as ``70``, ``80``, ``90``, ``100``
+  * ``native``: detect the local GPU architecture automatically and generate
+    native cubin code only
+  * explicit CUDA architectures such as ``70``, ``80``, ``90``, ``100``, or
+    ``120``: generate both cubin and PTX code for the specified architecture
 
-Using ``native`` is convenient for local builds when CMake can query a local GPU.
-For reproducible builds on different systems, specifying the CUDA architecture is recommended.
+Using ``native`` is convenient for a local build, but it does not retain a PTX
+fallback for a later GPU architecture. To target Hopper, Blackwell, or a newer
+architecture directly, set the parameter explicitly to the compute capability
+supported by the selected CUDA toolkit. For example:
+
+.. code-block:: console
+
+   cmake -S . -B build -DHASE_CUDA_ARCHITECTURES=90   # Hopper
+   cmake -S . -B build -DHASE_CUDA_ARCHITECTURES=100  # Blackwell, CC 10.0
+   cmake -S . -B build -DHASE_CUDA_ARCHITECTURES=120  # Blackwell, CC 12.0
+
+For a binary that supports several architectures, pass a semicolon-separated
+list, such as ``-DHASE_CUDA_ARCHITECTURES="90;100;120"``. Use a CUDA toolkit
+that supports every requested architecture; this option does not downgrade an
+unsupported target automatically.
 
 ``HASE_ENABLE_PYTHON``
 ^^^^^^^^^^^^^^^^^^^^^^
