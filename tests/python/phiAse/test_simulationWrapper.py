@@ -111,7 +111,6 @@ def testPhiAseSerializesAdaptiveRangeWithoutAnImplicitFixedRayCount():
     fixed = PhiASE(minRays=100, maxRays=1600, forwardRayCount=250)
     assert fixed.openPmdAttributes(numberOfSamples=1)["forwardRayCount"] == 250
 
-
 def testPhiAseLoadsOpenPmdBackendFromConfig():
     assert PhiASE().openpmdBackend == "adios-sst"
     assert PhiASE({"compute": {"openpmd_backend": "hdf5"}}).openpmdBackend == "hdf5"
