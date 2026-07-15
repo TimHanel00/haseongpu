@@ -74,6 +74,38 @@ The following CMake variables control important build options.
   Uses an existing alpaka package from ``alpaka_DIR`` or ``CMAKE_PREFIX_PATH``
   instead of fetching the pinned alpaka version during CMake configuration.
 
+``HASE_BUILD_RUNTIME`` and ``HASE_RUNTIME_DIR``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* ``HASE_BUILD_RUNTIME`` default: ``ON``
+* ``HASE_RUNTIME_DIR`` default: ``<source>/build``
+* Description:
+  A normal CMake build owns the native runtime, including ``bin/hase-cpp``,
+  tests, and its selected openPMD provider. The scikit-build tree sets
+  ``HASE_BUILD_RUNTIME=OFF`` and asks CMake to configure or incrementally build
+  that shared runtime under ``HASE_RUNTIME_DIR``. Its generated
+  ``_native_config.py`` records the shared build directory and recovers the
+  matching build-local ``openpmd_api`` path from its ``CMakeCache.txt``. The
+  wheel exports only the Python component; it does not install a second native
+  runtime into site-packages.
+
+  For example:
+
+  .. code-block:: bash
+
+     cmake -S . -B build \
+       -DHASE_OPENPMD_PROVIDER=bundled \
+       -DHASE_OPENPMD_BUILD_PYTHON_BINDINGS=ON
+     cmake --build build
+
+     python3 -m pip install .
+
+  The pip command reuses ``build/``. It also creates and builds that directory
+  automatically when no normal CMake build exists yet. Use
+  ``HASE_RUNTIME_DIR=/path/to/build`` or the configurator's ``--runtime-dir``
+  option only to select a non-default shared build directory. Keep the shared
+  runtime directory available for as long as that Python installation is used.
+
 ``HASE_CUDA_ARCHITECTURES``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -224,8 +256,11 @@ whether to install immediately with yes as the default answer, and defaults
 native CPU optimizations to off for redistributable wheels. Use
 ``--autoinstall`` to accept all defaults and install non-interactively,
 ``--use-ccache`` to add CMake compiler launchers for ccache, and
+``--runtime-dir`` to select a non-default shared native build, and
 ``--reinstall`` to rerun pip with the previous HASE CMake settings from the
-last script install or build cache.
+last script install or build cache. The helper remains a wrapper around the
+ordinary pip/scikit-build path; CMake owns creation and reuse of the shared
+runtime.
 
 The CMake build selects the openPMD provider, not the storage backend used by a
 simulation. Runtime backend selection belongs to Python or YAML through
@@ -364,7 +399,7 @@ library directories.
 ``HASE_OPENPMD_BUILD_PYTHON_BINDINGS``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-* Default: ``OFF``
+* Default: follows ``HASE_ENABLE_PYTHON`` (``ON`` in the default build)
 * Description:
   Builds openPMD-api Python bindings as part of the HASE CMake build tree when
   using the bundled provider. These bindings are not installed

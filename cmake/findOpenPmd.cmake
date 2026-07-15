@@ -150,7 +150,7 @@ option(
 option(
     HASE_OPENPMD_BUILD_PYTHON_BINDINGS
     "Build and install openPMD-api Python bindings with the HASE-managed provider"
-    OFF
+    ${HASE_ENABLE_PYTHON}
 )
 set(HASE_OPENPMD_PYTHON_PACKAGE_DIR
     ""
@@ -172,6 +172,39 @@ option(
     "Force rebuilding the HASE-managed bundled openPMD-api provider"
     OFF
 )
+
+# The bundled provider is built by nested CMake invocations during the outer
+# configure.  Give those builds a portable default that leaves one processor
+# available for the rest of the system, while respecting an explicit caller
+# setting such as the one exported by CI or hase-configure.
+function(hase_openpmd_configure_parallel_level)
+    if(
+        NOT DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL}
+        OR "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}" STREQUAL ""
+    )
+        include(ProcessorCount)
+        ProcessorCount(HASE_OPENPMD_PROCESSOR_COUNT)
+        if(
+            NOT HASE_OPENPMD_PROCESSOR_COUNT
+            OR HASE_OPENPMD_PROCESSOR_COUNT LESS 2
+        )
+            set(HASE_OPENPMD_DEFAULT_PARALLEL_LEVEL 1)
+        else()
+            math(
+                EXPR
+                HASE_OPENPMD_DEFAULT_PARALLEL_LEVEL
+                "${HASE_OPENPMD_PROCESSOR_COUNT} - 1"
+            )
+        endif()
+        set(ENV{CMAKE_BUILD_PARALLEL_LEVEL}
+            "${HASE_OPENPMD_DEFAULT_PARALLEL_LEVEL}"
+        )
+    endif()
+    message(
+        STATUS
+        "HASE bundled provider parallel build level: $ENV{CMAKE_BUILD_PARALLEL_LEVEL}"
+    )
+endfunction()
 
 function(hase_openpmd_validate_found provider_kind)
     if(NOT openPMD_FOUND)
@@ -461,6 +494,7 @@ function(hase_openpmd_run_provider_stage stage_name template_file)
 endfunction()
 
 function(hase_openpmd_bootstrap_bundled_provider)
+    hase_openpmd_configure_parallel_level()
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/hase-openpmd-provider")
     set(HASE_OPENPMD_BUNDLED_STAMP
         "${HASE_OPENPMD_BUNDLED_PREFIX}/hase-openpmd-provider.stamp"

@@ -92,6 +92,12 @@ jobs:
             echo "HASE_MPIEXEC_EXTRA_ARGS=--oversubscribe" >> "$GITHUB_ENV"
           fi
 
+          parallel_level="$(nproc)"
+          if (( parallel_level > 1 )); then
+            parallel_level="$((parallel_level - 1))"
+          fi
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$parallel_level" >> "$GITHUB_ENV"
+
           {
             echo "HASE_CMAKE_ARGS<<EOF"
             echo "$HASE_CMAKE_ARGS_BASE $mpi_cmake_arg"
@@ -229,14 +235,15 @@ jobs:
             printf 'LD_LIBRARY_PATH=%s:%s\n' "$(IFS=:; echo "${runtime_paths[*]}")" "$current_ld_library_path" >> "$GITHUB_ENV"
           fi
 
-
-      - name: Configure
+      - name: Configure native runtime
         shell: bash
         run: |
           set -euxo pipefail
           cmake_args=(
             $HASE_CMAKE_ARGS
+            -DHASE_BUILD_RUNTIME=ON
             -DHASE_OPENPMD_PROVIDER=bundled
+            -DHASE_OPENPMD_BUILD_PYTHON_BINDINGS=ON
           )
           if [[ "$OPENPMD_RUNTIME_BACKEND" == "hdf5" ]]; then
             cmake_args+=(
@@ -278,65 +285,38 @@ jobs:
 
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             "${cmake_args[@]}"
+          printf '%s\n' "${cmake_args[@]}" > "$RUNNER_TEMP/hase-cmake-args.txt"
 
-      - name: Build
+      - name: Build native runtime
         shell: bash
         run: |
           set -euxo pipefail
-          cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+          cmake --build "$BUILD_DIR"
 
       - name: Install Python package
         shell: bash
         run: |
           set -euxo pipefail
 
-          pip_cmake_args=(
-            $HASE_CMAKE_ARGS
-            -DBUILD_TESTING=OFF
-            -DHASE_TESTING=OFF
-            -DHASE_OPENPMD_PROVIDER=bundled
+          mapfile -t pip_cmake_args < "$RUNNER_TEMP/hase-cmake-args.txt"
+          pip_cmake_args+=(
+            -DHASE_BUILD_RUNTIME=OFF
+            -DHASE_RUNTIME_DIR="$GITHUB_WORKSPACE/$BUILD_DIR"
           )
-          if [[ "$OPENPMD_RUNTIME_BACKEND" == "hdf5" ]]; then
-            pip_cmake_args+=(
-              -DHASE_OPENPMD_USE_ADIOS2=OFF
-              -DHASE_OPENPMD_USE_SST=OFF
-              -DHASE_OPENPMD_USE_HDF5=ON
-              -DHASE_OPENPMD_FETCH_HDF5=ON
-            )
-          elif [[ "$OPENPMD_RUNTIME_BACKEND" == "adios-sst" ]]; then
-            pip_cmake_args+=(
-              -DHASE_OPENPMD_USE_ADIOS2=ON
-              -DHASE_OPENPMD_USE_SST=ON
-              -DHASE_OPENPMD_USE_HDF5=OFF
-            )
-          else
-            pip_cmake_args+=(
-              -DHASE_OPENPMD_USE_ADIOS2=ON
-              -DHASE_OPENPMD_USE_SST=OFF
-              -DHASE_OPENPMD_USE_HDF5=OFF
-            )
-          fi
-
-          if [[ "${{ matrix.config.hwloc || 'yes' }}" != "no" ]]; then
-            pip_cmake_args+=(-Dalpaka_DEP_HWLOC=ON)
-            pip_cmake_args+=(-Dalpaka_HOST_MemPinningCanFail=ON)
-          else
-            pip_cmake_args+=(-Dalpaka_DEP_HWLOC=OFF)
-          fi
-
-          if [[ "${{ matrix.config.simd || 'DEFAULT' }}" == "EMULATION" ]]; then
-            pip_cmake_args+=(-Dalpaka_SIMD=EMULATION)
-          fi
-
-          if [[ "${{ matrix.config.hip }}" != "no" ]]; then
-            pip_cmake_args+=(
-              -DCMAKE_PREFIX_PATH="${ROCM_PATH:-/opt/rocm}"
-              -DCMAKE_HIP_COMPILER="${HIPCXX:-/opt/rocm/llvm/bin/clang++}"
-              -DCMAKE_HIP_ARCHITECTURES=gfx900
-            )
-          fi
 
           CMAKE_ARGS="${pip_cmake_args[*]}" python -m pip install -v ".[test]"
+
+          mapfile -t skbuild_caches < <(
+            find build -mindepth 2 -maxdepth 2 -type f -name CMakeCache.txt \
+              -exec grep -l '^SKBUILD:STRING=' {} +
+          )
+          if (( ${#skbuild_caches[@]} != 1 )); then
+            echo "Expected exactly one scikit-build CMake cache" >&2
+            printf '%s\n' "${skbuild_caches[@]}" >&2
+            exit 1
+          fi
+          hase_skbuild_dir="$(dirname "${skbuild_caches[0]}")"
+          echo "HASE_SKBUILD_DIR=$hase_skbuild_dir" >> "$GITHUB_ENV"
 
       - name: Debug Python install
         shell: bash
@@ -372,6 +352,15 @@ jobs:
 
           import HASEonGPU
           print("HASEonGPU imported from:", HASEonGPU.__file__)
+
+          from pyInclude import _native_config
+
+          runtime_dir = pathlib.Path(_native_config.HASE_RUNTIME_DIR).resolve()
+          expected_runtime_dir = pathlib.Path(os.environ["GITHUB_WORKSPACE"], os.environ["BUILD_DIR"]).resolve()
+          assert runtime_dir == expected_runtime_dir
+          assert (runtime_dir / "bin" / "hase-cpp").is_file()
+          assert not (pathlib.Path(os.environ["HASE_SKBUILD_DIR"]) / "bin" / "hase-cpp").exists()
+          print("HASE runtime build tree:", runtime_dir)
           PY
 
       - name: Run installed-package smoke test from /tmp

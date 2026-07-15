@@ -45,6 +45,8 @@ CCACHE_LAUNCHER_DEFINES = (
     "CMAKE_CUDA_COMPILER_LAUNCHER",
 )
 REINSTALL_CACHE_DEFINES = (
+    "HASE_BUILD_RUNTIME",
+    "HASE_RUNTIME_DIR",
     "HASE_OPENPMD_PROVIDER",
     "HASE_OPENPMD_USE_ADIOS2",
     "HASE_OPENPMD_FETCH_ADIOS2",
@@ -52,6 +54,8 @@ REINSTALL_CACHE_DEFINES = (
     "HASE_OPENPMD_FETCH_HDF5",
     "HASE_OPENPMD_USE_SST",
     "HASE_OPENPMD_BUILD_PYTHON_BINDINGS",
+    "HASE_OPENPMD_PYTHON_PACKAGE_DIR",
+    "HASE_OPENPMD_BUNDLED_PREFIX",
     "HASE_USE_SYSTEM_ALPAKA",
     "HASE_CUDA_ARCHITECTURES",
     "DISABLE_MPI",
@@ -77,6 +81,7 @@ class WizardSelection:
     n_per_node: int = 1
     cmake_prefix_path: str | None = None
     openpmd_dir: str | None = None
+    openpmd_python_package_dir: str | None = None
     bundled_adios2: str = BUNDLED_ADIOS2_FETCH
     bundled_hdf5: str = BUNDLED_HDF5_OFF
     openpmd_adios2: str = OPENPMD_ADIOS2_AUTO
@@ -87,6 +92,7 @@ class WizardSelection:
     adios2_dir: str | None = None
     hdf5_prefix: str | None = None
     hdf5_dir: str | None = None
+    runtime_dir: str | None = None
 
 
 def _csv(values):
@@ -231,6 +237,13 @@ def cmake_args(selection: WizardSelection, *, use_ccache=False):
         if selection.hdf5_dir:
             args.append(f"-DHDF5_DIR={selection.hdf5_dir}")
 
+    if selection.openpmd_python_package_dir:
+        args.append(f"-DHASE_OPENPMD_PYTHON_PACKAGE_DIR={selection.openpmd_python_package_dir}")
+
+    args.append("-DHASE_BUILD_RUNTIME=OFF")
+    if selection.runtime_dir:
+        args.append(f"-DHASE_RUNTIME_DIR={selection.runtime_dir}")
+
     disable_mpi = {
         MPI_MODE_ON: "OFF",
         MPI_MODE_OFF: "ON",
@@ -300,15 +313,20 @@ def _latest_cmake_cache():
     return max(caches, key=lambda path: path.stat().st_mtime)
 
 
-def _cmake_args_from_cache(cache_path):
+def _cmake_cache_values(cache_path):
     values = {}
     for line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line or line.startswith(("#", "//")) or "=" not in line:
             continue
         key_type, value = line.split("=", 1)
         key = key_type.split(":", 1)[0]
-        if key in REINSTALL_CACHE_DEFINES and value and not value.endswith("-NOTFOUND"):
+        if value and not value.endswith("-NOTFOUND"):
             values[key] = value
+    return values
+
+
+def _cmake_args_from_cache(cache_path):
+    values = _cmake_cache_values(cache_path)
     return [f"-D{name}={values[name]}" for name in REINSTALL_CACHE_DEFINES if name in values]
 
 
@@ -456,12 +474,13 @@ def guidance_items(selection: WizardSelection, yaml_path, *, alpaka_backends=(),
         mpi_text = "MPI build support is auto-detected (-DDISABLE_MPI=AUTO)."
     else:
         mpi_text = "MPI build support is disabled (-DDISABLE_MPI=ON)."
-    provider_text = (
-        "Bundled provider installs openPMD/ADIOS2/HDF5 into a build-local CMake prefix "
-        "and reuses it on later installs when dependency settings are unchanged."
-        if selection.provider == PROVIDER_BUNDLED
-        else "System provider uses an existing openPMD-api C++ installation."
-    )
+    if selection.provider == PROVIDER_BUNDLED:
+        provider_text = (
+            "Bundled provider installs openPMD/ADIOS2/HDF5 into the shared native build "
+            "and reuses it on later installs when dependency settings are unchanged."
+        )
+    else:
+        provider_text = "System provider uses an existing openPMD-api C++ installation."
     return [
         yaml_text,
         f"Supported openpmd_backends for this choice: {supported}.",
@@ -532,6 +551,33 @@ def _interactive_bundled_hdf5(adios2_mode=BUNDLED_ADIOS2_FETCH):
     }.get(str(choice).strip(), choice)
 
 
+def _python_info_from_package_dir(package_dir, errors):
+    if not package_dir:
+        return preflight._python_info(errors)
+
+    package_path = Path(package_dir).expanduser().resolve()
+    if not (package_path / "openpmd_api").is_dir():
+        errors.append(f"Python provider directory '{package_path}' does not contain openpmd_api.")
+        return {}
+
+    saved_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "openpmd_api" or name.startswith("openpmd_api.")
+    }
+    for name in saved_modules:
+        del sys.modules[name]
+    sys.path.insert(0, str(package_path))
+    try:
+        return preflight._python_info(errors)
+    finally:
+        sys.path.remove(str(package_path))
+        for name in list(sys.modules):
+            if name == "openpmd_api" or name.startswith("openpmd_api."):
+                del sys.modules[name]
+        sys.modules.update(saved_modules)
+
+
 def _probe_external(args, *, backend=None):
     probe_args = SimpleNamespace(
         backend=backend or args.openpmd_backend or "adios-sst",
@@ -542,7 +588,7 @@ def _probe_external(args, *, backend=None):
     )
     errors: list[str] = []
     warnings: list[str] = []
-    python_info = preflight._python_info(errors)
+    python_info = _python_info_from_package_dir(args.openpmd_python_package_dir, errors)
     cmake_info = preflight._cmake_probe(probe_args, errors)
     preflight._check_versions(python_info, cmake_info, warnings)
     return probe_args, python_info, cmake_info, errors, warnings
@@ -604,6 +650,7 @@ def _build_selection(args):
 
     cmake_prefix_path = args.cmake_prefix_path
     openpmd_dir = args.openpmd_dir
+    openpmd_python_package_dir = args.openpmd_python_package_dir
     adios2_prefix = args.adios2_prefix
     adios2_dir = args.adios2_dir
     hdf5_prefix = args.hdf5_prefix
@@ -614,6 +661,7 @@ def _build_selection(args):
     bundled_python_bindings = not args.no_bundled_python_bindings
     native_optimizations = args.native_optimizations == "on"
     mpi_mode = args.mpi
+    runtime_dir = str(Path(args.runtime_dir).expanduser().resolve()) if args.runtime_dir else None
     probe_report = None
 
     if provider == PROVIDER_AUTO:
@@ -732,6 +780,7 @@ def _build_selection(args):
         n_per_node=int(args.n_per_node),
         cmake_prefix_path=cmake_prefix_path,
         openpmd_dir=openpmd_dir,
+        openpmd_python_package_dir=openpmd_python_package_dir,
         bundled_adios2=bundled_adios2,
         bundled_hdf5=bundled_hdf5,
         openpmd_adios2=openpmd_adios2,
@@ -742,6 +791,7 @@ def _build_selection(args):
         adios2_dir=adios2_dir,
         hdf5_prefix=hdf5_prefix,
         hdf5_dir=hdf5_dir,
+        runtime_dir=runtime_dir,
     )
     return selection, alpaka_backends, alpaka_error, probe_report
 
@@ -798,10 +848,23 @@ def _parse_args(argv=None):
     parser.add_argument("--n-per-node", type=int, default=1)
     parser.add_argument("--cmake-prefix-path", default=None)
     parser.add_argument("--openpmd-dir", default=None)
+    parser.add_argument(
+        "--openpmd-python-package-dir",
+        default=None,
+        help="Directory containing the openpmd_api package paired with the selected C++ provider or runtime.",
+    )
     parser.add_argument("--adios2-prefix", default=None)
     parser.add_argument("--adios2-dir", default=None)
     parser.add_argument("--hdf5-prefix", default=None)
     parser.add_argument("--hdf5-dir", default=None)
+    parser.add_argument(
+        "--runtime-dir",
+        default=None,
+        help=(
+            "Shared native HASE build directory used by the Python frontend. "
+            "Defaults to build/ and is configured and built automatically when needed."
+        ),
+    )
     parser.add_argument("--cmake", default="cmake")
     parser.add_argument("--cmake-generator", default=preflight._default_cmake_generator())
     parser.add_argument(

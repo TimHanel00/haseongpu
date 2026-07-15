@@ -1,3 +1,5 @@
+import sys
+import types
 from pathlib import Path
 
 import yaml
@@ -238,6 +240,7 @@ def test_installCommandUsesEnvVarAndSafeDefaults():
 
     assert 'HASE_CONFIGURE_CMAKE_ARGS="' in command
     assert 'CMAKE_ARGS="$HASE_CONFIGURE_CMAKE_ARGS" python3 -m pip install -v .' in command
+    assert "-DHASE_BUILD_RUNTIME=OFF" in command
     assert "-DDISABLE_MPI=AUTO" in command
     assert "-DHASE_NATIVE_OPTIMIZATIONS=OFF" in command
 
@@ -265,6 +268,42 @@ def test_installCommandCanDisableNativeOptimizations():
     assert "-DHASE_NATIVE_OPTIMIZATIONS=OFF" in install_command(selection)
 
 
+def test_installCommandCanSelectSharedRuntimeDirectory():
+    selection = WizardSelection(
+        provider=PROVIDER_BUNDLED,
+        openpmd_backend="adios-sst",
+        compute_backend="Host_Cpu_CpuSerial",
+        openpmd_python_package_dir="/opt/openpmd-python",
+        runtime_dir="/opt/hase-runtime",
+    )
+
+    command = install_command(selection)
+
+    assert "-DHASE_BUILD_RUNTIME=OFF" in command
+    assert "-DHASE_RUNTIME_DIR=/opt/hase-runtime" in command
+    assert "-DHASE_OPENPMD_PYTHON_PACKAGE_DIR=/opt/openpmd-python" in command
+    assert "shared native build" in "\n".join(provider_notes(selection))
+
+
+def test_explicitOpenPmdPythonDirectoryIsUsedForPreflight(tmp_path, monkeypatch):
+    package_dir = tmp_path / "site-packages"
+    (package_dir / "openpmd_api").mkdir(parents=True)
+    previously_loaded = types.ModuleType("openpmd_api")
+    monkeypatch.setitem(sys.modules, "openpmd_api", previously_loaded)
+
+    def fake_python_info(errors):
+        assert not errors
+        assert Path(sys.path[0]) == package_dir
+        assert sys.modules.get("openpmd_api") is not previously_loaded
+        sys.modules["openpmd_api"] = types.ModuleType("openpmd_api")
+        return {"path": sys.path[0]}
+
+    monkeypatch.setattr(configure_module.preflight, "_python_info", fake_python_info)
+
+    assert configure_module._python_info_from_package_dir(package_dir, []) == {"path": str(package_dir)}
+    assert sys.modules["openpmd_api"] is previously_loaded
+
+
 def test_mainWritesDefaultYamlUnderConfig(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
@@ -283,6 +322,35 @@ def test_mainWritesDefaultYamlUnderConfig(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "Wrote config/hase-phiase.yaml" in output
     assert "configuration file is present under config/hase-phiase.yaml" in output
+
+
+def test_mainCanSelectSharedNativeRuntime(tmp_path, monkeypatch, capsys):
+    runtime_dir = tmp_path / "native"
+    monkeypatch.setattr(
+        configure_module,
+        "available_alpaka_backends",
+        lambda: (["Host_Cpu_CpuSerial"], None),
+    )
+
+    assert (
+        configure_module.main(
+            [
+                "--yes",
+                "--provider",
+                PROVIDER_BUNDLED,
+                "--runtime-dir",
+                str(runtime_dir),
+                "--output",
+                "-",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    assert "-DHASE_BUILD_RUNTIME=OFF" in output
+    assert f"-DHASE_RUNTIME_DIR={runtime_dir}" in output
+    assert "openpmd_backend: adios-sst" in output
 
 
 def test_autoProviderFallsBackToBundled(monkeypatch, capsys):
@@ -338,6 +406,36 @@ def test_bundledProviderStagesFetchedDependenciesBeforeOpenPmd():
     assert "-DHDF5_DIR=${HASE_OPENPMD_BUNDLED_PREFIX}/lib/cmake/hdf5" in script
     assert script.index(hdf5_stage) < script.index(openpmd_stage)
     assert script.index(adios2_stage) < script.index(openpmd_stage)
+
+
+def test_bundledProviderLeavesOneProcessorFreeByDefault():
+    script = Path("cmake/findOpenPmd.cmake").read_text(encoding="utf-8")
+    normalized_script = " ".join(script.split())
+
+    assert "include(ProcessorCount)" in script
+    assert "ProcessorCount(HASE_OPENPMD_PROCESSOR_COUNT)" in script
+    assert "HASE_OPENPMD_PROCESSOR_COUNT LESS 2" in normalized_script
+    assert '"${HASE_OPENPMD_PROCESSOR_COUNT} - 1"' in script
+    assert "ENV{CMAKE_BUILD_PARALLEL_LEVEL}" in script
+    assert "hase_openpmd_configure_parallel_level()" in script
+
+
+def test_frontendOnlyCmakeModeBuildsSharedRuntime():
+    cmake_lists = Path("CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "option(\n    HASE_BUILD_RUNTIME" in cmake_lists
+    assert "if(NOT HASE_BUILD_RUNTIME)" in cmake_lists
+    assert '"${CMAKE_SOURCE_DIR}/build"' in cmake_lists
+    assert 'COMMAND "${CMAKE_COMMAND}" --build "${HASE_RUNTIME_DIR}"' in cmake_lists
+    assert '"${HASE_RUNTIME_DIR}/CMakeCache.txt"' in cmake_lists
+    assert "include(cmake/pythonBindings.cmake)\n    return()" in cmake_lists
+
+
+def test_scikitBuildUsesFrontendOnlyMode():
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'build-dir = "build/{wheel_tag}"' in pyproject
+    assert 'HASE_BUILD_RUNTIME = "OFF"' in pyproject
 
 
 def test_hdf5PromptRequiresHdf5(monkeypatch, capsys):

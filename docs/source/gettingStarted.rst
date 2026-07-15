@@ -93,7 +93,10 @@ Python process after rebuilding; do not install an unrelated PyPI
 the matching local provider automatically.
 
 Useful non-interactive options include ``--autoinstall``, ``--reinstall``,
-``--use-ccache``, ``--provider``, ``--openpmd-backend``, and ``--output``.  Run
+``--use-ccache``, ``--runtime-dir``, ``--provider``, ``--openpmd-backend``, and
+``--output``. The default install creates or reuses the shared native runtime
+under ``build/``. ``--runtime-dir`` selects a different shared native build
+directory when needed. Run
 ``python3 utils/configure_hase.py --help`` for the complete list.
 
 5. Install
@@ -106,10 +109,13 @@ The configurator prints a command of this form:
    CMAKE_ARGS="<selected CMake options>" python3 -m pip install -v .
 
 Run the printed command if you did not let the configurator install
-immediately.  ``python3 -m pip install -v .`` builds the C++ extension through
-scikit-build/CMake, installs the Python package, and shows the CMake/build
-output.  ``CMAKE_ARGS`` is how you pass build options such as the openPMD
-provider, MPI mode, Alpaka choices, and native CPU optimization setting.
+immediately. ``python3 -m pip install -v .`` uses a lightweight
+``build/{wheel_tag}`` tree for wheel staging and creates or incrementally builds
+the native runtime under ``build/``. A normal ``cmake -S . -B build`` build and
+the Python installation therefore share ``hase-cpp``, openPMD, ADIOS2/HDF5,
+and Alpaka. Only the Python frontend is exported into site-packages.
+``CMAKE_ARGS`` is how you pass build options such as the openPMD provider, MPI
+mode, Alpaka choices, and native CPU optimization setting.
 
 If pip reports an externally managed Python environment, prefer a virtual
 environment.  Use ``--break-system-packages`` with the configurator only when
