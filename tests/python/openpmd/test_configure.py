@@ -423,7 +423,7 @@ def test_bundledProviderLeavesOneProcessorFreeByDefault():
 def test_frontendOnlyCmakeModeBuildsSharedRuntime():
     cmake_lists = Path("CMakeLists.txt").read_text(encoding="utf-8")
 
-    assert "option(\n    HASE_BUILD_RUNTIME" in cmake_lists
+    assert "option(HASE_BUILD_RUNTIME" in "".join(cmake_lists.split())
     assert "if(NOT HASE_BUILD_RUNTIME)" in cmake_lists
     assert '"${CMAKE_SOURCE_DIR}/build"' in cmake_lists
     assert 'COMMAND "${CMAKE_COMMAND}" --build "${HASE_RUNTIME_DIR}"' in cmake_lists
@@ -582,8 +582,16 @@ def test_generatedYamlLoadsAsPhiAseConfig():
     )
 
     config = yaml.safe_load(yaml_config(selection))
+    assert config["experiment"] == {
+        "minRays": 100000,
+        "maxRays": 100000,
+        "relativeStandardErrorThreshold": 0.1,
+    }
     phi_ase = PhiASE(config)
 
+    assert phi_ase.minRays == 100000
+    assert phi_ase.maxRays == 100000
+    assert phi_ase.relativeStandardErrorThreshold == 0.1
     assert phi_ase.backend == "Host_Cpu_CpuSerial"
     assert phi_ase.openpmdBackend == "adios"
     assert phi_ase.parallelMode == "mpi"
