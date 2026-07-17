@@ -384,13 +384,14 @@ if(NOT HASE_BUILD_RUNTIME)
             )
         endif()
     endif()
+
     if(
-        NOT HASE_OPENPMD_PYTHON_PACKAGE_DIR
-        OR NOT EXISTS "${HASE_OPENPMD_PYTHON_PACKAGE_DIR}/openpmd_api"
+        HASE_OPENPMD_PYTHON_PACKAGE_DIR
+        AND NOT EXISTS "${HASE_OPENPMD_PYTHON_PACKAGE_DIR}/openpmd_api"
     )
         message(
             FATAL_ERROR
-            "The shared runtime does not provide a matching openpmd_api package. Configure it with HASE_OPENPMD_BUILD_PYTHON_BINDINGS=ON."
+            "The shared runtime records HASE_OPENPMD_PYTHON_PACKAGE_DIR='${HASE_OPENPMD_PYTHON_PACKAGE_DIR}', but that directory does not contain openpmd_api."
         )
     endif()
 
