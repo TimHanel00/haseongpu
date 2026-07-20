@@ -200,6 +200,36 @@ For redistributable wheels or binaries, configure with:
 
    CMAKE_ARGS="-DHASE_NATIVE_OPTIMIZATIONS=OFF" python3 -m pip install .
 
+``HASE_BENCHMARK``
+^^^^^^^^^^^^^^^^^^
+
+* Default: ``OFF``
+* Description:
+  Enables backend timing scopes around forward PhiASE batches, individual
+  device work, and synchronized propagation kernels. Timing rows are appended
+  to ``hase_benchmark.csv`` in the configured output directory, or the backend
+  working directory when no output path is configured. The required
+  synchronization changes execution timing, so this option is intended only
+  for benchmark builds.
+
+* Values:
+
+  * ``OFF``: compile timing scopes to no-ops
+  * ``ON``: record backend timing rows in the historical benchmark CSV format
+
+Configure a timing build with:
+
+.. code-block:: bash
+
+   cmake -S . -B build -DHASE_BENCHMARK=ON
+   cmake --build build
+
+Plot a generated CSV with the bundled viewer:
+
+.. code-block:: bash
+
+   python3 Benchmark/benchmark_gui.py path/to/hase_benchmark.csv
+
 ``HASE_SELECT_BACKEND_ALPAKA``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
