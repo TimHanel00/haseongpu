@@ -160,8 +160,8 @@ unsupported target automatically.
 * Description:
   Controls whether HASEonGPU applies its release build configuration.  When
   enabled, CMake forces ``CMAKE_BUILD_TYPE=Release`` and enables the release
-  optimization options used by the project, including CUDA/HIP fast-math
-  related flags where applicable.
+  optimization options used by the project. Fast-math remains disabled so
+  backends preserve deterministic handling of infinities and NaNs.
 
   Important: ``HASE_BUILD_RELEASE=ON`` overwrites user-provided
   ``CMAKE_BUILD_TYPE`` values and related optimization settings during
