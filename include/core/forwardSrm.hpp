@@ -69,8 +69,10 @@ namespace hase::core
         alpaka::concepts::IBuffer auto dirYB = alpaka::onHost::alloc<double>(devBundle.device, reservoirSlots);
         alpaka::concepts::IBuffer auto dirZA = alpaka::onHost::alloc<double>(devBundle.device, reservoirSlots);
         alpaka::concepts::IBuffer auto dirZB = alpaka::onHost::alloc<double>(devBundle.device, reservoirSlots);
-        alpaka::concepts::IBuffer auto weightsA = alpaka::onHost::alloc<double>(devBundle.device, reservoirSlots);
-        alpaka::concepts::IBuffer auto weightsB = alpaka::onHost::alloc<double>(devBundle.device, reservoirSlots);
+        alpaka::concepts::IBuffer auto originUA = alpaka::onHost::alloc<float>(devBundle.device, reservoirSlots);
+        alpaka::concepts::IBuffer auto originUB = alpaka::onHost::alloc<float>(devBundle.device, reservoirSlots);
+        alpaka::concepts::IBuffer auto originVA = alpaka::onHost::alloc<float>(devBundle.device, reservoirSlots);
+        alpaka::concepts::IBuffer auto originVB = alpaka::onHost::alloc<float>(devBundle.device, reservoirSlots);
         alpaka::concepts::IBuffer auto sigmaIndicesA
             = alpaka::onHost::alloc<unsigned>(devBundle.device, reservoirSlots);
         alpaka::concepts::IBuffer auto sigmaIndicesB
@@ -97,7 +99,8 @@ namespace hase::core
             dirXA,
             dirYA,
             dirZA,
-            weightsA,
+            originUA,
+            originVA,
             sigmaIndicesA,
             faceWeightsA,
             experiment.surfaceReservoirSize};
@@ -111,7 +114,8 @@ namespace hase::core
             dirXB,
             dirYB,
             dirZB,
-            weightsB,
+            originUB,
+            originVB,
             sigmaIndicesB,
             faceWeightsB,
             experiment.surfaceReservoirSize};

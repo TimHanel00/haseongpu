@@ -30,6 +30,16 @@ namespace hase::kernels::forward
         return (std::uint64_t{1u} << 63u) | pass;
     }
 
+    [[nodiscard]] ALPAKA_FN_HOST_ACC constexpr unsigned selectSurfaceReservoirSlot(
+        unsigned const filledSlots,
+        double const unitSample)
+    {
+        if(filledSlots == 0u)
+            return 0u;
+        unsigned const slot = static_cast<unsigned>(unitSample * static_cast<double>(filledSlots));
+        return slot < filledSlots ? slot : filledSlots - 1u;
+    }
+
     template<
         alpaka::concepts::IMdSpan TPhi,
         alpaka::concepts::IMdSpan TPhiSquare,
@@ -56,7 +66,8 @@ namespace hase::kernels::forward
         alpaka::concepts::IMdSpan TDirX,
         alpaka::concepts::IMdSpan TDirY,
         alpaka::concepts::IMdSpan TDirZ,
-        alpaka::concepts::IMdSpan TWeights,
+        alpaka::concepts::IMdSpan TOriginU,
+        alpaka::concepts::IMdSpan TOriginV,
         alpaka::concepts::IMdSpan TSigmaIndices,
         alpaka::concepts::IMdSpan TFaceWeights>
     struct SurfaceReservoirSpans
@@ -65,7 +76,8 @@ namespace hase::kernels::forward
         TDirX dirX;
         TDirY dirY;
         TDirZ dirZ;
-        TWeights weights;
+        TOriginU originU;
+        TOriginV originV;
         TSigmaIndices sigmaIndices;
         TFaceWeights faceWeights;
         unsigned slotsPerFace;
@@ -142,31 +154,17 @@ namespace alpaka::onHost
         alpaka::concepts::IMdSpan TDirX,
         alpaka::concepts::IMdSpan TDirY,
         alpaka::concepts::IMdSpan TDirZ,
-        alpaka::concepts::IMdSpan TWeights,
+        alpaka::concepts::IMdSpan TOriginU,
+        alpaka::concepts::IMdSpan TOriginV,
         alpaka::concepts::IMdSpan TSigmaIndices,
         alpaka::concepts::IMdSpan TFaceWeights>
     struct MakeAccessibleOnAcc::Op<
         hase::kernels::forward::
-            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights>>
+            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TOriginU, TOriginV, TSigmaIndices, TFaceWeights>>
     {
-        auto operator()(hase::kernels::forward::
-                            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights>&
-                                spans) const
-        {
-            return hase::kernels::forward::SurfaceReservoirSpans{
-                makeAccessibleOnAcc(spans.counts),
-                makeAccessibleOnAcc(spans.dirX),
-                makeAccessibleOnAcc(spans.dirY),
-                makeAccessibleOnAcc(spans.dirZ),
-                makeAccessibleOnAcc(spans.weights),
-                makeAccessibleOnAcc(spans.sigmaIndices),
-                makeAccessibleOnAcc(spans.faceWeights),
-                spans.slotsPerFace};
-        }
-
         auto operator()(
             hase::kernels::forward::
-                SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights> const&
+                SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TOriginU, TOriginV, TSigmaIndices, TFaceWeights>&
                     spans) const
         {
             return hase::kernels::forward::SurfaceReservoirSpans{
@@ -174,7 +172,30 @@ namespace alpaka::onHost
                 makeAccessibleOnAcc(spans.dirX),
                 makeAccessibleOnAcc(spans.dirY),
                 makeAccessibleOnAcc(spans.dirZ),
-                makeAccessibleOnAcc(spans.weights),
+                makeAccessibleOnAcc(spans.originU),
+                makeAccessibleOnAcc(spans.originV),
+                makeAccessibleOnAcc(spans.sigmaIndices),
+                makeAccessibleOnAcc(spans.faceWeights),
+                spans.slotsPerFace};
+        }
+
+        auto operator()(hase::kernels::forward::SurfaceReservoirSpans<
+                        TCounts,
+                        TDirX,
+                        TDirY,
+                        TDirZ,
+                        TOriginU,
+                        TOriginV,
+                        TSigmaIndices,
+                        TFaceWeights> const& spans) const
+        {
+            return hase::kernels::forward::SurfaceReservoirSpans{
+                makeAccessibleOnAcc(spans.counts),
+                makeAccessibleOnAcc(spans.dirX),
+                makeAccessibleOnAcc(spans.dirY),
+                makeAccessibleOnAcc(spans.dirZ),
+                makeAccessibleOnAcc(spans.originU),
+                makeAccessibleOnAcc(spans.originV),
                 makeAccessibleOnAcc(spans.sigmaIndices),
                 makeAccessibleOnAcc(spans.faceWeights),
                 spans.slotsPerFace};
@@ -238,16 +259,18 @@ namespace alpaka::trait
         alpaka::concepts::IMdSpan TDirX,
         alpaka::concepts::IMdSpan TDirY,
         alpaka::concepts::IMdSpan TDirZ,
-        alpaka::concepts::IMdSpan TWeights,
+        alpaka::concepts::IMdSpan TOriginU,
+        alpaka::concepts::IMdSpan TOriginV,
         alpaka::concepts::IMdSpan TSigmaIndices,
         alpaka::concepts::IMdSpan TFaceWeights>
     struct IsKernelArgumentTriviallyCopyable<
         hase::kernels::forward::
-            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights>>
+            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TOriginU, TOriginV, TSigmaIndices, TFaceWeights>>
         : std::bool_constant<
               IsKernelArgumentTriviallyCopyable<TCounts>::value && IsKernelArgumentTriviallyCopyable<TDirX>::value
               && IsKernelArgumentTriviallyCopyable<TDirY>::value && IsKernelArgumentTriviallyCopyable<TDirZ>::value
-              && IsKernelArgumentTriviallyCopyable<TWeights>::value
+              && IsKernelArgumentTriviallyCopyable<TOriginU>::value
+              && IsKernelArgumentTriviallyCopyable<TOriginV>::value
               && IsKernelArgumentTriviallyCopyable<TSigmaIndices>::value
               && IsKernelArgumentTriviallyCopyable<TFaceWeights>::value>
     {
@@ -409,6 +432,7 @@ namespace hase::kernels::forward
             hase::core::DeviceMeshView const& mesh,
             unsigned const tet,
             unsigned const localFace,
+            hase::core::Point const origin,
             hase::core::Point const direction,
             double const incidentWeight,
             unsigned const sigmaIndex,
@@ -451,7 +475,9 @@ namespace hase::kernels::forward
             reservoir.dirX[index] = reflected.x;
             reservoir.dirY[index] = reflected.y;
             reservoir.dirZ[index] = reflected.z;
-            reservoir.weights[index] = reflectedWeight;
+            FaceCoordinates const coordinates = faceCoordinates(mesh, tet, localFace, origin);
+            reservoir.originU[index] = coordinates.u;
+            reservoir.originV[index] = coordinates.v;
             reservoir.sigmaIndices[index] = sigmaIndex;
         }
 
@@ -499,6 +525,7 @@ namespace hase::kernels::forward
                                 mesh,
                                 transition.cell,
                                 static_cast<unsigned>(transition.boundaryFace),
+                                origin,
                                 direction,
                                 sourceWeight * accumulatedGain,
                                 sigmaIndex,
@@ -545,6 +572,7 @@ namespace hase::kernels::forward
                         mesh,
                         transition.cell,
                         static_cast<unsigned>(transition.boundaryFace),
+                        origin,
                         direction,
                         sourceWeight * accumulatedGain,
                         sigmaIndex,
@@ -747,24 +775,13 @@ namespace hase::kernels::forward
                 unsigned const filledSlots = alpaka::math::min(inReservoir.counts[faceId], inReservoir.slotsPerFace);
                 if(filledSlots == 0u)
                     continue;
-                double slotWeight = 0.0;
                 unsigned const offset = faceId * inReservoir.slotsPerFace;
-                for(unsigned slot = 0u; slot < filledSlots; ++slot)
-                    slotWeight += inReservoir.weights[offset + slot];
-                if(slotWeight <= 0.0)
-                    continue;
-                double const slotTarget = alpaka::rand::distribution::UniformReal<double>{}(rndEngine) *slotWeight;
-                double cumulativeSlotWeight = 0.0;
-                unsigned localSlot = filledSlots - 1u;
-                for(unsigned slot = 0u; slot < filledSlots; ++slot)
-                {
-                    cumulativeSlotWeight += inReservoir.weights[offset + slot];
-                    if(cumulativeSlotWeight >= slotTarget)
-                    {
-                        localSlot = slot;
-                        break;
-                    }
-                }
+                // Weighted reservoir insertion already makes slot inclusion
+                // proportional to incident weight. Uniform selection here
+                // avoids applying that weight a second time.
+                unsigned const localSlot = selectSurfaceReservoirSlot(
+                    filledSlots,
+                    alpaka::rand::distribution::UniformReal<double>{}(rndEngine));
                 unsigned const slotIndex = offset + localSlot;
                 unsigned const tet = faceId / mesh.numberOfFacesPerCell;
                 unsigned const localFace = faceId - tet * mesh.numberOfFacesPerCell;
@@ -773,7 +790,11 @@ namespace hase::kernels::forward
                         inReservoir.dirX[slotIndex],
                         inReservoir.dirY[slotIndex],
                         inReservoir.dirZ[slotIndex]});
-                hase::core::Point const origin = faceCentroid(mesh, tet, localFace);
+                hase::core::Point const origin = pointFromFaceCoordinates(
+                    mesh,
+                    tet,
+                    localFace,
+                    FaceCoordinates{inReservoir.originU[slotIndex], inReservoir.originV[slotIndex]});
                 unsigned const sigmaIndex = inReservoir.sigmaIndices[slotIndex];
                 walker.walkForwardRay(
                     acc,

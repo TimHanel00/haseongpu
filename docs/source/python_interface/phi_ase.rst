@@ -111,7 +111,12 @@ explicitly validated proposal model.
 
 ``surfaceReservoirSize``
    Number of weighted SRM source records retained per physical boundary face.
-   It is serialized as ``surface_reservoir_size``.
+   Each record retains the reflected direction, wavelength bin, and physical
+   hit location. The location uses two single-precision face coordinates, so
+   preserving it does not increase device memory relative to the former
+   per-record double weight. Weighted insertion and uniform retained-record
+   selection avoid applying the incident weight twice. The setting is
+   serialized as ``surface_reservoir_size``.
 
 ``HASE_SRM_DIVERGENCE_STREAK``
    Runtime-only positive-integer override for the number of consecutive growing

@@ -40,6 +40,7 @@ namespace hase::core
     {
         using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::blocking));
         using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
+        using T_FloatBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<float>(std::declval<T_Device&>(), std::size_t{1}));
         using T_UnsignedBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), std::size_t{1}));
         using T_CharBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), std::size_t{1}));
@@ -51,7 +52,8 @@ namespace hase::core
             T_DoubleBuffer,
             T_DoubleBuffer,
             T_DoubleBuffer,
-            T_DoubleBuffer,
+            T_FloatBuffer,
+            T_FloatBuffer,
             T_UnsignedBuffer,
             T_DoubleBuffer>;
         using T_SamplingCdf = hase::kernels::forward::
@@ -100,8 +102,10 @@ namespace hase::core
             , m_dirYB(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
             , m_dirZA(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
             , m_dirZB(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
-            , m_weightsA(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
-            , m_weightsB(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
+            , m_originUA(alpaka::onHost::alloc<float>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
+            , m_originUB(alpaka::onHost::alloc<float>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
+            , m_originVA(alpaka::onHost::alloc<float>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
+            , m_originVB(alpaka::onHost::alloc<float>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
             , m_sigmaIndicesA(
                   alpaka::onHost::alloc<unsigned>(m_devBundle.device, static_cast<std::size_t>(reservoirSlots())))
             , m_sigmaIndicesB(
@@ -125,8 +129,8 @@ namespace hase::core
                   alpaka::onHost::alloc<char>(
                       m_devBundle.device,
                       alpaka::onHost::getScanBufferSize<unsigned>(alpaka::Vec{static_cast<std::size_t>(faceCount())})))
-            , m_reservoirA{m_countsA, m_dirXA, m_dirYA, m_dirZA, m_weightsA, m_sigmaIndicesA, m_faceWeightsA, m_slotsPerFace}
-            , m_reservoirB{m_countsB, m_dirXB, m_dirYB, m_dirZB, m_weightsB, m_sigmaIndicesB, m_faceWeightsB, m_slotsPerFace}
+            , m_reservoirA{m_countsA, m_dirXA, m_dirYA, m_dirZA, m_originUA, m_originVA, m_sigmaIndicesA, m_faceWeightsA, m_slotsPerFace}
+            , m_reservoirB{m_countsB, m_dirXB, m_dirYB, m_dirZB, m_originUB, m_originVB, m_sigmaIndicesB, m_faceWeightsB, m_slotsPerFace}
             , m_samplingCdfSpans{m_samplingCdf, m_samplingTotalWeight, m_stratifiedRayFaces, faceCount() <= m_rayCount}
         {
             alpaka::onHost::fill(m_queue, m_phi, 0.0, alpaka::Vec{static_cast<std::size_t>(m_mesh.numberOfCells)});
@@ -352,8 +356,10 @@ namespace hase::core
         T_DoubleBuffer m_dirYB;
         T_DoubleBuffer m_dirZA;
         T_DoubleBuffer m_dirZB;
-        T_DoubleBuffer m_weightsA;
-        T_DoubleBuffer m_weightsB;
+        T_FloatBuffer m_originUA;
+        T_FloatBuffer m_originUB;
+        T_FloatBuffer m_originVA;
+        T_FloatBuffer m_originVB;
         T_UnsignedBuffer m_sigmaIndicesA;
         T_UnsignedBuffer m_sigmaIndicesB;
         T_DoubleBuffer m_faceWeightsA;

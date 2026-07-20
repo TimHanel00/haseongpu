@@ -59,6 +59,69 @@ namespace hase::kernels::forward
         return sum * (1.0 / static_cast<double>(hase::core::tet4FaceWidth));
     }
 
+    struct FaceCoordinates
+    {
+        float u = 1.0f / 3.0f;
+        float v = 1.0f / 3.0f;
+    };
+
+    /**
+     * @brief Encode a point on a triangular face in two affine coordinates.
+     *
+     * Two floats retain the physical reflection location at the same storage
+     * cost as the double weight formerly kept in every reservoir slot.
+     */
+    [[nodiscard]] inline ALPAKA_FN_ACC FaceCoordinates faceCoordinates(
+        hase::core::DeviceMeshView const& mesh,
+        unsigned const tet,
+        unsigned const localFace,
+        hase::core::Point const point)
+    {
+        int const p0 = mesh.getCellFacePoint(tet, localFace, 0u);
+        int const p1 = mesh.getCellFacePoint(tet, localFace, 1u);
+        int const p2 = mesh.getCellFacePoint(tet, localFace, 2u);
+        if(p0 < 0 || p1 < 0 || p2 < 0)
+        {
+            return {};
+        }
+        hase::core::Point const a = mesh.getPoint(static_cast<unsigned>(p0));
+        hase::core::Point const ab = mesh.getPoint(static_cast<unsigned>(p1)) - a;
+        hase::core::Point const ac = mesh.getPoint(static_cast<unsigned>(p2)) - a;
+        hase::core::Point const ap = point - a;
+        double const ab2 = hase::core::dot(ab, ab);
+        double const ac2 = hase::core::dot(ac, ac);
+        double const abac = hase::core::dot(ab, ac);
+        double const denominator = ab2 * ac2 - abac * abac;
+        if(denominator <= std::numeric_limits<double>::epsilon() * ab2 * ac2)
+        {
+            return {};
+        }
+        double const abap = hase::core::dot(ab, ap);
+        double const acap = hase::core::dot(ac, ap);
+        return FaceCoordinates{
+            static_cast<float>((abap * ac2 - acap * abac) / denominator),
+            static_cast<float>((acap * ab2 - abap * abac) / denominator)};
+    }
+
+    [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point pointFromFaceCoordinates(
+        hase::core::DeviceMeshView const& mesh,
+        unsigned const tet,
+        unsigned const localFace,
+        FaceCoordinates const coordinates)
+    {
+        int const p0 = mesh.getCellFacePoint(tet, localFace, 0u);
+        int const p1 = mesh.getCellFacePoint(tet, localFace, 1u);
+        int const p2 = mesh.getCellFacePoint(tet, localFace, 2u);
+        if(p0 < 0 || p1 < 0 || p2 < 0)
+        {
+            return {};
+        }
+        hase::core::Point const a = mesh.getPoint(static_cast<unsigned>(p0));
+        hase::core::Point const b = mesh.getPoint(static_cast<unsigned>(p1));
+        hase::core::Point const c = mesh.getPoint(static_cast<unsigned>(p2));
+        return a + (b - a) * static_cast<double>(coordinates.u) + (c - a) * static_cast<double>(coordinates.v);
+    }
+
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point outwardFaceNormal(
         hase::core::DeviceMeshView const& mesh,
         unsigned const tet,

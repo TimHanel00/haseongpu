@@ -221,6 +221,20 @@ TEST_CASE("forward random histories are separated by ray, pass, and sampling dom
     CHECK(first() != otherRay());
 }
 
+TEST_CASE("weighted surface reservoirs are resampled uniformly across retained slots", "[forward][sampling]")
+{
+    using hase::kernels::forward::selectSurfaceReservoirSlot;
+
+    constexpr unsigned slots = 4u;
+    for(unsigned slot = 0u; slot < slots; ++slot)
+    {
+        double const midpoint = (static_cast<double>(slot) + 0.5) / static_cast<double>(slots);
+        CHECK(selectSurfaceReservoirSlot(slots, midpoint) == slot);
+    }
+    CHECK(selectSurfaceReservoirSlot(0u, 0.5) == 0u);
+    CHECK(selectSurfaceReservoirSlot(slots, 1.0) == slots - 1u);
+}
+
 TEST_CASE("forward Tet4 face planes are barycentric", "[forward][traversal]")
 {
     hase::core::HostMesh mesh;
@@ -313,6 +327,14 @@ TEST_CASE("forward Tet4 face planes are barycentric", "[forward][traversal]")
         0);
     CHECK(reflectedIntersection.localFace == 3);
     CHECK(reflectedIntersection.length > 0.0);
+
+    hase::core::Point const surfacePoint{0.2, 0.3, 0.5};
+    auto const facePosition = hase::kernels::forward::faceCoordinates(view, 0u, 0u, surfacePoint);
+    hase::core::Point const restoredSurfacePoint
+        = hase::kernels::forward::pointFromFaceCoordinates(view, 0u, 0u, facePosition);
+    CHECK(restoredSurfacePoint.x == Catch::Approx(surfacePoint.x).margin(1.0e-7));
+    CHECK(restoredSurfacePoint.y == Catch::Approx(surfacePoint.y).margin(1.0e-7));
+    CHECK(restoredSurfacePoint.z == Catch::Approx(surfacePoint.z).margin(1.0e-7));
 }
 
 TEST_CASE("forward Tet4 intersection distances follow mesh scale", "[forward][traversal]")
