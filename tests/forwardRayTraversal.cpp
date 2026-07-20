@@ -154,6 +154,38 @@ namespace hase::tests
 } // namespace hase::tests
 
 TEMPLATE_LIST_TEST_CASE(
+    "device surface reservoir map contains only physical boundaries",
+    "[forward][sampling]",
+    hase::tests::TestBackends)
+{
+    auto const backend = TestType::makeDict();
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    if(!deviceSelector.isAvailable())
+    {
+        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        return;
+    }
+    auto device = deviceSelector.makeDevice(0);
+    auto queue = device.makeQueue(alpaka::queueKind::blocking);
+    hase::core::HostMesh mesh;
+    mesh.cellFaceBoundaries = {0, 2, -1, 1, 3, 0};
+    auto deviceMesh = mesh.toDevice(device);
+
+    CHECK(deviceMesh.numberOfBoundaryFaces == 3u);
+    std::vector<int> cellFaceBoundaryIndices(mesh.cellFaceBoundaries.size());
+    std::vector<unsigned> boundaryCellFaces(mesh.cellFaceBoundaries.size());
+    alpaka::onHost::memcpy(queue, cellFaceBoundaryIndices, deviceMesh.cellFaceBoundaryIndices);
+    alpaka::onHost::memcpy(queue, boundaryCellFaces, deviceMesh.boundaryCellFaces);
+    alpaka::onHost::wait(queue);
+
+    CHECK(cellFaceBoundaryIndices == std::vector<int>{-1, 0, -1, 1, 2, -1});
+    CHECK(
+        std::ranges::equal(
+            boundaryCellFaces | std::views::take(deviceMesh.numberOfBoundaryFaces),
+            std::array{1u, 3u, 4u}));
+}
+
+TEMPLATE_LIST_TEST_CASE(
     "forward ray crosses a vertex shared by 30 tetrahedra",
     "[forward][traversal][edge-case]",
     hase::tests::TestBackends)

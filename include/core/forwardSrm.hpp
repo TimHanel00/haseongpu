@@ -59,7 +59,7 @@ namespace hase::core
         auto accumulationSpans
             = hase::kernels::forward::ForwardAccumulationSpans{phi, phiSquare, volumeRayVisits, droppedRays};
         auto spectrumSpans = hase::kernels::forward::ForwardSpectrumSpans{sigmaA, sigmaE, lambdaResolution};
-        unsigned const faceCount = mesh.numberOfCells * mesh.numberOfFacesPerCell;
+        unsigned const faceCount = mesh.numberOfBoundaryFaces;
         unsigned const reservoirSlots = faceCount * experiment.surfaceReservoirSize;
         alpaka::concepts::IBuffer auto countsA = alpaka::onHost::alloc<unsigned>(devBundle.device, faceCount);
         alpaka::concepts::IBuffer auto countsB = alpaka::onHost::alloc<unsigned>(devBundle.device, faceCount);

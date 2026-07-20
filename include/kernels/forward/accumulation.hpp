@@ -450,7 +450,13 @@ namespace hase::kernels::forward
             {
                 return;
             }
-            unsigned const faceId = tet * mesh.numberOfFacesPerCell + localFace;
+            unsigned const cellFace = tet * mesh.numberOfFacesPerCell + localFace;
+            int const boundaryFace = mesh.cellFaceBoundaryIndices[cellFace];
+            if(boundaryFace < 0)
+            {
+                return;
+            }
+            unsigned const faceId = static_cast<unsigned>(boundaryFace);
             unsigned const seen = alpaka::onAcc::atomicAdd(acc, &reservoir.counts[faceId], 1u);
             double const priorWeight = alpaka::onAcc::atomicAdd(acc, &reservoir.faceWeights[faceId], reflectedWeight);
             unsigned slot = seen;
@@ -742,7 +748,7 @@ namespace hase::kernels::forward
                     alpaka::IdxRange{forwardRayCount}))
             {
                 auto rndEngine = alpaka::rand::engine::Philox4x32x10{rngSeed, rayHistoryId(reflectionPass, rayNumber)};
-                unsigned const faceCount = mesh.numberOfCells * mesh.numberOfFacesPerCell;
+                unsigned const faceCount = mesh.numberOfBoundaryFaces;
                 if(inReservoir.slotsPerFace == 0u || faceCount == 0u || samplingCdf.totalWeight[0u] <= 0.0)
                 {
                     continue;
@@ -783,8 +789,9 @@ namespace hase::kernels::forward
                     filledSlots,
                     alpaka::rand::distribution::UniformReal<double>{}(rndEngine));
                 unsigned const slotIndex = offset + localSlot;
-                unsigned const tet = faceId / mesh.numberOfFacesPerCell;
-                unsigned const localFace = faceId - tet * mesh.numberOfFacesPerCell;
+                unsigned const cellFace = mesh.boundaryCellFaces[faceId];
+                unsigned const tet = cellFace / mesh.numberOfFacesPerCell;
+                unsigned const localFace = cellFace - tet * mesh.numberOfFacesPerCell;
                 hase::core::Point const direction = normalize(
                     hase::core::Point{
                         inReservoir.dirX[slotIndex],

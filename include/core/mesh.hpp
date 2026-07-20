@@ -32,6 +32,7 @@
 #include <alpaka/alpaka.hpp>
 #include <alpaka/core/common.hpp>
 
+#include <alpakaUtils/DevBundle.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <core/geometry.hpp>
@@ -40,6 +41,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <utility>
@@ -55,6 +57,41 @@ namespace hase::core
     constexpr unsigned tet4FaceWidth = 3u;
     constexpr unsigned tet4BarycentricPlaneWidth = 4u;
     constexpr unsigned vtkTetraCellType = 10u;
+
+    struct PhysicalBoundaryFlag
+    {
+        [[nodiscard]] ALPAKA_FN_ACC constexpr unsigned operator()(int const boundary) const
+        {
+            return boundary > 0 ? 1u : 0u;
+        }
+    };
+
+    struct ScatterBoundaryFaceMap
+    {
+        ALPAKA_FN_ACC void operator()(
+            auto const& acc,
+            unsigned const cellFaceCount,
+            auto const cellFaceBoundaries,
+            auto const boundaryFaceOffsets,
+            auto cellFaceBoundaryIndices,
+            auto boundaryCellFaces) const
+        {
+            for(auto [cellFace] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{cellFaceCount}))
+            {
+                if(cellFaceBoundaries[cellFace] > 0)
+                {
+                    unsigned const boundaryFace = boundaryFaceOffsets[cellFace];
+                    cellFaceBoundaryIndices[cellFace] = static_cast<int>(boundaryFace);
+                    boundaryCellFaces[boundaryFace] = cellFace;
+                }
+                else
+                {
+                    cellFaceBoundaryIndices[cellFace] = -1;
+                }
+            }
+        }
+    };
 
     template<class T, class B, class E>
     inline void assertRange(
@@ -160,6 +197,9 @@ namespace hase::core
         std::span<int const> cellNeighborCells;
         std::span<int const> cellNeighborLocalFaces;
         std::span<int const> cellFaceBoundaries;
+        // Compact lookup between cell-local faces and physical boundary faces.
+        std::span<int const> cellFaceBoundaryIndices;
+        std::span<unsigned const> boundaryCellFaces;
         std::span<float const> cellVolumes;
         std::span<double const> cellVolumePrefix;
         std::span<double const> betaVolumePrefix;
@@ -177,6 +217,7 @@ namespace hase::core
         unsigned numberOfFacesPerCell;
         unsigned numberOfCellVertices;
         unsigned numberOfMeshPoints;
+        unsigned numberOfBoundaryFaces;
         unsigned numberOfLevels;
         float thickness;
         bool samplePointsAreMeshPoints;
@@ -394,6 +435,10 @@ namespace hase::core
             , cellNeighborCells(hase::alpakaUtils::toDevice(m_queue, cellNeighborCells))
             , cellNeighborLocalFaces(hase::alpakaUtils::toDevice(m_queue, cellNeighborLocalFaces))
             , cellFaceBoundaries(hase::alpakaUtils::toDevice(m_queue, cellFaceBoundaries))
+            , cellFaceBoundaryIndices(
+                  alpaka::onHost::alloc<int>(m_device, static_cast<std::size_t>(cellFaceBoundaries.size())))
+            , boundaryCellFaces(
+                  alpaka::onHost::alloc<unsigned>(m_device, static_cast<std::size_t>(cellFaceBoundaries.size())))
             , cellVolumes(hase::alpakaUtils::toDevice(m_queue, cellVolumes))
             , cellVolumePrefix(hase::alpakaUtils::toDevice(m_queue, cellVolumePrefix))
             , betaVolumePrefix(hase::alpakaUtils::toDevice(m_queue, betaVolumePrefix))
@@ -410,10 +455,12 @@ namespace hase::core
             , numberOfFacesPerCell(numberOfFacesPerCell)
             , numberOfCellVertices(numberOfCellVertices)
             , numberOfMeshPoints(numberOfMeshPoints)
+            , numberOfBoundaryFaces(0u)
             , numberOfLevels(numberOfLevels)
             , thickness(thickness)
             , samplePointsAreMeshPoints(samplePointsAreMeshPoints)
         {
+            initializeBoundaryFaceMap();
         }
 
         [[nodiscard]] auto toView() const -> DeviceMeshView
@@ -445,6 +492,10 @@ namespace hase::core
                     cellNeighborLocalFaces.data(),
                     cellNeighborLocalFaces.getMdSpan().getExtents().x()),
                 std::span<int const>(cellFaceBoundaries.data(), cellFaceBoundaries.getMdSpan().getExtents().x()),
+                std::span<int const>(
+                    cellFaceBoundaryIndices.data(),
+                    cellFaceBoundaryIndices.getMdSpan().getExtents().x()),
+                std::span<unsigned const>(boundaryCellFaces.data(), numberOfBoundaryFaces),
                 std::span<float const>(cellVolumes.data(), cellVolumes.getMdSpan().getExtents().x()),
                 std::span<double const>(cellVolumePrefix.data(), cellVolumePrefix.getMdSpan().getExtents().x()),
                 std::span<double const>(betaVolumePrefix.data(), betaVolumePrefix.getMdSpan().getExtents().x()),
@@ -461,6 +512,7 @@ namespace hase::core
                 numberOfFacesPerCell,
                 numberOfCellVertices,
                 numberOfMeshPoints,
+                numberOfBoundaryFaces,
                 numberOfLevels,
                 thickness,
                 samplePointsAreMeshPoints};
@@ -469,6 +521,54 @@ namespace hase::core
         T_Device m_device;
 
     private:
+        void initializeBoundaryFaceMap()
+        {
+            unsigned const cellFaceCount = static_cast<unsigned>(cellFaceBoundaries.getExtents().product());
+            if(cellFaceCount == 0u)
+            {
+                return;
+            }
+
+            auto const executor = alpaka::onHost::defaultExecutor(m_device);
+            auto boundaryFaceCount = alpaka::onHost::alloc<unsigned>(m_device, std::size_t{1u});
+            alpaka::onHost::transformReduce(
+                m_queue,
+                executor,
+                0u,
+                boundaryFaceCount,
+                std::plus{},
+                alpaka::ScalarFunc{PhysicalBoundaryFlag{}},
+                cellFaceBoundaries);
+
+            auto hostBoundaryFaceCount = alpaka::onHost::allocHostLike(boundaryFaceCount);
+            alpaka::onHost::memcpy(m_queue, hostBoundaryFaceCount, boundaryFaceCount);
+            alpaka::onHost::wait(m_queue);
+            numberOfBoundaryFaces = alpaka::onHost::data(hostBoundaryFaceCount)[0u];
+
+            auto boundaryFaceOffsets
+                = alpaka::onHost::alloc<unsigned>(m_device, static_cast<std::size_t>(cellFaceCount));
+            alpaka::onHost::transform(
+                m_queue,
+                executor,
+                boundaryFaceOffsets,
+                alpaka::ScalarFunc{PhysicalBoundaryFlag{}},
+                cellFaceBoundaries);
+            alpaka::onHost::exclusiveScanInPlace(m_queue, executor, boundaryFaceOffsets);
+
+            auto const frameSpec
+                = hase::alpakaUtils::getFrameSpec<uint32_t>(m_device, executor, alpaka::Vec{cellFaceCount});
+            m_queue.enqueue(
+                frameSpec,
+                alpaka::KernelBundle{
+                    ScatterBoundaryFaceMap{},
+                    cellFaceCount,
+                    cellFaceBoundaries,
+                    boundaryFaceOffsets,
+                    cellFaceBoundaryIndices,
+                    boundaryCellFaces});
+            alpaka::onHost::wait(m_queue);
+        }
+
         T_Queue m_queue;
 
     public:
@@ -493,6 +593,8 @@ namespace hase::core
         T_Buffer<int> cellNeighborCells;
         T_Buffer<int> cellNeighborLocalFaces;
         T_Buffer<int> cellFaceBoundaries;
+        T_Buffer<int> cellFaceBoundaryIndices;
+        T_Buffer<unsigned> boundaryCellFaces;
         T_Buffer<float> cellVolumes;
         T_Buffer<double> cellVolumePrefix;
         T_Buffer<double> betaVolumePrefix;
@@ -510,6 +612,7 @@ namespace hase::core
         unsigned numberOfFacesPerCell;
         unsigned numberOfCellVertices;
         unsigned numberOfMeshPoints;
+        unsigned numberOfBoundaryFaces;
         unsigned numberOfLevels;
         float thickness;
         bool samplePointsAreMeshPoints;

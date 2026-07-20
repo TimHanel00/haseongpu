@@ -239,7 +239,7 @@ namespace hase::core
     private:
         [[nodiscard]] unsigned faceCount() const
         {
-            return m_mesh.numberOfCells * m_mesh.numberOfFacesPerCell;
+            return m_mesh.numberOfBoundaryFaces;
         }
 
         [[nodiscard]] unsigned reservoirSlots() const
