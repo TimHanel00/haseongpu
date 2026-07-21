@@ -38,11 +38,24 @@ Installable C++ Interface
 -------------------------
 
 ``cmake --install build --prefix /path/to/prefix`` installs the public headers,
-``hase`` library, ``calcPhiASE``, and backend-name helper. When the build uses
-system Alpaka and openPMD-api providers, it also installs a CMake package under
-``lib/cmake/HASEonGPU`` for downstream ``find_package(HASEonGPU)`` use. Builds
-that fetch providers still install the executable and library, but do not
-provide a relocatable CMake package because those dependencies are build-local.
+``hase`` library, ``calcPhiASE``, and backend-name helper by default. To make
+that source-install intent explicit:
+
+.. code-block:: bash
+
+   cmake -S . -B build \
+     -DHASE_ENABLE_PYTHON=OFF \
+     -DHASE_INSTALL_CPP_INTERFACE=ON
+   cmake --build build
+   cmake --install build --prefix /path/to/prefix
+
+HASEonGPU does not currently install a downstream ``find_package`` export.
+Alpaka and openPMD backend choices are part of the compiled interface and must
+be configured together with HASEonGPU in a source build. Python/scikit-build
+installs set the public C++ interface to ``OFF``: a plain
+``python3 -m pip install -v .`` needs no preliminary CMake configuration,
+updates the durable runtime under ``build/``, and installs only the thin
+frontend.
 
 Common Configurations
 ---------------------
@@ -113,6 +126,12 @@ Core HASE Options
    root used for the executable, probe libraries, and generated openPMD Python
    provider metadata. Prefer ``hase-configure --runtime-dir <path>`` when
    selecting a nonstandard location.
+
+``HASE_INSTALL_CPP_INTERFACE``
+   Default ``ON`` for direct CMake builds. Installs the public headers, static
+   library, standalone executable, and backend helper. Python package builds set
+   it to ``OFF`` because the wheel contains only the frontend and records the
+   separately built durable runtime instead.
 
 ``HASE_TESTING``
    Default ``OFF``.  Enables test targets.

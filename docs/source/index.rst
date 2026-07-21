@@ -12,9 +12,10 @@ flux in laser gain media.
 
 HASEonGPU 2.1 ships the Python frontend and compiled C++ backend together. The
 frontend uses openPMD to communicate with the standalone backend; legacy
-in-process Python bindings are not supported. The C++ backend, headers,
-command-line executable, and CMake package export use the same release version
-for downstream integration.
+in-process Python bindings are not supported. Direct CMake builds can install
+the version-matched C++ backend, headers, library, and command-line executable;
+Python source installs keep their native runtime in a durable build directory
+and install a thin frontend that records it.
 
 It is intended to support the design and analysis of high-power laser systems,
 where ASE is an important limiting effect for stored energy, gain distribution,
