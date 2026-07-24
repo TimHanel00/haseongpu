@@ -1,0 +1,13 @@
+schema_version: 3
+tuning:
+  mode: online_fixed
+  strategy: exhaustive
+  random_seed: 5489
+  warmup_runs: 0
+  runs_per_candidate: 1
+  noise_cancellation_window: 1
+  max_consecutive_runs: 1
+  mann_whitney_early_stop: false
+  maximum_executions: 40000
+history:
+  file: history.json

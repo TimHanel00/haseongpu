@@ -1,0 +1,26 @@
+schema_version: 3
+tuning:
+  mode: online_adaptive
+  strategy: learned_hybrid
+  random_seed: 5489
+  warmup_runs: 0
+  runs_per_candidate: 3
+  minimum_runs_per_candidate: 3
+  noise_cancellation_window: 50
+  max_consecutive_runs: 3
+  maximum_consecutive_strategy_retries: 20
+  mann_whitney_early_stop: false
+  horizon: 40000
+  history_window_size: 12
+  revisit_admission_steepness: 16
+  score_temperature_start: 0.25
+  score_temperature_end: 0.05
+  horizon_offset_with_active_history: 0.8
+history:
+  file: history.json
+  read: false
+  write: true
+learning:
+  fallback: random
+  candidate_pool_size: 4096
+  candidate_batch_size: 256

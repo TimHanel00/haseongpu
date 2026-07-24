@@ -1,0 +1,17 @@
+{
+  "campaign": "forwardtet4-history-horizon-retries-gpu-20260724",
+  "hase_upstream": "https://github.com/TimHanel00/haseongpu.git",
+  "hase_branch": "forwardTet4",
+  "hase_upstream_commit": "b674bb817a199bcbde84cc05124e5079c5c35c37",
+  "integration_branch": "alpakatune-forwardTet4",
+  "source_snapshot_dirty": true,
+  "alpaka_tune_branch": "revivalTuner",
+  "alpaka_tune_commit": "175169bb83cba557a13c1228266bc8db7c1b1824",
+  "maximum_consecutive_strategy_retries": 20,
+  "horizon": 40000,
+  "horizon_offset_with_active_history": 0.8,
+  "measurements_per_complete_candidate_residency": 3,
+  "time_steps": 1000,
+  "pump_steps": 1000,
+  "model_sha256": "150ce293375a618a236a288e323cc513fc380748eef3a9b23c103855f916f06b"
+}

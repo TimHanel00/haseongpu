@@ -1,0 +1,11 @@
+{
+  "hase_upstream": "https://github.com/TimHanel00/haseongpu.git",
+  "hase_branch": "forwardTet4",
+  "hase_upstream_commit": "b674bb817a199bcbde84cc05124e5079c5c35c37",
+  "integration_branch": "alpakatune-forwardTet4",
+  "source_snapshot_dirty": true,
+  "alpaka_tune_branch": "revivalTuner",
+  "alpaka_tune_commit": "175169bb83cba557a13c1228266bc8db7c1b1824",
+  "adaptive_retry_behavior": "rejected recommendations retry synchronously; an empty adaptive refill reopens the measured incumbent for one measured natural launch",
+  "model_sha256": "150ce293375a618a236a288e323cc513fc380748eef3a9b23c103855f916f06b"
+}
