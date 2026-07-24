@@ -215,7 +215,7 @@ amplified spontaneous emission flux in laser gain media. The integration branch
 starts from `TimHanel00/haseongpu:forwardTet4` commit
 `d6df76b5dbc860f3810420cc9a5d9b8c0c38ca1b`; the campaign dependency snapshot
 pins the `alpaka3-tuner:revivalTuner` tip
-`175169bb83cba557a13c1228266bc8db7c1b1824`.
+`30d54a71971a1653976c75610424c3b7db6f50aa`.
 
 For the original software, documentation, authors, and issue tracker, visit the
 [upstream HASEonGPU project](https://github.com/ComputationalRadiationPhysics/haseongpu).

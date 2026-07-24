@@ -6,7 +6,7 @@
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --output=/home/th168408/workspace/haseonpu-alpakatune-runs/final-a100-adaptive-offline-20260724/slurm-%j.out
+#SBATCH --output=/home/th168408/workspace/haseonpu-alpakatune-runs/final-a100-adaptive-offline-v2-20260724/slurm-%j.out
 
 set -euo pipefail
 
@@ -16,9 +16,9 @@ module load cmake/4.0.3
 module load cuda/12.8
 module load python/3.12.4
 
-readonly source_root=/home/th168408/workspace/haseonpu-alpakatune-forwardtet4-final-20260724
+readonly source_root=/home/th168408/workspace/haseonpu-alpakatune-forwardtet4-final-v2-20260724
 readonly shared_root=/home/th168408/workspace/haseonpu-alpakatune-forwardtet4-20260724
-readonly run_root=/home/th168408/workspace/haseonpu-alpakatune-runs/final-a100-adaptive-offline-20260724
+readonly run_root=/home/th168408/workspace/haseonpu-alpakatune-runs/final-a100-adaptive-offline-v2-20260724
 readonly backend=Cuda_NvidiaGpu_GpuCuda
 readonly model=/home/th168408/workspace/alpakaTune-ml-runs/experiment-01/artifacts/rosi/experiment-01/model.atml
 readonly expected_model_sha=150ce293375a618a236a288e323cc513fc380748eef3a9b23c103855f916f06b
@@ -61,7 +61,7 @@ for mode in "${modes[@]}"; do
         printf 'backend=%s\n' "${backend}"
         printf 'mode=%s\n' "${mode}"
         printf 'hase_snapshot_commit=%s\n' "${HASE_SNAPSHOT_COMMIT:-unknown}"
-        printf 'alpaka_tune_commit=175169bb83cba557a13c1228266bc8db7c1b1824\n'
+        printf 'alpaka_tune_commit=30d54a71971a1653976c75610424c3b7db6f50aa\n'
         printf 'model_sha256=%s\n' "${actual_model_sha}"
         printf 'instrumented_kernel=AccumulateForwardPhiAse\n'
         nvidia-smi --query-gpu=name,uuid,driver_version,memory.total --format=csv,noheader

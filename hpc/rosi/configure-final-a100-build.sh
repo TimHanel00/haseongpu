@@ -8,7 +8,7 @@ module load cmake/4.0.3
 module load cuda/12.8
 module load python/3.12.4
 
-readonly source_root=/home/th168408/workspace/haseonpu-alpakatune-forwardtet4-final-20260724
+readonly source_root=/home/th168408/workspace/haseonpu-alpakatune-forwardtet4-final-v2-20260724
 readonly shared_root=/home/th168408/workspace/haseonpu-alpakatune-forwardtet4-20260724
 readonly shared_dependencies=${shared_root}/dependencies
 readonly provider_prefix=${shared_root}/build-baseline/hase-openpmd-provider/install
