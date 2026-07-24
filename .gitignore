@@ -1,4 +1,6 @@
 build
+/build-*/
+/.venv/
 /.hase-python-build/
 bin/*
 *.~lock.*

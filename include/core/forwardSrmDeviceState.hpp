@@ -8,6 +8,7 @@
 #pragma once
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TunedEnqueue.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <concepts/concepts.hpp>
 #include <core/forwardSrm.hpp>
@@ -156,7 +157,8 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_rayCount});
-            m_queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::AccumulateForwardPhiAseReservoir{},
@@ -170,7 +172,8 @@ namespace hase::core
                     m_accumulation,
                     m_reservoirA,
                     m_spectrum,
-                    m_rngSeed});
+                    m_rngSeed},
+                "AccumulateForwardPhiAseReservoir");
             alpaka::onHost::wait(m_queue);
             m_inputReservoirA = true;
         }
@@ -205,7 +208,8 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_rayCount});
-            m_queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::AccumulateReflectedForwardPhiAse{},
@@ -218,7 +222,8 @@ namespace hase::core
                     outputReservoir,
                     m_spectrum,
                     m_rngSeed,
-                    pass});
+                    pass},
+                "AccumulateReflectedForwardPhiAse");
             alpaka::onHost::wait(m_queue);
             m_inputReservoirA = !m_inputReservoirA;
         }
@@ -262,28 +267,35 @@ namespace hase::core
                 m_samplingCdfScanBuffer,
                 m_samplingCdf,
                 reservoir.faceWeights);
-            m_queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 scalarFrameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::CaptureSurfaceReservoirSamplingTotalWeight{},
                     faceCount(),
-                    m_samplingCdfSpans});
-            m_queue.enqueue(
+                    m_samplingCdfSpans},
+                "CaptureSurfaceReservoirSamplingTotalWeight");
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 faceFrameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::NormalizeSurfaceReservoirSamplingCdf{},
                     faceCount(),
-                    m_samplingCdfSpans});
+                    m_samplingCdfSpans},
+                "NormalizeSurfaceReservoirSamplingCdf");
             if(m_samplingCdfSpans.useFaceStratification)
             {
-                m_queue.enqueue(
+                hase::alpakaUtils::tunedEnqueue(
+                    m_queue,
                     scalarFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::GenerateSurfaceReservoirSystematicOffset{},
                         m_systematicOffset,
                         m_rngSeed,
-                        pass});
-                m_queue.enqueue(
+                        pass},
+                    "GenerateSurfaceReservoirSystematicOffset");
+                hase::alpakaUtils::tunedEnqueue(
+                    m_queue,
                     faceFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::AssignSurfaceReservoirStratifiedRayCounts{},
@@ -291,21 +303,24 @@ namespace hase::core
                         m_rayCount,
                         m_samplingCdfSpans,
                         m_systematicOffset,
-                        m_stratifiedRayCounts});
+                        m_stratifiedRayCounts},
+                    "AssignSurfaceReservoirStratifiedRayCounts");
                 alpaka::onHost::exclusiveScan(
                     m_queue,
                     m_devBundle.executor,
                     m_stratifiedCountScanBuffer,
                     m_stratifiedRayOffsets,
                     m_stratifiedRayCounts);
-                m_queue.enqueue(
+                hase::alpakaUtils::tunedEnqueue(
+                    m_queue,
                     faceFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::ScatterSurfaceReservoirStratifiedRayFaces{},
                         faceCount(),
                         m_stratifiedRayCounts,
                         m_stratifiedRayOffsets,
-                        m_stratifiedRayFaces});
+                        m_stratifiedRayFaces},
+                    "ScatterSurfaceReservoirStratifiedRayFaces");
             }
             alpaka::onHost::wait(m_queue);
 

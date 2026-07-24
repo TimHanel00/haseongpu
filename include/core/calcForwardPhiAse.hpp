@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <alpakaUtils/TunedEnqueue.hpp>
 #include <benchmark.hpp>
 #include <core/forwardSrm.hpp>
 #include <core/mesh.hpp>
@@ -121,7 +122,8 @@ namespace hase::core
                 devBundle.executor,
                 alpaka::Vec{static_cast<unsigned int>(rayCount)});
             BENCH_SYNC(queue, AccumulateForwardPhiAse);
-            queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::AccumulateForwardPhiAse{},
@@ -134,7 +136,8 @@ namespace hase::core
                     betaVolumeTotal,
                     accumulationSpans,
                     spectrumSpans,
-                    threadLocalStridingRNG});
+                    threadLocalStridingRNG},
+                "AccumulateForwardPhiAse");
             alpaka::onHost::wait(queue);
         }
         else

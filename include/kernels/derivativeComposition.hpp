@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TunedEnqueue.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <concepts/concepts.hpp>
 #include <core/mesh.hpp>
@@ -82,7 +83,8 @@ namespace hase::kernels
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{mesh.numberOfSamples});
-        queue.enqueue(
+        hase::alpakaUtils::tunedEnqueue(
+            queue,
             frameSpec,
             alpaka::KernelBundle{
                 ComposeDerivative{sigmaAbsorption, sigmaEmission, tau, pumpDuration, pumpEnabled},
@@ -93,7 +95,8 @@ namespace hase::kernels
                 buffers.activeMask,
                 buffers.dndtPump,
                 buffers.dndtAse,
-                buffers.derivative});
+                buffers.derivative},
+            "ComposeDerivative");
     }
 
 } // namespace hase::kernels

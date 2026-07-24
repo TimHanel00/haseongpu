@@ -163,6 +163,11 @@ option(
     OFF
 )
 option(
+    HASE_ENABLE_ALPAKATUNE
+    "Route selected HASE FrameSpec kernel launches through alpakaTune"
+    OFF
+)
+option(
     HASE_FORWARD_LOGGING
     "Forward captured calcPhiASE stdout and stderr through the Python openPMD launcher."
     OFF
@@ -521,6 +526,31 @@ endif()
 
 include(cmake/findAlpaka.cmake)
 
+if(HASE_ENABLE_ALPAKATUNE)
+    include(FetchContent)
+    set(HASE_ALPAKATUNE_GIT_REPOSITORY
+        "https://github.com/TimHanel00/alpaka3-tuner.git"
+        CACHE STRING
+        "Git repository used when fetching alpakaTune"
+    )
+    set(HASE_ALPAKATUNE_GIT_TAG
+        "175169bb83cba557a13c1228266bc8db7c1b1824"
+        CACHE STRING
+        "Git tag or commit used when fetching alpakaTune"
+    )
+    set(alpakaTune_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(alpakaTune_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(alpakaTune_HEADER_CHECKS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        alpakaTune
+        GIT_REPOSITORY "${HASE_ALPAKATUNE_GIT_REPOSITORY}"
+        GIT_TAG "${HASE_ALPAKATUNE_GIT_TAG}"
+        GIT_SHALLOW FALSE
+        ${HASE_FETCHCONTENT_EXCLUDE_FROM_ALL}
+    )
+    hase_fetchcontent_make_available(alpakaTune)
+endif()
+
 if(alpaka_DEP_CUDA AND NOT TARGET alpaka::cuda)
     if(NVCC_EXECUTABLE)
         set(HASE_NVCC_EXECUTABLE "${NVCC_EXECUTABLE}")
@@ -795,6 +825,10 @@ target_compile_definitions(
         HASE_OPENPMD_FILE_EXTENSION=\"${HASE_OPENPMD_FILE_EXTENSION}\"
 )
 target_link_libraries(hase_core INTERFACE alpaka::alpaka)
+if(HASE_ENABLE_ALPAKATUNE)
+    target_link_libraries(hase_core INTERFACE alpakaTune::alpakaTune)
+    target_compile_definitions(hase_core INTERFACE HASE_ENABLE_ALPAKATUNE=1)
+endif()
 if(TARGET CUDA::cudart)
     target_link_libraries(hase_core INTERFACE CUDA::cudart)
     list(APPEND HASE_BUILD_TREE_RPATH "$<TARGET_FILE_DIR:CUDA::cudart>")

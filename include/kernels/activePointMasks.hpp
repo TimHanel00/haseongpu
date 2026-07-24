@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TunedEnqueue.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <concepts/concepts.hpp>
 #include <core/mesh.hpp>
@@ -43,7 +44,11 @@ namespace hase::kernels
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{mesh.numberOfPoints});
-        queue.enqueue(frameSpec, alpaka::KernelBundle{BuildActivePointMask{}, mesh, activeMask});
+        hase::alpakaUtils::tunedEnqueue(
+            queue,
+            frameSpec,
+            alpaka::KernelBundle{BuildActivePointMask{}, mesh, activeMask},
+            "BuildActivePointMask");
     }
 
 } // namespace hase::kernels

@@ -8,6 +8,7 @@
 #pragma once
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TunedEnqueue.hpp>
 #include <concepts/concepts.hpp>
 #include <core/mesh.hpp>
 #include <core/srm.hpp>
@@ -130,7 +131,8 @@ namespace hase::core
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{static_cast<unsigned int>(rayCount)});
-        queue.enqueue(
+        hase::alpakaUtils::tunedEnqueue(
+            queue,
             directFrameSpec,
             alpaka::KernelBundle{
                 hase::kernels::forward::AccumulateForwardPhiAseReservoir{},
@@ -144,7 +146,8 @@ namespace hase::core
                 accumulationSpans,
                 reservoirSpansA,
                 spectrumSpans,
-                threadLocalStridingRNG});
+                threadLocalStridingRNG},
+            "AccumulateForwardPhiAseReservoir");
         alpaka::onHost::wait(queue);
 
         auto const reflectedFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
@@ -165,28 +168,35 @@ namespace hase::core
                 samplingCdfScanBuffer,
                 samplingCdf,
                 reservoir.faceWeights);
-            queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                queue,
                 scalarFrameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::CaptureSurfaceReservoirSamplingTotalWeight{},
                     faceCount,
-                    samplingCdfSpans});
-            queue.enqueue(
+                    samplingCdfSpans},
+                "CaptureSurfaceReservoirSamplingTotalWeight");
+            hase::alpakaUtils::tunedEnqueue(
+                queue,
                 faceFrameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::NormalizeSurfaceReservoirSamplingCdf{},
                     faceCount,
-                    samplingCdfSpans});
+                    samplingCdfSpans},
+                "NormalizeSurfaceReservoirSamplingCdf");
             if(samplingCdfSpans.useFaceStratification)
             {
-                queue.enqueue(
+                hase::alpakaUtils::tunedEnqueue(
+                    queue,
                     scalarFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::GenerateSurfaceReservoirSystematicOffset{},
                         systematicOffset,
                         threadLocalStridingRNG,
-                        pass});
-                queue.enqueue(
+                        pass},
+                    "GenerateSurfaceReservoirSystematicOffset");
+                hase::alpakaUtils::tunedEnqueue(
+                    queue,
                     faceFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::AssignSurfaceReservoirStratifiedRayCounts{},
@@ -194,21 +204,24 @@ namespace hase::core
                         rayCount,
                         samplingCdfSpans,
                         systematicOffset,
-                        stratifiedRayCounts});
+                        stratifiedRayCounts},
+                    "AssignSurfaceReservoirStratifiedRayCounts");
                 alpaka::onHost::exclusiveScan(
                     queue,
                     devBundle.executor,
                     stratifiedCountScanBuffer,
                     stratifiedRayOffsets,
                     stratifiedRayCounts);
-                queue.enqueue(
+                hase::alpakaUtils::tunedEnqueue(
+                    queue,
                     faceFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::ScatterSurfaceReservoirStratifiedRayFaces{},
                         faceCount,
                         stratifiedRayCounts,
                         stratifiedRayOffsets,
-                        stratifiedRayFaces});
+                        stratifiedRayFaces},
+                    "ScatterSurfaceReservoirStratifiedRayFaces");
             }
             alpaka::onHost::wait(queue);
             alpaka::onHost::memcpy(queue, samplingTotalWeightHost, samplingTotalWeight);
@@ -234,7 +247,8 @@ namespace hase::core
             {
                 clearReservoir(countsB, faceWeightsB);
                 alpaka::onHost::wait(queue);
-                queue.enqueue(
+                hase::alpakaUtils::tunedEnqueue(
+                    queue,
                     reflectedFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::AccumulateReflectedForwardPhiAse{},
@@ -247,13 +261,15 @@ namespace hase::core
                         reservoirSpansB,
                         spectrumSpans,
                         threadLocalStridingRNG,
-                        pass});
+                        pass},
+                    "AccumulateReflectedForwardPhiAse");
             }
             else
             {
                 clearReservoir(countsA, faceWeightsA);
                 alpaka::onHost::wait(queue);
-                queue.enqueue(
+                hase::alpakaUtils::tunedEnqueue(
+                    queue,
                     reflectedFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::AccumulateReflectedForwardPhiAse{},
@@ -266,7 +282,8 @@ namespace hase::core
                         reservoirSpansA,
                         spectrumSpans,
                         threadLocalStridingRNG,
-                        pass});
+                        pass},
+                    "AccumulateReflectedForwardPhiAse");
             }
             alpaka::onHost::wait(queue);
             inputA = !inputA;

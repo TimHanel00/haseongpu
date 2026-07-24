@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TunedEnqueue.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <core/simulation.hpp>
@@ -398,9 +399,11 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfSamples});
-            m_queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 frameSpec,
-                alpaka::KernelBundle{hase::kernels::AddScaled{scale}, m_mesh, base, slope, out});
+                alpaka::KernelBundle{hase::kernels::AddScaled{scale}, m_mesh, base, slope, out},
+                "AddScaled");
             alpaka::onHost::wait(m_queue);
         }
 
@@ -410,9 +413,11 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfSamples});
-            m_queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 frameSpec,
-                alpaka::KernelBundle{hase::kernels::CombineHeun{m_run.timeStep}, m_mesh, base, first, second, out});
+                alpaka::KernelBundle{hase::kernels::CombineHeun{m_run.timeStep}, m_mesh, base, first, second, out},
+                "CombineHeun");
             alpaka::onHost::wait(m_queue);
         }
 
@@ -422,7 +427,8 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfSamples});
-            m_queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::CombineRungeKutta4{m_run.timeStep},
@@ -432,7 +438,8 @@ namespace hase::core
                     m_k2,
                     m_k3,
                     m_k4,
-                    m_betaNext});
+                    m_betaNext},
+                "CombineRungeKutta4");
             alpaka::onHost::wait(m_queue);
         }
 
@@ -442,7 +449,8 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfSamples});
-            m_queue.enqueue(
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::ExponentialEulerUpdate{
@@ -452,7 +460,8 @@ namespace hase::core
                     m_beta,
                     m_dndtPump,
                     m_dndtAse,
-                    m_betaNext});
+                    m_betaNext},
+                "ExponentialEulerUpdate");
             alpaka::onHost::wait(m_queue);
         }
 
@@ -462,7 +471,11 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfSamples});
-            m_queue.enqueue(frameSpec, alpaka::KernelBundle{hase::kernels::ClipBeta{}, m_mesh, beta});
+            hase::alpakaUtils::tunedEnqueue(
+                m_queue,
+                frameSpec,
+                alpaka::KernelBundle{hase::kernels::ClipBeta{}, m_mesh, beta},
+                "ClipBeta");
             alpaka::onHost::wait(m_queue);
         }
 
