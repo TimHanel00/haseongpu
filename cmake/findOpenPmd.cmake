@@ -167,6 +167,11 @@ set(HASE_OPENPMD_BUNDLED_BUILD_DIR
     CACHE PATH
     "Build directory for the HASE-managed bundled openPMD-api provider"
 )
+set(HASE_OFFLINE_DEPENDENCY_ROOT
+    ""
+    CACHE PATH
+    "Optional directory of pre-transferred dependency sources for Git-free cluster builds"
+)
 option(
     HASE_OPENPMD_BUNDLED_REBUILD
     "Force rebuilding the HASE-managed bundled openPMD-api provider"
@@ -425,6 +430,21 @@ function(hase_openpmd_run_provider_stage stage_name template_file)
             HASE_OPENPMD_STAGE_CONFIGURE_COMMAND
             "-DADIOS2_DIR=${ADIOS2_DIR}"
         )
+    endif()
+    if(HASE_OFFLINE_DEPENDENCY_ROOT)
+        foreach(
+            HASE_OFFLINE_DEPENDENCY
+            IN ITEMS ADIOS2 OPENPMD FETCHEDNLOHMANN_JSON FETCHEDTOML11
+        )
+            string(TOLOWER "${HASE_OFFLINE_DEPENDENCY}" HASE_OFFLINE_DEPENDENCY_DIRECTORY)
+            if(EXISTS "${HASE_OFFLINE_DEPENDENCY_ROOT}/${HASE_OFFLINE_DEPENDENCY_DIRECTORY}/CMakeLists.txt")
+                list(
+                    APPEND
+                    HASE_OPENPMD_STAGE_CONFIGURE_COMMAND
+                    "-DFETCHCONTENT_SOURCE_DIR_${HASE_OFFLINE_DEPENDENCY}=${HASE_OFFLINE_DEPENDENCY_ROOT}/${HASE_OFFLINE_DEPENDENCY_DIRECTORY}"
+                )
+            endif()
+        endforeach()
     endif()
     if(
         stage_name STREQUAL "openpmd"
