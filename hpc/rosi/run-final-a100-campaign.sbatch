@@ -61,7 +61,7 @@ for mode in "${modes[@]}"; do
         printf 'backend=%s\n' "${backend}"
         printf 'mode=%s\n' "${mode}"
         printf 'hase_snapshot_commit=%s\n' "${HASE_SNAPSHOT_COMMIT:-unknown}"
-        printf 'alpaka_tune_commit=30d54a71971a1653976c75610424c3b7db6f50aa\n'
+        printf 'alpaka_tune_commit=474e0b0df3038cdbacdf9e6889c2e1910b767b70\n'
         printf 'model_sha256=%s\n' "${actual_model_sha}"
         printf 'instrumented_kernel=AccumulateForwardPhiAse\n'
         nvidia-smi --query-gpu=name,uuid,driver_version,memory.total --format=csv,noheader

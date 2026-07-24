@@ -534,7 +534,7 @@ if(HASE_ENABLE_ALPAKATUNE)
         "Git repository used when fetching alpakaTune"
     )
     set(HASE_ALPAKATUNE_GIT_TAG
-        "30d54a71971a1653976c75610424c3b7db6f50aa"
+        "474e0b0df3038cdbacdf9e6889c2e1910b767b70"
         CACHE STRING
         "Git tag or commit used when fetching alpakaTune"
     )
