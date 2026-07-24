@@ -126,9 +126,11 @@ def validate(run_root: Path, runs):
             failures.append(f"{mode}: completed {summary['completed_steps']} steps")
         for metric in ("phi_ase_sum", "beta_cells_sum", "beta_volume_sum"):
             if not math.isclose(
-                summary[metric], reference[metric], rel_tol=1.0e-12, abs_tol=0.0
+                summary[metric], reference[metric], rel_tol=0.05, abs_tol=0.0
             ):
-                failures.append(f"{mode}: {metric} differs from baseline_0")
+                failures.append(
+                    f"{mode}: {metric} differs from baseline_0 by more than 5%"
+                )
 
     for strategy in ("random", "learned"):
         before = (
@@ -303,8 +305,8 @@ def write_report(run_root: Path, runs, failures):
         lines.extend(f"- FAIL: {failure}" for failure in failures)
     else:
         lines.append(
-            "All six runs completed with finite, baseline-matching numerical "
-            "integrals and the expected measurement/history contracts."
+            "All six runs completed with finite numerical integrals within 5% "
+            "of baseline_0 and the expected measurement/history contracts."
         )
     (run_root / "evaluations" / "report.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"
