@@ -17,7 +17,12 @@ from HASEonGPU import (
     PhiASE,
     PrimitiveFieldSpec,
     PrismSchema,
-    PumpProperties,
+    PlanarPumpRelay,
+    MonteCarloPumpSolver,
+    Pump,
+    PumpSpectrum,
+    SuperGaussianPumpProfile,
+    SurfacePumpInjector,
     RungeKutta4,
     Simulation,
     SpectralDecomposition,
@@ -29,8 +34,8 @@ def printState(state):
     print(
         f"step={state.step:03d} "
         f"time={state.time:.3e}s "
-        f"mean_beta={state.betaCells.mean():.6e} "
-        f"mean_phi={state.phiAse.mean():.6e}"
+        f"mean_beta={state.beta_cells.mean():.6e} "
+        f"mean_phi={state.phi_ase.mean():.6e}"
     )
 
 
@@ -90,16 +95,14 @@ def main():
     print("spectral fields:", cross_sections_data.getFields())
     # docs:end: spectral-decomposition
     # docs:start: pump-properties
-    pump = PumpProperties(
-        spectralProperties=cross_sections_data,
-        intensity=16e3, # [W/cm^2]
-        pumpSubsteps=100,
-        wavelength=940e-9, # [m]
-        radiusX=1.5,
-        radiusY=1.5,
-        exponent=40,
-        backReflection=True,
+    pump_profile = SuperGaussianPumpProfile(radius_u=1.5, radius_v=1.5, exponent=40)
+    pump = Pump(
+        total_power=16e3 * 16.0,
+        spectrum=PumpSpectrum.monochromatic(940e-9),
+        cross_sections=cross_sections_data,
+        profile=pump_profile,
     )
+    pump_solver = MonteCarloPumpSolver(ray_count=100000)
     # docs:end: pump-properties
 
 
@@ -118,23 +121,27 @@ def main():
 
     # docs:start: simulation
     simulation = Simulation(
-        gainMedium=medium,
-        pump=pump,
-        phiASE=phi_ase,
-        timeIntegrationSolver=RungeKutta4(),
-        timeStep=1e-5,
-        endTime=1e-3,
+        gain_medium=medium,
+        phi_ase=phi_ase,
+        time_integrator=RungeKutta4(),
+        time_step_size=1e-5,
+        pump_solver=pump_solver,
+        max_time=1e-3,
+    ).add_pump(
+        pump,
+        injection_method=SurfacePumpInjector(surface_domains=(1,)),
+        relays=(PlanarPumpRelay.retroreflect((2,)),),
     )
-    simulation.onInit(initFunc)
-    simulation.onStep(printState)
-    simulation.onStep(writeVtkState, "minimal_phi_ase_{step:03d}.vtk")
-    simulation.runSteps(3)
+    simulation.on_init(initFunc)
+    simulation.on_step(printState)
+    simulation.on_step(writeVtkState, "minimal_phi_ase_{step:03d}.vtk")
+    simulation.step(3)
     # Equivalent long run:
-    # simulation.runUntil(endtime=1e-3)
+    # simulation.run_until(max_time=1e-3)
     # docs:end: simulation
 
     # docs:start: results
-    last_state = simulation.getLastState()
+    last_state = simulation.get_last_state()
     print(f"last completed step: {last_state.step}")
     # docs:end: results
 

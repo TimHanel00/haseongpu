@@ -1,69 +1,91 @@
-PumpProperties
-==============
+PICMI-style pump configuration
+==============================
 
-``PumpProperties`` defines the pump contribution to a compiled
-``Simulation``. The Python object is a compact physical description; the
-C++/Alpaka backend performs the one-dimensional z traversal and beta update.
+The public pump API separates the physical pump, numerical injection method,
+and Monte Carlo solver controls. This follows the composition used by PICMI's
+laser and injection objects without claiming that HASEonGPU implements the PIC
+model itself.
 
 .. code-block:: python
 
-   from HASEonGPU import PumpProperties
-
-   pump = PumpProperties(
-       spectralProperties=spectra,
-       intensity=16e3,       # W / cm^2
-       wavelength=940e-9,    # m
-       radiusX=1.5,
-       radiusY=1.5,
-       exponent=40,
-       pumpSubsteps=100,
-       backReflection=True,
-       reflectivity=1.0,
+   from HASEonGPU import (
+       MonteCarloPumpSolver,
+       PlanarPumpRelay,
+       Pump,
+       PumpAngularDistribution,
+       PumpSpectrum,
+       SuperGaussianPumpProfile,
+       SurfacePumpInjector,
    )
 
-Required Inputs
----------------
+   profile = SuperGaussianPumpProfile(
+       radius_u=1.5,
+       radius_v=1.5,
+       exponent=40,
+       center=(0, 0, 0),
+       axis_u=(1, 0, 0),
+       axis_v=(0, 1, 0),
+   )
+   pump = Pump(
+       total_power=100000.0,
+       spectrum=PumpSpectrum.monochromatic(940e-9),
+       cross_sections=pump_cross_sections,
+       angular_distribution=PumpAngularDistribution.collimated(),
+       profile=profile,
+   )
+   injector = SurfacePumpInjector(surface_domains=("pump_input",))
+   pump_solver = MonteCarloPumpSolver(
+       ray_count=100000,
+       seed=5489,
+       max_steps=50,
+   )
 
-``intensity`` is the incident intensity in ``W / cm^2``. Supply
-``spectralProperties`` (or ``crossSections``) for the absorption and emission
-cross sections. With spectra, the wavelength defaults to the first absorption
-wavelength; otherwise provide a wavelength and monochromatic absorption and
-emission cross sections. ``radiusX`` is required and ``radiusY`` defaults to
-``radiusX``.
+   simulation = Simulation(
+       gain_medium=medium,
+       phi_ase=phi_ase,
+       time_integrator=FrozenPhiAseRungeKutta4(),
+       time_step_size=2e-5,
+       pump_solver=pump_solver,
+   )
+   simulation.add_pump(
+       pump,
+       injection_method=injector,
+       relays=(PlanarPumpRelay.retroreflect("pump_output"),),
+   )
+   simulation.step(150)
 
-The transverse inlet profile is a super-Gaussian,
+Physical and numerical objects
+------------------------------
 
-.. math::
+``Pump`` contains total power, spectrum, material cross sections, spatial
+profile, and angular distribution. ``GaussianPump`` is a convenience class
+that creates a super-Gaussian physical pump from a scalar or two-component
+``waist``.
 
-   I(x,y) = I_0 \exp[-r^p], \qquad
-   r = \sqrt{x^2/r_y^2 + y^2/r_x^2},
+``SurfacePumpInjector`` selects tagged exterior triangle domains. It describes
+where the physical pump is introduced, rather than duplicating those domains
+inside the pump itself. Multiple pumps can be registered through repeated
+``Simulation.add_pump`` calls.
 
-where ``exponent`` is :math:`p` (default 40). ``intensityAt(points)`` evaluates
-this profile in Python for diagnostics.
+``MonteCarloPumpSolver`` owns the numerical ``ray_count`` and reproducibility
+``seed``. Its optional ``max_steps`` limits the pump contribution while the
+outer simulation may continue.
 
-Compiled Pump Model
+Power normalization
 -------------------
 
-The ``one-dimensional-z-traversal`` routine evaluates the inlet profile at
-each transverse point and propagates it through the z levels using the current
-excited-state fraction. It exposes the resulting local pump rate to the compiled
-time integrator. With ``backReflection=True``, a second pass starts at the far
-end with intensity scaled by ``reflectivity``. ``extraction=True`` suppresses
-the inlet pump.
+``total_power`` is integrated over the selected injector aperture. The profile
+changes the launch distribution but not total power.
+``integrate_pump_profile(topology, domains, profile)`` converts a legacy peak
+intensity into total power on a tagged triangular aperture.
 
-``pumpSteps`` limits the number of *outer* simulation steps that receive pump
-energy; set it on the object or pass it to ``Simulation.runSteps``. The retained
-``pumpSubsteps`` setting is currently ignored by the compiled traversal and does
-not count outer simulation steps.
+Planar relays
+-------------
 
-Limits and Utilities
---------------------
+``PlanarPumpRelay`` maps rays leaving tagged, coplanar ``exit_domains`` to
+``entry_domains``. It supports ``flip_u``, ``flip_v``, in-plane rotation,
+offset, tilt, magnification, transmission, and aperture vignetting. Ordered
+relays passed to ``add_pump`` represent finite return passes.
 
-Compiled simulations accept the built-in routine only. A ``solver`` custom
-property is retained to detect legacy configurations, but causes a clear error
-before launch rather than running Python code between backend steps.
-
-Use ``PumpProperties.superGaussian(...)`` for an explicit shaped-beam
-constructor. ``getProperty``, ``withProperty``, and ``withProperties`` manage
-additional metadata; ``toDict`` and ``modeDict`` expose the serialized
-low-level values for advanced diagnostics.
+Pump polarization, coating interactions, residual cavity recirculation, and
+arbitrary Python transport callbacks are outside the general pump core.

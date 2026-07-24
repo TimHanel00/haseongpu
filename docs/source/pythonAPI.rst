@@ -33,7 +33,16 @@ Spectra, pump, and ASE
    CrossSectionData
    LaserProperties
    SpectralDecomposition
-   PumpProperties
+   PumpSpectrum
+   PumpAngularDistribution
+   UniformPumpProfile
+   SuperGaussianPumpProfile
+   Pump
+   GaussianPump
+   SurfacePumpInjector
+   PlanarPumpRelay
+   MonteCarloPumpSolver
+   integrate_pump_profile
    PhiASE
 
 Simulation and time integration

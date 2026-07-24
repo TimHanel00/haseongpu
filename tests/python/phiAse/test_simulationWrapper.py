@@ -113,6 +113,14 @@ def testPhiAseSerializesAdaptiveRangeWithoutAnImplicitFixedRayCount():
     fixed = PhiASE(minRays=100, maxRays=1600, forwardRayCount=250)
     assert fixed.openPmdAttributes(numberOfSamples=1)["forwardRayCount"] == 250
 
+def testPhiAseDefaultBackendSerializesAvailableAlpakaBackend():
+    phiAse = PhiASE()
+    backend = phiAse.openPmdAttributes(numberOfSamples=1)["backend"]
+
+    assert backend != "gpu"
+    assert backend in simulation_module.AlpakaBackends.all()
+
+
 def testPhiAseLoadsOpenPmdBackendFromConfig():
     assert PhiASE().openpmdBackend == "auto"
     assert PhiASE({"compute": {"openpmd_backend": "hdf5"}}).openpmdBackend == "hdf5"
@@ -364,6 +372,7 @@ def testSimulationRunStepsPassesStreamingBackendToCompiledTransport(monkeypatch)
     simulation._callbacks = []
     simulation._step = 0
     simulation._time = 0.0
+    simulation.reportTimings = False
 
     def fake_run_simulation(simulation_arg, *, steps, pumpSteps=None, transport=None):
         captured["simulation"] = simulation_arg
