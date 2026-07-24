@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -98,6 +100,32 @@ def printState(state):
         f"mean_beta={state.betaCells.mean():.6e} "
         f"mean_phi={state.phiAse.mean():.6e}"
     )
+
+
+class CampaignTimeout(TimeoutError):
+    """Raised between completed outer steps when a campaign deadline expires."""
+
+
+def writeCampaignSummary(state, path, *, elapsedSeconds, timedOut):
+    phiAse = None if state.phiAse is None else np.asarray(state.phiAse, dtype=np.float64)
+    betaCells = np.asarray(state.betaCells, dtype=np.float64)
+    betaVolume = np.asarray(state.betaVolume, dtype=np.float64)
+    summary = {
+        "completed_steps": int(state.step),
+        "elapsed_seconds": float(elapsedSeconds),
+        "timed_out": bool(timedOut),
+        "finite": bool(
+            (phiAse is None or np.isfinite(phiAse).all())
+            and np.isfinite(betaCells).all()
+            and np.isfinite(betaVolume).all()
+        ),
+        "phi_ase_sum": None if phiAse is None else float(phiAse.sum()),
+        "beta_cells_sum": float(betaCells.sum()),
+        "beta_volume_sum": float(betaVolume.sum()),
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
 
 def _writeScalarArray(handle, name, values, count):
@@ -267,6 +295,9 @@ def runExample(
     prePump=True,
     spectralResolution=1000,
     reportTimings=False,
+    enableVtk=True,
+    timeoutSeconds=None,
+    summaryJson=None,
     **AseOverride,
 ):
     vtkOutputDir = Path(vtkOutputDir)
@@ -332,18 +363,46 @@ def runExample(
         prePump=prePump,
         reportTimings=reportTimings,
     )
+    started = time.monotonic()
     simulation.onStep(printState)
-    simulation.onStep(
-        writeVtkFields,
-        vtkOutputDir,
-        absorption,
-        spectralProperties,
-        medium.get("nTot").value,
-    )
+    if enableVtk:
+        simulation.onStep(
+            writeVtkFields,
+            vtkOutputDir,
+            absorption,
+            spectralProperties,
+            medium.get("nTot").value,
+        )
     if openPmdOutputDir is not None:
         simulation.onStep(writeParaviewState, openPmdOutputDir, absorption)
-    simulation.runSteps(timeSlices) # adjust this by number of steps
-    return simulation.getLastState() # return the last state to confirm shape.
+    if timeoutSeconds is not None:
+        deadline = started + float(timeoutSeconds)
+
+        def checkCampaignDeadline(state):
+            if time.monotonic() >= deadline:
+                raise CampaignTimeout(
+                    f"laserPumpCladding exceeded {timeoutSeconds:g}s after {state.step} completed steps"
+                )
+
+        simulation.onStep(checkCampaignDeadline)
+    timedOut = False
+    try:
+        simulation.runSteps(timeSlices) # adjust this by number of steps
+    except CampaignTimeout:
+        timedOut = True
+    state = simulation.getLastState()
+    if summaryJson is not None:
+        writeCampaignSummary(
+            state,
+            summaryJson,
+            elapsedSeconds=time.monotonic() - started,
+            timedOut=timedOut,
+        )
+    if timedOut:
+        raise CampaignTimeout(
+            f"laserPumpCladding exceeded {timeoutSeconds:g}s after {state.step} completed steps"
+        )
+    return state # return the last state to confirm shape.
 
     # dndt_ASE, flux_clad
 def main(argv=None):
@@ -370,6 +429,14 @@ def main(argv=None):
         help="PhiASE run-control YAML. Defaults to config/hase-phiase.yaml.",
     )
     parser.add_argument("--vtk-output-dir", type=Path, default=scriptDir)
+    parser.add_argument("--no-vtk", action="store_true", help="Disable VTK callbacks during timed campaigns")
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=None,
+        help="Stop between completed outer time steps after this wall-clock budget",
+    )
+    parser.add_argument("--summary-json", type=Path, default=None)
     parser.add_argument("--openpmd-output-dir", type=Path, default=None)
     parser.add_argument(
         "--disable-ase",
@@ -424,23 +491,31 @@ def main(argv=None):
         print(f"meanPhi: {float(phi.mean()):.17g}")
         return
 
-    state = runExample(
-        args.phi_ase_config,
-        args.backend,
-        timeSlices=args.timeSteps,
-        pumpSteps=args.pumpSteps,
-        vtkOutputDir=args.vtk_output_dir,
-        openPmdOutputDir=args.openpmd_output_dir,
-        openpmdBackend=args.openpmd_backend,
-        enableASE=not args.disable_ase,
-        prePump=not args.disable_pre_pump,
-        spectralResolution=args.spectral_resolution,
-        reportTimings=args.timings,
-        **aseOverrides,
-    )
+    try:
+        state = runExample(
+            args.phi_ase_config,
+            args.backend,
+            timeSlices=args.timeSteps,
+            pumpSteps=args.pumpSteps,
+            vtkOutputDir=args.vtk_output_dir,
+            openPmdOutputDir=args.openpmd_output_dir,
+            openpmdBackend=args.openpmd_backend,
+            enableASE=not args.disable_ase,
+            prePump=not args.disable_pre_pump,
+            spectralResolution=args.spectral_resolution,
+            reportTimings=args.timings,
+            enableVtk=not args.no_vtk,
+            timeoutSeconds=args.timeout_seconds,
+            summaryJson=args.summary_json,
+            **aseOverrides,
+        )
+    except CampaignTimeout as error:
+        print(f"CAMPAIGN_TIMEOUT: {error}")
+        return 124
     print(f"phiAse shape: {state.phiAse.shape}")
     print(f"betaCells shape: {state.betaCells.shape}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

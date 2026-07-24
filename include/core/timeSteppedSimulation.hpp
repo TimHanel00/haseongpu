@@ -24,7 +24,12 @@
 #include <kernels/timeIntegrationUpdateKernels.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -96,6 +101,22 @@ namespace hase::core
             auto const maxEmission = std::ranges::max_element(experiment.sigmaE);
             auto const index = static_cast<std::size_t>(std::distance(experiment.sigmaE.begin(), maxEmission));
             return experiment.sigmaA.at(std::min(index, experiment.sigmaA.size() - 1u));
+        }
+
+        void writeStepTimings(std::string const& pathText, std::vector<double> const& elapsedSeconds)
+        {
+            if(pathText.empty())
+                return;
+            auto const path = std::filesystem::path{pathText};
+            if(!path.parent_path().empty())
+                std::filesystem::create_directories(path.parent_path());
+            auto output = std::ofstream{path};
+            if(!output)
+                throw std::runtime_error("Could not write step timings to " + path.string());
+            output << std::setprecision(17);
+            for(std::size_t index = 0u; index < elapsedSeconds.size(); ++index)
+                output << "{\"step\":" << index + 1u << ",\"elapsed_seconds\":" << elapsedSeconds[index]
+                       << "}\n";
         }
 
         void validateRunParameters(SimulationRunControl const& run)
@@ -182,6 +203,12 @@ namespace hase::core
 
         void run(std::function<void(SimulationSnapshot const&)> const& callback)
         {
+            auto const* stepTimingPathValue = std::getenv("HASE_STEP_TIMINGS_JSONL");
+            auto const stepTimingPath
+                = stepTimingPathValue == nullptr ? std::string{} : std::string{stepTimingPathValue};
+            auto stepTimings = std::vector<double>{};
+            if(!stepTimingPath.empty())
+                stepTimings.reserve(m_run.numberOfSteps);
             for(unsigned step = 0u; step < m_run.numberOfSteps; ++step)
             {
                 bool const pumpEnabled = step < m_run.pumpSteps;
@@ -190,7 +217,11 @@ namespace hase::core
                 callback(makeSnapshot(step + 1u));
                 alpaka::onHost::memcpy(m_queue, m_beta, m_betaNext);
                 alpaka::onHost::wait(m_queue);
+                if(!stepTimingPath.empty())
+                    stepTimings.push_back(
+                        std::chrono::duration<double>{std::chrono::steady_clock::now() - m_started}.count());
             }
+            detail::writeStepTimings(stepTimingPath, stepTimings);
         }
 
     private:
@@ -479,6 +510,7 @@ namespace hase::core
             alpaka::onHost::wait(m_queue);
         }
 
+        std::chrono::steady_clock::time_point m_started = std::chrono::steady_clock::now();
         T_Device& m_device;
         T_Queue m_queue;
         hase::alpakaUtils::DevBundle<T_Device, T_Executor> m_devBundle;
