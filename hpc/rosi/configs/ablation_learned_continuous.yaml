@@ -1,0 +1,21 @@
+schema_version: 3
+tuning:
+  mode: online_adaptive
+  strategy: learned_hybrid
+  random_seed: 5489
+  warmup_runs: 0
+  runs_per_candidate: 3
+  minimum_runs_per_candidate: 3
+  noise_cancellation_window: 50
+  max_consecutive_runs: 3
+  maximum_consecutive_strategy_retries: 20
+  mann_whitney_early_stop: false
+  history_window_size: 12
+history:
+  file: history.json
+  read: false
+  write: true
+learning:
+  fallback: random
+  candidate_pool_size: 4096
+  candidate_batch_size: 256
