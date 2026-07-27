@@ -434,10 +434,18 @@ function(hase_openpmd_run_provider_stage stage_name template_file)
     if(HASE_OFFLINE_DEPENDENCY_ROOT)
         foreach(
             HASE_OFFLINE_DEPENDENCY
-            IN ITEMS ADIOS2 OPENPMD FETCHEDNLOHMANN_JSON FETCHEDTOML11
+            IN
+            ITEMS ADIOS2 OPENPMD FETCHEDNLOHMANN_JSON FETCHEDTOML11
         )
-            string(TOLOWER "${HASE_OFFLINE_DEPENDENCY}" HASE_OFFLINE_DEPENDENCY_DIRECTORY)
-            if(EXISTS "${HASE_OFFLINE_DEPENDENCY_ROOT}/${HASE_OFFLINE_DEPENDENCY_DIRECTORY}/CMakeLists.txt")
+            string(
+                TOLOWER
+                "${HASE_OFFLINE_DEPENDENCY}"
+                HASE_OFFLINE_DEPENDENCY_DIRECTORY
+            )
+            if(
+                EXISTS
+                    "${HASE_OFFLINE_DEPENDENCY_ROOT}/${HASE_OFFLINE_DEPENDENCY_DIRECTORY}/CMakeLists.txt"
+            )
                 list(
                     APPEND
                     HASE_OPENPMD_STAGE_CONFIGURE_COMMAND

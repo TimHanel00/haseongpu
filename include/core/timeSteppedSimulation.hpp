@@ -115,8 +115,7 @@ namespace hase::core
                 throw std::runtime_error("Could not write step timings to " + path.string());
             output << std::setprecision(17);
             for(std::size_t index = 0u; index < elapsedSeconds.size(); ++index)
-                output << "{\"step\":" << index + 1u << ",\"elapsed_seconds\":" << elapsedSeconds[index]
-                       << "}\n";
+                output << "{\"step\":" << index + 1u << ",\"elapsed_seconds\":" << elapsedSeconds[index] << "}\n";
         }
 
         void validateRunParameters(SimulationRunControl const& run)
