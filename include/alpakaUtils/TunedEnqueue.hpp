@@ -21,6 +21,7 @@
 #    include <cstdlib>
 #    include <filesystem>
 #    include <fstream>
+#    include <limits>
 #    include <memory>
 #    include <mutex>
 #    include <stdexcept>
@@ -244,18 +245,11 @@ namespace hase::alpakaUtils
         }
 
         template<typename T_Observation>
-        inline void appendMetrics(
-            std::string_view kernel,
-            T_Observation const& observation,
-            double hostCallSeconds)
+        inline void appendMetrics(std::string_view kernel, T_Observation const& observation, double hostCallSeconds)
         {
             static auto const pathText = optionalEnvironment("HASE_ALPAKATUNE_METRICS");
             if(!pathText.empty())
-                metricsStore().record(
-                    std::filesystem::path{pathText},
-                    kernel,
-                    observation,
-                    hostCallSeconds);
+                metricsStore().record(std::filesystem::path{pathText}, kernel, observation, hostCallSeconds);
         }
 
         inline auto campaignElapsedSeconds() -> double
@@ -291,48 +285,44 @@ namespace hase::alpakaUtils
             return TunedLaunchObservation{coverage};
         }
 
-        using FrameExtents = std::remove_cvref_t<decltype(frameSpec.getFrameExtents())>;
-        using NumFrames = std::remove_cvref_t<decltype(frameSpec.getNumFrames())>;
-        auto extents = std::vector<FrameExtents>{frameSpec.getFrameExtents()};
-        auto alternateExtent = frameSpec.getFrameExtents();
-        auto hasAlternate = false;
-        for(std::size_t dimension = 0u; dimension < alternateExtent.dim(); ++dimension)
+        ALPAKA_TYPEOF(frameSpec.getNumFrames()) numFramesUpperLimit = frameSpec.getNumFrames();
+        for(std::size_t dimension = 0u; dimension < numFramesUpperLimit.dim(); ++dimension)
         {
-            if(alternateExtent[dimension] > 1u && alternateExtent[dimension] % 2u == 0u)
-            {
-                alternateExtent[dimension] /= 2u;
-                hasAlternate = true;
-            }
+            constexpr auto factor = ALPAKA_TYPEOF(numFramesUpperLimit[dimension]){4u};
+            if(numFramesUpperLimit[dimension]
+               > std::numeric_limits<ALPAKA_TYPEOF(numFramesUpperLimit[dimension])>::max() / factor)
+                throw std::overflow_error{"Four times the original numFrames exceeds its index type."};
+            numFramesUpperLimit[dimension] *= factor;
         }
         auto const baselineOnly = detail::optionalEnvironment("HASE_ALPAKATUNE_BASELINE_ONLY") == "1";
-        if(hasAlternate && !baselineOnly)
-            extents.push_back(alternateExtent);
+        auto const frameExtentValues = baselineOnly
+                                           ? alpakaTune::RVals<ALPAKA_TYPEOF(frameSpec.getFrameExtents())>{std::vector{
+                                                 frameSpec.getFrameExtents()}}
+                                           : alpakaTune::defaultFrameExtentCandidates(frameSpec);
+        auto const numFrameValues
+            = baselineOnly
+                  ? alpakaTune::RVals<ALPAKA_TYPEOF(frameSpec.getNumFrames())>{std::vector{frameSpec.getNumFrames()}}
+                  : alpakaTune::defaultNumFramesCandidates(numFramesUpperLimit);
 
         auto makeFrameTuning = [&]()
         {
-            if(baselineOnly)
-            {
-                return alpakaTune::makeFrameSpecTuning(
-                    alpakaTune::tuneFrameExtent(
-                        frameSpec,
-                        alpakaTune::RVals<FrameExtents>{std::vector<FrameExtents>{frameSpec.getFrameExtents()}}),
-                    alpakaTune::tuneNumFrames(
-                        frameSpec,
-                        alpakaTune::RVals<NumFrames>{std::vector<NumFrames>{frameSpec.getNumFrames()}}),
-                    alpakaTune::preserveCoverage(frameSpec));
-            }
-            return alpakaTune::makeFrameSpecTuning(frameSpec);
+            return alpakaTune::constrain(
+                alpakaTune::TunableBundle{
+                    alpakaTune::tuneFrameExtent(frameSpec, frameExtentValues),
+                    alpakaTune::tuneNumFrames(frameSpec, numFrameValues)},
+                alpakaTune::defaultFrameExtentShape(frameSpec));
         };
-        using FrameTuning = decltype(makeFrameTuning());
-        using Tuner = decltype(alpakaTune::makeTuner(
-            std::declval<alpakaTune::TunerConfig>(),
-            std::declval<FrameTuning>(),
-            queue.getDevice(),
-            frameSpec.getExecutor(),
-            kernelIdentity));
+        using FrameTuning = ALPAKA_TYPEOF(makeFrameTuning());
+        using Tuner = ALPAKA_TYPEOF(
+            alpakaTune::makeTuner(
+                std::declval<alpakaTune::TunerConfig>(),
+                std::declval<FrameTuning>(),
+                queue.getDevice(),
+                frameSpec.getExecutor(),
+                kernelIdentity));
 
-        auto registryKey = std::string{kernelIdentity} + ":" + std::to_string(coverage)
-                           + (baselineOnly ? ":baseline" : ":tunable");
+        auto registryKey
+            = std::string{kernelIdentity} + ":" + std::to_string(coverage) + (baselineOnly ? ":baseline" : ":tunable");
         auto appendShape = [&registryKey](std::string_view label, auto const& value)
         {
             registryKey += ":";
@@ -344,6 +334,7 @@ namespace hase::alpakaUtils
         appendShape("extent", frameSpec.getFrameExtents());
 
         using Device = std::remove_cvref_t<decltype(queue.getDevice())>;
+
         struct TunerEntry
         {
             explicit TunerEntry(Device value) : device{std::move(value)}
@@ -355,6 +346,7 @@ namespace hase::alpakaUtils
             bool completionTraced{};
             std::mutex mutex;
         };
+
         static std::mutex tunerRegistryMutex;
         static std::unordered_map<std::string, std::vector<std::shared_ptr<TunerEntry>>> tuners;
         auto entry = std::shared_ptr<TunerEntry>{};
@@ -363,10 +355,7 @@ namespace hase::alpakaUtils
             auto& matchingEntries = tuners[registryKey];
             auto const found = std::ranges::find_if(
                 matchingEntries,
-                [&queue](auto const& candidate)
-                {
-                    return candidate->device == queue.getDevice();
-                });
+                [&queue](auto const& candidate) { return candidate->device == queue.getDevice(); });
             if(found != matchingEntries.end())
                 entry = *found;
             else
@@ -395,11 +384,10 @@ namespace hase::alpakaUtils
             catch(std::exception const& error)
             {
                 throw std::runtime_error{
-                    "alpakaTune initialization failed for "
-                    + std::string{kernelIdentity}
+                    "alpakaTune initialization failed for " + std::string{kernelIdentity}
                     + " (coverage=" + std::to_string(coverage)
-                    + ", generated_frame_extents=" + std::to_string(extents.size())
-                    + "): " + error.what()};
+                    + ", generated_frame_extents=" + std::to_string(frameExtentValues.size())
+                    + ", generated_num_frames=" + std::to_string(numFrameValues.size()) + "): " + error.what()};
             }
         }
 
@@ -413,11 +401,10 @@ namespace hase::alpakaUtils
             catch(std::exception const& error)
             {
                 throw std::runtime_error{
-                    "alpakaTune launch failed for "
-                    + std::string{kernelIdentity}
+                    "alpakaTune launch failed for " + std::string{kernelIdentity}
                     + " (coverage=" + std::to_string(coverage)
-                    + ", generated_frame_extents=" + std::to_string(extents.size())
-                    + "): " + error.what()};
+                    + ", generated_frame_extents=" + std::to_string(frameExtentValues.size())
+                    + ", generated_num_frames=" + std::to_string(numFrameValues.size()) + "): " + error.what()};
             }
         }();
         auto const hostCallSeconds
@@ -428,17 +415,33 @@ namespace hase::alpakaUtils
 
         if(observed.measured || (observed.tuningComplete && !entry->completionTraced))
         {
-            auto const candidatePosition = observed.configuration.empty() || extents.size() == 1u
-                                               ? 0u
-                                               : static_cast<std::size_t>(std::llround(
-                                                     observed.configuration[0]
-                                                     * static_cast<float>(extents.size() - 1u)));
-            auto const selectedExtent = extents.at(candidatePosition);
-            auto selectedFrames = selectedExtent;
-            for(std::size_t dimension = 0u; dimension < selectedFrames.dim(); ++dimension)
-                selectedFrames[dimension]
-                    = frameSpec.getNumFrames()[dimension] * frameSpec.getFrameExtents()[dimension]
-                      / selectedExtent[dimension];
+            auto selectVector = [&observed](auto const& candidates, std::size_t configurationOffset)
+            {
+                ALPAKA_TYPEOF(candidates.front()) selected{};
+                for(std::size_t dimension = 0u; dimension < selected.dim(); ++dimension)
+                {
+                    auto uniqueComponents = std::vector<ALPAKA_TYPEOF(candidates.front()[0u])>{};
+                    for(auto const& candidate : candidates)
+                    {
+                        if(std::ranges::find(uniqueComponents, candidate[dimension]) == uniqueComponents.end())
+                            uniqueComponents.push_back(candidate[dimension]);
+                    }
+                    auto const configurationIndex = configurationOffset + dimension;
+                    auto const position = observed.configuration.empty() || uniqueComponents.size() == 1u
+                                              ? 0u
+                                              : static_cast<std::size_t>(std::llround(
+                                                    observed.configuration.at(configurationIndex)
+                                                    * static_cast<float>(uniqueComponents.size() - 1u)));
+                    selected[dimension] = uniqueComponents.at(position);
+                }
+                return selected;
+            };
+            auto const selectedExtent = selectVector(frameExtentValues.values(), 0u);
+            auto const selectedFrames
+                = selectVector(numFrameValues.values(), ALPAKA_TYPEOF(frameSpec.getFrameExtents())::dim());
+            auto const selectedCoverage = static_cast<std::size_t>(selectedFrames.product())
+                                          * static_cast<std::size_t>(selectedExtent.product());
+            auto const tunerInfo = entry->tuner->info();
 
             auto record = nlohmann::json::object();
             record["kernel"] = std::string{kernelIdentity};
@@ -457,6 +460,9 @@ namespace hase::alpakaUtils
             record["selected_num_frames"] = detail::vectorJson(selectedFrames);
             record["selected_frame_extent"] = detail::vectorJson(selectedExtent);
             record["coverage"] = coverage;
+            record["selected_coverage"] = selectedCoverage;
+            record["candidate_count"] = tunerInfo.candidateCount;
+            record["rejected_candidate_count"] = tunerInfo.rejectedCandidateCount;
             detail::appendTrace(record);
         }
         if(observed.tuningComplete)
