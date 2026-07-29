@@ -38,7 +38,7 @@ namespace hase::core
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     class ForwardSrmDeviceState
     {
-        using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::blocking));
+        using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::nonBlocking));
         using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
         using T_UnsignedBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), std::size_t{1}));
@@ -71,7 +71,7 @@ namespace hase::core
             double const sourceStratificationOffset,
             unsigned const spectrumStratificationPhase)
             : m_devBundle(device, executor)
-            , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::blocking))
+            , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::nonBlocking))
             , m_mesh(meshContainer.toView())
             , m_rayCount(rayCount)
             , m_rngSeed(rngSeed)

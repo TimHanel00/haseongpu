@@ -337,7 +337,7 @@ namespace hase::core
     template<alpaka::onHost::concepts::Device T_Device>
     class DeviceMeshContainer
     {
-        using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::blocking));
+        using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::nonBlocking));
 
     public:
         DeviceMeshContainer(
@@ -377,7 +377,7 @@ namespace hase::core
             std::vector<double> cellCenters,
             std::vector<double> samplePoints)
             : m_device(device)
-            , m_queue(device.makeQueue(alpaka::queueKind::blocking))
+            , m_queue(device.makeQueue(alpaka::queueKind::nonBlocking))
             , points(hase::alpakaUtils::toDevice(m_queue, points))
             , betaVolume(hase::alpakaUtils::toDevice(m_queue, betaVolume))
             , betaCells(hase::alpakaUtils::toDevice(m_queue, betaCells))
@@ -414,6 +414,7 @@ namespace hase::core
             , thickness(thickness)
             , samplePointsAreMeshPoints(samplePointsAreMeshPoints)
         {
+            alpaka::onHost::wait(m_queue);
         }
 
         [[nodiscard]] auto toView() const -> DeviceMeshView

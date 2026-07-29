@@ -142,7 +142,7 @@ namespace hase::core
     template<typename T_Device, typename T_Executor>
     class CompiledSimulationRunner
     {
-        using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::blocking));
+        using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::nonBlocking));
         using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
         using T_FloatBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<float>(std::declval<T_Device&>(), std::size_t{1}));
         using T_UnsignedBuffer
@@ -157,7 +157,7 @@ namespace hase::core
             SimulationRunControl const& run,
             HostMesh& hostMesh)
             : m_device(device)
-            , m_queue(device.makeQueue(alpaka::queueKind::blocking))
+            , m_queue(device.makeQueue(alpaka::queueKind::nonBlocking))
             , m_devBundle(device, executor)
             , m_experiment(experiment)
             , m_compute(compute)
