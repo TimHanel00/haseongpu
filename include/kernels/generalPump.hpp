@@ -19,12 +19,19 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace hase::kernels
@@ -366,6 +373,69 @@ namespace hase::kernels
         }
     };
 
+    struct ResetPumpRays
+    {
+        template<
+            typename T_Acc,
+            typename T_LaunchOriginX,
+            typename T_LaunchOriginY,
+            typename T_LaunchOriginZ,
+            typename T_LaunchDirectionX,
+            typename T_LaunchDirectionY,
+            typename T_LaunchDirectionZ,
+            typename T_LaunchPower,
+            typename T_LaunchCell,
+            typename T_LaunchForbiddenFace,
+            typename T_OriginX,
+            typename T_OriginY,
+            typename T_OriginZ,
+            typename T_DirectionX,
+            typename T_DirectionY,
+            typename T_DirectionZ,
+            typename T_Power,
+            typename T_Cell,
+            typename T_ForbiddenFace,
+            typename T_ExitFace>
+        ALPAKA_FN_ACC void operator()(
+            T_Acc const& acc,
+            T_LaunchOriginX launchOriginX,
+            T_LaunchOriginY launchOriginY,
+            T_LaunchOriginZ launchOriginZ,
+            T_LaunchDirectionX launchDirectionX,
+            T_LaunchDirectionY launchDirectionY,
+            T_LaunchDirectionZ launchDirectionZ,
+            T_LaunchPower launchPower,
+            T_LaunchCell launchCell,
+            T_LaunchForbiddenFace launchForbiddenFace,
+            T_OriginX originX,
+            T_OriginY originY,
+            T_OriginZ originZ,
+            T_DirectionX directionX,
+            T_DirectionY directionY,
+            T_DirectionZ directionZ,
+            T_Power power,
+            T_Cell cell,
+            T_ForbiddenFace forbiddenFace,
+            T_ExitFace exitFace,
+            unsigned const rayCount) const
+        {
+            for(auto [ray] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{rayCount}))
+            {
+                originX[ray] = launchOriginX[ray];
+                originY[ray] = launchOriginY[ray];
+                originZ[ray] = launchOriginZ[ray];
+                directionX[ray] = launchDirectionX[ray];
+                directionY[ray] = launchDirectionY[ray];
+                directionZ[ray] = launchDirectionZ[ray];
+                power[ray] = launchPower[ray];
+                cell[ray] = launchCell[ray];
+                forbiddenFace[ray] = launchForbiddenFace[ray];
+                exitFace[ray] = -1;
+            }
+        }
+    };
+
     template<
         typename T_Device,
         typename T_Executor,
@@ -571,6 +641,165 @@ namespace hase::kernels
         return result;
     }
 
+    struct ApplyPumpRelayOnDevice
+    {
+        hase::core::Point exitOrigin;
+        hase::core::Point exitU;
+        hase::core::Point exitV;
+        hase::core::Point exitNormal;
+        hase::core::Point entryOrigin;
+        hase::core::Point entryU;
+        hase::core::Point entryV;
+        hase::core::Point entryNormal;
+        bool flipU = false;
+        bool flipV = false;
+        double cosine = 1.0;
+        double sine = 0.0;
+        double offsetU = 0.0;
+        double offsetV = 0.0;
+        double tiltU = 0.0;
+        double tiltV = 0.0;
+        double magnification = 1.0;
+        double transmission = 1.0;
+
+        template<typename T_ExitDomains>
+        ALPAKA_FN_ACC bool acceptsExitDomain(
+            T_ExitDomains const& exitDomains,
+            unsigned const exitDomainCount,
+            int const domain) const
+        {
+            for(unsigned index = 0u; index < exitDomainCount; ++index)
+                if(exitDomains[index] == domain)
+                    return true;
+            return false;
+        }
+
+        ALPAKA_FN_ACC bool containsEntryPoint(hase::core::Point const point, PumpBoundaryFace const& face) const
+        {
+            double const pointU = hase::core::dot(point, entryU);
+            double const pointV = hase::core::dot(point, entryV);
+            double const aU = hase::core::dot(face.vertices[0], entryU);
+            double const aV = hase::core::dot(face.vertices[0], entryV);
+            double const bU = hase::core::dot(face.vertices[1], entryU);
+            double const bV = hase::core::dot(face.vertices[1], entryV);
+            double const cU = hase::core::dot(face.vertices[2], entryU);
+            double const cV = hase::core::dot(face.vertices[2], entryV);
+            double const denominator = (bV - cV) * (aU - cU) + (cU - bU) * (aV - cV);
+            if(alpaka::math::abs(denominator) <= 1.0e-30)
+                return false;
+            double const weightA = ((bV - cV) * (pointU - cU) + (cU - bU) * (pointV - cV)) / denominator;
+            double const weightB = ((cV - aV) * (pointU - cU) + (aU - cU) * (pointV - cV)) / denominator;
+            double const weightC = 1.0 - weightA - weightB;
+            return weightA >= -1.0e-10 && weightB >= -1.0e-10 && weightC >= -1.0e-10;
+        }
+
+        ALPAKA_FN_ACC hase::core::Point normalize(hase::core::Point const value) const
+        {
+            double const length = value.euclidLength();
+            return length > 0.0 ? value * (1.0 / length) : hase::core::Point{0.0, 0.0, 0.0};
+        }
+
+        template<
+            typename T_Acc,
+            typename T_EntryFaces,
+            typename T_ExitDomains,
+            typename T_OriginX,
+            typename T_OriginY,
+            typename T_OriginZ,
+            typename T_DirectionX,
+            typename T_DirectionY,
+            typename T_DirectionZ,
+            typename T_Power,
+            typename T_Cell,
+            typename T_ForbiddenFace,
+            typename T_ExitFace>
+        ALPAKA_FN_ACC void operator()(
+            T_Acc const& acc,
+            hase::core::DeviceMeshView const mesh,
+            T_EntryFaces const& entryFaces,
+            unsigned const entryFaceCount,
+            T_ExitDomains const& exitDomains,
+            unsigned const exitDomainCount,
+            T_OriginX originX,
+            T_OriginY originY,
+            T_OriginZ originZ,
+            T_DirectionX directionX,
+            T_DirectionY directionY,
+            T_DirectionZ directionZ,
+            T_Power power,
+            T_Cell cell,
+            T_ForbiddenFace forbiddenFace,
+            T_ExitFace exitFace,
+            unsigned const rayCount) const
+        {
+            for(auto [ray] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{rayCount}))
+            {
+                if(exitFace[ray] < 0 || power[ray] == 0.0)
+                {
+                    power[ray] = 0.0;
+                    exitFace[ray] = -1;
+                    continue;
+                }
+                unsigned const faceIndex
+                    = cell[ray] * mesh.numberOfFacesPerCell + static_cast<unsigned>(exitFace[ray]);
+                int const domain = mesh.cellFaceBoundaries[faceIndex];
+                if(!acceptsExitDomain(exitDomains, exitDomainCount, domain))
+                {
+                    power[ray] = 0.0;
+                    exitFace[ray] = -1;
+                    continue;
+                }
+
+                hase::core::Point const position{originX[ray], originY[ray], originZ[ray]};
+                hase::core::Point const relative = position - exitOrigin;
+                double sourceU = hase::core::dot(relative, exitU) * (flipU ? -1.0 : 1.0);
+                double sourceV = hase::core::dot(relative, exitV) * (flipV ? -1.0 : 1.0);
+                sourceU *= magnification;
+                sourceV *= magnification;
+                double const mappedU = cosine * sourceU - sine * sourceV + offsetU;
+                double const mappedV = sine * sourceU + cosine * sourceV + offsetV;
+                hase::core::Point const mappedPosition = entryOrigin + entryU * mappedU + entryV * mappedV;
+
+                int selectedEntryFace = -1;
+                for(unsigned candidate = 0u; candidate < entryFaceCount; ++candidate)
+                {
+                    if(containsEntryPoint(mappedPosition, entryFaces[candidate]))
+                    {
+                        selectedEntryFace = static_cast<int>(candidate);
+                        break;
+                    }
+                }
+                if(selectedEntryFace < 0)
+                {
+                    power[ray] = 0.0;
+                    exitFace[ray] = -1;
+                    continue;
+                }
+
+                hase::core::Point const oldDirection{directionX[ray], directionY[ray], directionZ[ray]};
+                double const sourceDirectionU = hase::core::dot(oldDirection, exitU) * (flipU ? -1.0 : 1.0);
+                double const sourceDirectionV = hase::core::dot(oldDirection, exitV) * (flipV ? -1.0 : 1.0);
+                double const mappedDirectionU = cosine * sourceDirectionU - sine * sourceDirectionV + tiltU;
+                double const mappedDirectionV = sine * sourceDirectionU + cosine * sourceDirectionV + tiltV;
+                double const normalMagnitude = alpaka::math::abs(hase::core::dot(oldDirection, exitNormal));
+                hase::core::Point const direction
+                    = normalize(entryU * mappedDirectionU + entryV * mappedDirectionV - entryNormal * normalMagnitude);
+                auto const& entryFace = entryFaces[static_cast<unsigned>(selectedEntryFace)];
+                originX[ray] = mappedPosition.x;
+                originY[ray] = mappedPosition.y;
+                originZ[ray] = mappedPosition.z;
+                directionX[ray] = direction.x;
+                directionY[ray] = direction.y;
+                directionZ[ray] = direction.z;
+                power[ray] *= transmission;
+                cell[ray] = entryFace.cell;
+                forbiddenFace[ray] = static_cast<int>(entryFace.localFace);
+                exitFace[ray] = -1;
+            }
+        }
+    };
+
     struct NormalizePumpRate
     {
         ALPAKA_FN_ACC void operator()(
@@ -591,6 +820,402 @@ namespace hase::kernels
                     sampleRate[sample] = cellIntegral[sample] / mesh.getCellVolume(sample);
             }
         }
+    };
+
+    class PumpTimingCsv
+    {
+    public:
+        PumpTimingCsv()
+        {
+            if(auto const* path = std::getenv("HASE_PUMP_TIMING_CSV"))
+            {
+                m_stream.open(path);
+                if(!m_stream)
+                    throw std::runtime_error("failed to open HASE_PUMP_TIMING_CSV");
+                m_stream << "invocation,source,relay,phase,elapsed_seconds\n";
+            }
+        }
+
+        [[nodiscard]] bool enabled() const
+        {
+            return m_stream.is_open();
+        }
+
+        [[nodiscard]] std::uint64_t nextInvocation()
+        {
+            return ++m_invocation;
+        }
+
+        void record(
+            std::uint64_t const invocation,
+            int const source,
+            int const relay,
+            std::string const& phase,
+            double const elapsedSeconds)
+        {
+            if(!enabled())
+                return;
+            m_stream << invocation << ',' << source << ',' << relay << ',' << phase << ',' << std::setprecision(17)
+                     << elapsedSeconds << '\n';
+            m_stream.flush();
+        }
+
+    private:
+        std::ofstream m_stream;
+        std::uint64_t m_invocation = 0u;
+    };
+
+    template<typename T_Device>
+    class GeneralPumpWorkspace
+    {
+        using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
+        using T_UnsignedBuffer
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), std::size_t{1}));
+        using T_IntBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<int>(std::declval<T_Device&>(), std::size_t{1}));
+        using T_FaceBuffer
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<PumpBoundaryFace>(std::declval<T_Device&>(), std::size_t{1}));
+
+        struct RelayWorkspace
+        {
+            RelayWorkspace(
+                auto const& queue,
+                hase::core::HostMesh const& mesh,
+                hase::core::PumpRelayParameters const& relay)
+                : parameters(relay)
+                , exitFrame(makeRelayFrame(mesh, relay.exitSurfaces))
+                , entryFrame(makeRelayFrame(mesh, relay.entrySurfaces))
+                , entryFaces(hase::alpakaUtils::toDevice(queue, entryFrame.faces))
+                , exitDomains(hase::alpakaUtils::toDevice(queue, parameters.exitSurfaces))
+            {
+            }
+
+            [[nodiscard]] ApplyPumpRelayOnDevice kernel() const
+            {
+                return ApplyPumpRelayOnDevice{
+                    exitFrame.origin,
+                    exitFrame.u,
+                    exitFrame.v,
+                    exitFrame.normal,
+                    entryFrame.origin,
+                    entryFrame.u,
+                    entryFrame.v,
+                    entryFrame.normal,
+                    parameters.flipU,
+                    parameters.flipV,
+                    std::cos(parameters.rotation),
+                    std::sin(parameters.rotation),
+                    parameters.offset[0],
+                    parameters.offset[1],
+                    parameters.tilt[0],
+                    parameters.tilt[1],
+                    parameters.magnification,
+                    parameters.transmission};
+            }
+
+            hase::core::PumpRelayParameters parameters;
+            RelayFrame exitFrame;
+            RelayFrame entryFrame;
+            T_FaceBuffer entryFaces;
+            T_IntBuffer exitDomains;
+        };
+
+        struct SourceWorkspace
+        {
+            SourceWorkspace(
+                T_Device& device,
+                auto const& queue,
+                hase::core::HostMesh const& mesh,
+                hase::core::PumpSourceParameters const& source,
+                PumpRayBatch const& launch)
+                : rayCount(static_cast<unsigned>(launch.size()))
+                , launchOriginX(hase::alpakaUtils::toDevice(queue, launch.originX))
+                , launchOriginY(hase::alpakaUtils::toDevice(queue, launch.originY))
+                , launchOriginZ(hase::alpakaUtils::toDevice(queue, launch.originZ))
+                , launchDirectionX(hase::alpakaUtils::toDevice(queue, launch.directionX))
+                , launchDirectionY(hase::alpakaUtils::toDevice(queue, launch.directionY))
+                , launchDirectionZ(hase::alpakaUtils::toDevice(queue, launch.directionZ))
+                , launchPower(hase::alpakaUtils::toDevice(queue, launch.power))
+                , wavelength(hase::alpakaUtils::toDevice(queue, launch.wavelength))
+                , sigmaAbsorption(hase::alpakaUtils::toDevice(queue, launch.sigmaAbsorption))
+                , sigmaEmission(hase::alpakaUtils::toDevice(queue, launch.sigmaEmission))
+                , launchCell(hase::alpakaUtils::toDevice(queue, launch.cell))
+                , launchForbiddenFace(hase::alpakaUtils::toDevice(queue, launch.forbiddenFace))
+                , originX(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(rayCount)))
+                , originY(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(rayCount)))
+                , originZ(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(rayCount)))
+                , directionX(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(rayCount)))
+                , directionY(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(rayCount)))
+                , directionZ(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(rayCount)))
+                , power(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(rayCount)))
+                , cell(alpaka::onHost::alloc<unsigned>(device, static_cast<std::size_t>(rayCount)))
+                , forbiddenFace(alpaka::onHost::alloc<int>(device, static_cast<std::size_t>(rayCount)))
+                , exitFace(alpaka::onHost::alloc<int>(device, static_cast<std::size_t>(rayCount)))
+            {
+                relays.reserve(source.relays.size());
+                for(auto const& relay : source.relays)
+                    relays.emplace_back(std::make_unique<RelayWorkspace>(queue, mesh, relay));
+            }
+
+            unsigned rayCount;
+            T_DoubleBuffer launchOriginX, launchOriginY, launchOriginZ;
+            T_DoubleBuffer launchDirectionX, launchDirectionY, launchDirectionZ;
+            T_DoubleBuffer launchPower, wavelength, sigmaAbsorption, sigmaEmission;
+            T_UnsignedBuffer launchCell;
+            T_IntBuffer launchForbiddenFace;
+            T_DoubleBuffer originX, originY, originZ;
+            T_DoubleBuffer directionX, directionY, directionZ;
+            T_DoubleBuffer power;
+            T_UnsignedBuffer cell;
+            T_IntBuffer forbiddenFace, exitFace;
+            std::vector<std::unique_ptr<RelayWorkspace>> relays;
+        };
+
+    public:
+        GeneralPumpWorkspace(
+            T_Device& device,
+            auto const& queue,
+            hase::core::HostMesh const& mesh,
+            hase::core::PumpParameters const& pump)
+        {
+            m_sources.reserve(pump.sources.size());
+            for(std::size_t sourceIndex = 0u; sourceIndex < pump.sources.size(); ++sourceIndex)
+            {
+                auto const sampleStarted = std::chrono::steady_clock::now();
+                PumpRayBatch const launch = samplePumpSource(
+                    mesh,
+                    pump.sources[sourceIndex],
+                    pump.rayCount,
+                    pump.rngSeed + static_cast<std::uint32_t>(sourceIndex));
+                m_timings.record(
+                    0u,
+                    static_cast<int>(sourceIndex),
+                    -1,
+                    "prepare_sample",
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - sampleStarted).count());
+                auto const uploadStarted = std::chrono::steady_clock::now();
+                m_sources.emplace_back(
+                    std::make_unique<SourceWorkspace>(device, queue, mesh, pump.sources[sourceIndex], launch));
+                m_timings.record(
+                    0u,
+                    static_cast<int>(sourceIndex),
+                    -1,
+                    "prepare_upload",
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - uploadStarted).count());
+            }
+        }
+
+        void enqueue(
+            auto& devBundle,
+            auto const& queue,
+            hase::core::DeviceMeshView const mesh,
+            auto& betaVolume,
+            auto& cellPumpIntegral,
+            auto& lumpedVolume,
+            auto& sampleRate)
+        {
+            std::uint64_t const invocation = m_timings.nextInvocation();
+            measure(
+                queue,
+                invocation,
+                -1,
+                -1,
+                "clear",
+                [&]
+                {
+                    alpaka::onHost::fill(
+                        queue,
+                        cellPumpIntegral,
+                        0.0,
+                        alpaka::Vec{static_cast<std::size_t>(mesh.numberOfCells)});
+                    alpaka::onHost::fill(
+                        queue,
+                        sampleRate,
+                        0.0,
+                        alpaka::Vec{static_cast<std::size_t>(mesh.numberOfSamples)});
+                });
+
+            for(std::size_t sourceIndex = 0u; sourceIndex < m_sources.size(); ++sourceIndex)
+            {
+                auto& source = *m_sources[sourceIndex];
+                int const sourceNumber = static_cast<int>(sourceIndex);
+                measure(
+                    queue,
+                    invocation,
+                    sourceNumber,
+                    -1,
+                    "reset",
+                    [&]
+                    {
+                        auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+                            devBundle.device,
+                            devBundle.executor,
+                            alpaka::Vec{source.rayCount});
+                        queue.enqueue(
+                            frameSpec,
+                            alpaka::KernelBundle{
+                                ResetPumpRays{},
+                                source.launchOriginX,
+                                source.launchOriginY,
+                                source.launchOriginZ,
+                                source.launchDirectionX,
+                                source.launchDirectionY,
+                                source.launchDirectionZ,
+                                source.launchPower,
+                                source.launchCell,
+                                source.launchForbiddenFace,
+                                source.originX,
+                                source.originY,
+                                source.originZ,
+                                source.directionX,
+                                source.directionY,
+                                source.directionZ,
+                                source.power,
+                                source.cell,
+                                source.forbiddenFace,
+                                source.exitFace,
+                                source.rayCount});
+                    });
+                measure(
+                    queue,
+                    invocation,
+                    sourceNumber,
+                    -1,
+                    "direct_trace",
+                    [&] { enqueueTrace(devBundle, queue, mesh, betaVolume, cellPumpIntegral, sampleRate, source); });
+
+                for(std::size_t relayIndex = 0u; relayIndex < source.relays.size(); ++relayIndex)
+                {
+                    auto& relay = *source.relays[relayIndex];
+                    int const relayNumber = static_cast<int>(relayIndex);
+                    measure(
+                        queue,
+                        invocation,
+                        sourceNumber,
+                        relayNumber,
+                        "relay_map",
+                        [&]
+                        {
+                            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+                                devBundle.device,
+                                devBundle.executor,
+                                alpaka::Vec{source.rayCount});
+                            queue.enqueue(
+                                frameSpec,
+                                alpaka::KernelBundle{
+                                    relay.kernel(),
+                                    mesh,
+                                    relay.entryFaces,
+                                    static_cast<unsigned>(relay.entryFrame.faces.size()),
+                                    relay.exitDomains,
+                                    static_cast<unsigned>(relay.parameters.exitSurfaces.size()),
+                                    source.originX,
+                                    source.originY,
+                                    source.originZ,
+                                    source.directionX,
+                                    source.directionY,
+                                    source.directionZ,
+                                    source.power,
+                                    source.cell,
+                                    source.forbiddenFace,
+                                    source.exitFace,
+                                    source.rayCount});
+                        });
+                    measure(
+                        queue,
+                        invocation,
+                        sourceNumber,
+                        relayNumber,
+                        "relay_trace",
+                        [&]
+                        { enqueueTrace(devBundle, queue, mesh, betaVolume, cellPumpIntegral, sampleRate, source); });
+                }
+            }
+
+            measure(
+                queue,
+                invocation,
+                -1,
+                -1,
+                "normalize",
+                [&]
+                {
+                    auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+                        devBundle.device,
+                        devBundle.executor,
+                        alpaka::Vec{mesh.numberOfSamples});
+                    queue.enqueue(
+                        frameSpec,
+                        alpaka::KernelBundle{NormalizePumpRate{}, mesh, cellPumpIntegral, lumpedVolume, sampleRate});
+                });
+            alpaka::onHost::wait(queue);
+        }
+
+    private:
+        void enqueueTrace(
+            auto& devBundle,
+            auto const& queue,
+            hase::core::DeviceMeshView const mesh,
+            auto& betaVolume,
+            auto& cellPumpIntegral,
+            auto& sampleRate,
+            SourceWorkspace& source)
+        {
+            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+                devBundle.device,
+                devBundle.executor,
+                alpaka::Vec{source.rayCount});
+            queue.enqueue(
+                frameSpec,
+                alpaka::KernelBundle{
+                    TraceGeneralPump{},
+                    mesh,
+                    betaVolume,
+                    source.originX,
+                    source.originY,
+                    source.originZ,
+                    source.directionX,
+                    source.directionY,
+                    source.directionZ,
+                    source.power,
+                    source.wavelength,
+                    source.sigmaAbsorption,
+                    source.sigmaEmission,
+                    source.cell,
+                    source.forbiddenFace,
+                    source.exitFace,
+                    cellPumpIntegral,
+                    sampleRate,
+                    source.rayCount});
+        }
+
+        template<typename T_Function>
+        void measure(
+            auto const& queue,
+            std::uint64_t const invocation,
+            int const source,
+            int const relay,
+            std::string const& phase,
+            T_Function&& function)
+        {
+            if(!m_timings.enabled())
+            {
+                std::forward<T_Function>(function)();
+                return;
+            }
+            alpaka::onHost::wait(queue);
+            auto const started = std::chrono::steady_clock::now();
+            std::forward<T_Function>(function)();
+            alpaka::onHost::wait(queue);
+            m_timings.record(
+                invocation,
+                source,
+                relay,
+                phase,
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+        }
+
+        PumpTimingCsv m_timings;
+        std::vector<std::unique_ptr<SourceWorkspace>> m_sources;
     };
 
     template<

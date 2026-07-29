@@ -180,6 +180,7 @@ namespace hase::core
             , m_k4(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(m_mesh.numberOfSamples)))
             , m_cellPumpIntegral(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(m_mesh.numberOfCells)))
             , m_lumpedSampleVolume(hase::alpakaUtils::toDevice(m_queue, detail::makeLumpedSampleVolumes(hostMesh)))
+            , m_pumpWorkspace(device, m_queue, hostMesh, run.pump)
         {
             hase::kernels::enqueueBuildActivePointMask(m_devBundle, m_queue, m_mesh, m_activeMask);
             alpaka::onHost::wait(m_queue);
@@ -214,14 +215,14 @@ namespace hase::core
             hase::kernels::enqueueMapPointBetaToPrismBeta(m_devBundle, m_queue, m_mesh, beta, m_betaVolume);
             alpaka::onHost::wait(m_queue);
 
-            m_hostMesh.betaCells = detail::copyToVector(m_queue, beta);
-            m_hostMesh.setBetaVolume(detail::copyToVector(m_queue, m_betaVolume));
             if(refreshAse)
             {
                 initializeResult(aseEnabled ? 100000.0 : 0.0, m_hostMesh.numberOfCells);
 
                 if(aseEnabled)
                 {
+                    m_hostMesh.betaCells = detail::copyToVector(m_queue, beta);
+                    m_hostMesh.setBetaVolume(detail::copyToVector(m_queue, m_betaVolume));
                     int const result = hase::core::startSimulation<false>(
                         m_experiment,
                         m_compute,
@@ -243,12 +244,10 @@ namespace hase::core
 
             if(pumpEnabled)
             {
-                hase::kernels::enqueueGeneralPump(
+                m_pumpWorkspace.enqueue(
                     m_devBundle,
                     m_queue,
-                    m_hostMesh,
                     m_mesh,
-                    m_run.pump,
                     m_betaVolume,
                     m_cellPumpIntegral,
                     m_lumpedSampleVolume,
@@ -497,6 +496,7 @@ namespace hase::core
         T_DoubleBuffer m_k4;
         T_DoubleBuffer m_cellPumpIntegral;
         T_DoubleBuffer m_lumpedSampleVolume;
+        hase::kernels::GeneralPumpWorkspace<T_Device> m_pumpWorkspace;
         Result m_lastAseResult;
     };
 
