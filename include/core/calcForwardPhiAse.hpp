@@ -65,7 +65,7 @@ namespace hase::core
         }
 
         time_t starttime = time(0);
-        auto queue = devBundle.device.makeQueue();
+        auto queue = devBundle.device.makeQueue(alpaka::queueKind::nonBlocking);
         DeviceMeshView mesh = meshContainer.toView();
         unsigned const volumeCount = mesh.numberOfCells;
         double const betaVolumeTotal = calcForwardBetaVolumeTotal(hostMesh);
