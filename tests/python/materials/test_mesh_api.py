@@ -1,6 +1,8 @@
 # Copyright 2026 Tim Hanel
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -21,6 +23,7 @@ from HASEonGPU import (
     Simulation,
     SurfacePumpInjector,
     UnstructuredMesh,
+    writeParaviewState,
 )
 
 
@@ -109,3 +112,23 @@ def test_missing_pump_error_does_not_freeze_configuration():
         Pump(total_power=1.0, spectrum=PumpSpectrum.monochromatic(940e-9)),
         SurfacePumpInjector(1),
     ) is simulation
+
+
+def test_paraview_export_accepts_public_read_only_tet4_state(tmp_path):
+    mesh = UnstructuredMesh.from_tetrahedra(TETRAHEDRON, [[0, 1, 2, 3]])
+    state = SimpleNamespace(
+        step=1,
+        time=1.0e-6,
+        topology=mesh,
+        betaCells=np.asarray([0.1]),
+        betaVolume=np.asarray([0.1]),
+        phiAse=np.asarray([4.0]),
+        dndtAse=np.asarray([-1.0]),
+        dndtPump=np.asarray([2.0]),
+    )
+
+    handle = writeParaviewState(state, tmp_path)
+
+    assert handle == tmp_path / "laserPumpCladding.pmd"
+    assert handle.read_text(encoding="utf-8") == "laserPumpCladding_%06T.bp\n"
+    assert (tmp_path / "laserPumpCladding_000001.bp").exists()

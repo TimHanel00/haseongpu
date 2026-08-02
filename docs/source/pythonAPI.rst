@@ -90,3 +90,23 @@ Utilities
 
    AlpakaBackends
    writeParaviewState
+
+Advanced openPMD schema helpers
+-------------------------------
+
+These helpers are public for applications that build HASE-compatible openPMD
+records directly. Normal ``Simulation`` assembly does not need them.
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   BaseGroup
+   BaseSchema
+   GroupFieldSpec
+   OpenPmdBackends
+   PointSchema
+   PrimitiveFieldSpec
+   PrismSchema
+   TriangleSchema
+   backendFlat

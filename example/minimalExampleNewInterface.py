@@ -40,6 +40,7 @@ def print_state(state):
 
 
 def build_simulation():
+    # docs:start: mesh
     # Mesh topology and domain identity contain no optical material data.
     mesh = UnstructuredMesh.from_tetrahedra(
         points=np.asarray(
@@ -51,7 +52,9 @@ def build_simulation():
         volume_domain_names={10: "crystal"},
         surface_domain_names={1: "exterior"},
     )
+    # docs:end: mesh
 
+    # docs:start: material
     cross_sections = CrossSectionTable(
         wavelengths=[900e-9, 1030e-9],
         absorption=[1.1e-25, 1.2e-25],
@@ -64,7 +67,9 @@ def build_simulation():
         cross_sections=cross_sections,
     )
     crystal = MaterialInstance(yag, active_ion_density=2.76e26)
+    # docs:end: material
 
+    # docs:start: simulation
     simulation = Simulation(
         mesh=mesh,
         ase_solver=MonteCarloASESolver(
@@ -83,16 +88,29 @@ def build_simulation():
         ExteriorBoundary(ConstantReflectivitySurface(reflectivity=0.0)),
         BoundaryLayout("exterior"),
     )
+    # docs:end: simulation
+
+    # docs:start: pump
     simulation.add_pump(
         Pump(total_power=16e3, spectrum=PumpSpectrum.monochromatic(940e-9)),
         SurfacePumpInjector("exterior"),
     )
+    # docs:end: pump
     simulation.on_step(print_state)
     return simulation
 
 
 def main():
     simulation = build_simulation()
+
+    # Compilation checks domain coverage without launching the native backend.
+    problem = simulation.compile()
+    print(
+        f"compiled {problem.mesh.number_of_cells} cell(s) with "
+        f"{len(problem.materials)} material(s)"
+    )
+
+    # step() validates native-backend support and then performs the run.
     simulation.step(3)
 
 

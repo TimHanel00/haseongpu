@@ -1,26 +1,31 @@
 Unstructured mesh topology
 ==========================
 
-``UnstructuredMesh`` stores Tet4 points, connectivity, adjacency, and volume
-and surface domain identity. It deliberately stores no material definitions,
-optical behavior, cross sections, or excitation state.
+``UnstructuredMesh`` contains Tet4 geometry and domain identity only. It does
+not own materials, optical boundary behavior, cross sections, or excitation.
 
 Construction
 ------------
 
-Create a mesh directly:
+Create a mesh directly from ``(N, 3)`` points and ``(M, 4)`` point indices:
 
 .. code-block:: python
 
    mesh = UnstructuredMesh.from_tetrahedra(
-       points, cells,
+       points,
+       cell_connectivity,
        volume_domains=[10, 20],
        surface_domains=face_tags,
-       volume_domain_names={10: "gain", 20: "window"},
-       surface_domain_names={1: "pump_input"},
+       volume_domain_names={10: "gain", 20: "cap"},
+       surface_domain_names={1: "pump_input", 2: "outer"},
    )
 
-or load a Tet4 volume:
+``volume_domains`` has one tag per cell. ``surface_domains`` has shape
+``(number_of_cells, 4)`` and follows the mesh's local Tet4 face order; zero
+means no named surface domain. Only exterior tagged faces are eligible for a
+``BoundaryLayout`` or ``SurfacePumpInjector``.
+
+Load an existing Tet4 volume with:
 
 .. code-block:: python
 
@@ -28,10 +33,35 @@ or load a Tet4 volume:
    mesh = UnstructuredMesh.from_file("crystal.vtk")
    mesh = UnstructuredMesh.from_file("closed_surface.stl", meshSize=0.05)
 
-Gmsh physical names become layout selectors. Numeric physical tags can be used
-as selectors as well. ``number_of_points``, ``number_of_cells``,
-``cell_connectivity``, ``volume_domain_ids``, ``surface_domain_ids``, and the
-neighbor arrays are read-only topology views.
+Gmsh physical names become volume and surface selectors. VTK must contain Tet4
+cells. A closed STL surface is tetrahedralized, so its optional keyword
+arguments depend on the Gmsh-backed meshing path.
 
-Only Tet4 topology is part of the public simulation API. Material assignment is
-performed later with ``Simulation.add_material``.
+Selectors and layouts
+---------------------
+
+Layouts accept a numeric tag, a physical name, or a tuple of either:
+
+.. code-block:: python
+
+   MaterialLayout("gain")
+   MaterialLayout((10, 20))
+   BoundaryLayout(("pump_input", "outer"))
+
+``MaterialLayout("all")`` selects every cell and
+``BoundaryLayout("all_exterior")`` selects every exterior face. These special
+selectors cannot be combined with other selectors. Unknown or ambiguous names
+are reported by ``Simulation.compile()``.
+
+Inspection and validity
+-----------------------
+
+The main read-only views are ``points``, ``cell_connectivity``,
+``volume_domain_ids``, ``surface_domain_ids``, ``neighbor_cells``, and
+``neighbor_local_faces``. Counts are available as ``number_of_points`` and
+``number_of_cells``. Domain-name dictionaries are exposed by
+``volume_domain_names`` and ``surface_domain_names``.
+
+Construction rejects non-finite coordinates, invalid or degenerate Tet4
+connectivity, and non-manifold faces. Arrays are immutable after construction;
+create a new mesh when topology or domain identity must change.

@@ -43,7 +43,27 @@ autodoc_typehints = "description"
 autodoc_member_order = "bysource"
 
 templates_path = ['_templates']
-exclude_patterns = []
+# Autosummary pages are generated into an ignored source directory. Exclude
+# stale pages for names retired by the breaking frontend redesign so an
+# incremental documentation build cannot try to autodoc removed public names.
+exclude_patterns = [
+    "generated/HASEonGPU.CrossSectionData.rst",
+    "generated/HASEonGPU.GainMedium.rst",
+    "generated/HASEonGPU.GainMediumGeometry.rst",
+    "generated/HASEonGPU.Gmsh.rst",
+    "generated/HASEonGPU.Grid.rst",
+    "generated/HASEonGPU.LaserProperties.rst",
+    "generated/HASEonGPU.MeshTopology.rst",
+    "generated/HASEonGPU.PhiASE.rst",
+    "generated/HASEonGPU.SpectralDecomposition.rst",
+    "generated/HASEonGPU.SurfaceOptics.rst",
+    "generated/HASEonGPU.TimeSteppedSimulation.rst",
+    "generated/HASEonGPU.VolumeTopology.rst",
+    "generated/HASEonGPU.calcGainFromState.rst",
+    "generated/HASEonGPU.vtkWedge.rst",
+    "generated/HASEonGPU.writeGainMediumVtk.rst",
+    "generated/HASEonGPU.unitDimension.rst",
+]
 
 
 

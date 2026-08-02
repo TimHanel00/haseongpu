@@ -1,40 +1,119 @@
 Python Interface Guide
 ======================
 
-The Python interface separates **what the device is made of** from **how it is
-meshed**. This follows PICMI's composition pattern and avoids storing material
-physics or evolving state inside the mesh.
+The public frontend is imported from ``HASEonGPU``. It separates geometry,
+material physics, numerical algorithms, and evolving state so that each object
+has one responsibility. Modules below ``pyInclude`` are implementation details;
+new applications should not import them.
 
-A simulation is assembled in this order:
+The object model
+----------------
 
-#. create a Tet4 :doc:`mesh <python_interface/topology>`;
-#. define reusable material physics and run-specific material instances;
-#. attach each instance to volume domains with ``MaterialLayout``;
-#. attach boundary and internal-interface models to their layouts;
-#. choose ASE, pump, and time-integration solvers;
-#. supply ``InitialState`` and register physical pumps;
-#. call ``compile()``, ``validate_backend()``, or ``step()``.
+.. list-table::
+   :header-rows: 1
+   :widths: 25 35 40
+
+   * - Concern
+     - Public objects
+     - Responsibility
+   * - Topology
+     - ``UnstructuredMesh``
+     - Tet4 points, connectivity, adjacency, and named domain tags.
+   * - Material physics
+     - ``CrossSectionTable``, ``MaterialDefinition``, ``MaterialInstance``
+     - Reusable optical data and run-specific active-ion density.
+   * - Placement and optics
+     - ``MaterialLayout``, ``BoundaryLayout``, ``MaterialInterfaceLayout``
+     - Attach physical models to mesh domains without putting them in the mesh.
+   * - Algorithms
+     - ``MonteCarloASESolver``, ``MonteCarloPumpSolver``, time integrators
+     - Choose numerical methods and their run controls.
+   * - Evolution
+     - ``Simulation``, ``InitialState``, ``TimeStepState``
+     - Assemble, validate, execute, and expose completed-step snapshots.
+
+The lifecycle
+-------------
+
+A frontend run has distinct assembly and execution phases:
+
+#. create or load a Tet4 ``UnstructuredMesh``;
+#. create material definitions and instances;
+#. construct ``Simulation`` with solver descriptors and initial state;
+#. register materials, exterior boundaries, internal interfaces, and pumps;
+#. call ``compile()`` to validate layouts and inspect backend-neutral tables;
+#. call ``validate_backend()`` to check that the current native adapter can
+   execute those tables;
+#. call ``step()`` or ``run_until()`` and consume ``TimeStepState`` callbacks.
+
+``compile()`` performs no native launch. It resolves named or numeric domains,
+requires every cell and exterior face to be covered exactly once, and requires
+an explicit interface wherever adjacent cells contain different material
+instances. ``validate_backend()`` is deliberately separate: a problem may be a
+valid frontend model even when the current native adapter cannot execute all of
+its features yet.
 
 .. important::
 
-   The frontend can compile multiple materials and explicit
-   ``PerfectTransmission`` or ``FresnelInterface`` models today. The current
-   C++/openPMD 0.1 backend adapter supports only one isotropic active material
-   and no internal material interface. It rejects unsupported configurations
-   before transport. Fresnel reflection/refraction and transmission between
-   mesh domains are therefore not implemented in the backend yet.
+   Frontend compilation supports multiple materials and explicit
+   ``PerfectTransmission`` or ``FresnelInterface`` models. The current
+   C++/openPMD 0.1 adapter executes only one isotropic active material, no
+   internal material interface, and the built-in Monte Carlo ASE and pump
+   solvers. Unsupported configurations fail before transport is launched.
 
-   ``ASESolver`` and ``PumpSolver`` are extensible roles. The current adapter
-   implements only ``MonteCarloASESolver`` and ``MonteCarloPumpSolver``; a
-   different descriptor can be composed in Python but is rejected at backend
-   validation until an adapter is provided.
+Minimal complete setup
+----------------------
 
-Concept Pages
--------------
+All public physical values use SI units. The following snippets are included
+from ``example/minimalExampleNewInterface.py`` so the guide and runnable
+example share one source.
+
+Create topology with domain identity but no material data:
+
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
+   :language: python
+   :start-after: # docs:start: mesh
+   :end-before: # docs:end: mesh
+   :dedent: 4
+
+Define cross sections, reusable material physics, and a run-specific material
+instance:
+
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
+   :language: python
+   :start-after: # docs:start: material
+   :end-before: # docs:end: material
+   :dedent: 4
+
+Compose the algorithms and attach material and exterior optics to mesh domains:
+
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
+   :language: python
+   :start-after: # docs:start: simulation
+   :end-before: # docs:end: simulation
+   :dedent: 4
+
+Finally, register physical pump light separately from its injection surface:
+
+.. literalinclude:: ../../example/minimalExampleNewInterface.py
+   :language: python
+   :start-after: # docs:start: pump
+   :end-before: # docs:end: pump
+   :dedent: 4
+
+Configuration is mutable until the first execution. ``compile()`` may be
+called repeatedly while assembling the model. After initialization, material,
+boundary, interface, pump, and initialization-callback registrations are
+frozen; step callbacks may still be added.
+
+Where to continue
+-----------------
 
 .. toctree::
    :maxdepth: 2
+   :caption: Python interface concepts
 
+   python_interface/migration
    python_interface/topology
    python_interface/gain_medium
    python_interface/spectral_decomposition
@@ -43,42 +122,8 @@ Concept Pages
    python_interface/simulation
    python_interface/utilities
 
-One-material example
---------------------
-
-All public physical values use SI units.
-
-.. code-block:: python
-
-   from HASEonGPU import *
-
-   mesh = UnstructuredMesh.from_file("crystal.msh")
-   spectra = CrossSectionTable.monochromatic(
-       wavelength=1030e-9, absorption=1.2e-25, emission=2.48e-24
-   )
-   yag = MaterialDefinition(
-       "Yb:YAG", refractive_index=1.82,
-       fluorescence_lifetime=941e-6, cross_sections=spectra,
-   )
-   crystal = MaterialInstance(yag, active_ion_density=2.76e26)
-
-   simulation = Simulation(
-       mesh=mesh,
-       ase_solver=MonteCarloASESolver(backend="Host_Cpu_CpuSerial"),
-       pump_solver=MonteCarloPumpSolver(ray_count=100_000),
-       time_integrator=RungeKutta4(),
-       time_step_size=1e-5,
-       initial_state=InitialState(0.0),
-   )
-   simulation.add_material(crystal, MaterialLayout("crystal"))
-   simulation.add_boundary(
-       ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior")
-   )
-   simulation.add_pump(
-       Pump(total_power=16e3, spectrum=PumpSpectrum.monochromatic(940e-9)),
-       SurfacePumpInjector("pump_input"),
-   )
-   simulation.step(3)
-
-See ``example/minimalExampleNewInterface.py`` for a self-contained mesh and
-``example/gmshMinimalExample.py`` for named gmsh volume/surface domains.
+Use ``example/minimalExampleNewInterface.py`` for a self-contained Tet4 run and
+``example/gmshMinimalExample.py`` for named Gmsh physical groups. The
+``example/laserPumpCladding.py`` driver intentionally remains a private legacy
+compatibility regression; it is not a template for new user code. Generated
+signatures and members are listed in :doc:`pythonAPI`.
