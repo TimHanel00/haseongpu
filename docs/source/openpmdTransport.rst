@@ -2,9 +2,11 @@ openPMD Transport
 =================
 
 HASEonGPU uses openPMD as the transport boundary between the Python frontend and
-the C++ ``calcPhiASE`` backend.  Users normally work with Python objects such
-as ``GainMedium`` and ``PhiASE``; the transport converts those objects into the
-records and attributes consumed by the backend.
+the C++ ``calcPhiASE`` backend. Users work with ``UnstructuredMesh``, material
+definitions/layouts, solver descriptors, and ``Simulation``. A private adapter
+converts the supported single-material problem into the established openPMD
+0.1 records and attributes consumed by the backend. Multiple-material and
+internal-interface tables are not serialized yet.
 
 Storage Backends
 ----------------
@@ -31,7 +33,7 @@ Select it in Python or YAML:
 
 .. code-block:: python
 
-   phi_ase = PhiASE(..., openpmdBackend="auto")
+   ase_solver = MonteCarloASESolver(..., openpmd_backend="auto")
 
 .. code-block:: yaml
 
@@ -39,38 +41,17 @@ Select it in Python or YAML:
      backend: Host_Cpu_CpuSerial       # Alpaka compute backend
      openpmd_backend: auto              # choose a compatible backend
 
-Set ``PhiASE.openpmdBackend`` or the YAML ``openpmd_backend`` value to override
-automatic selection for a particular run.
+Set the ``MonteCarloASESolver(openpmd_backend=...)`` argument or YAML
+``openpmd_backend`` to override automatic selection for a particular run.
 
-Streaming Sessions
-------------------
+Simulation transport lifetime
+-----------------------------
 
-``PhiASE.run(...)`` defaults to one open/write/read/close cycle per call.  For
-repeated ``adios-sst`` calls, keep a stream open:
-
-.. code-block:: python
-
-   session = phi_ase.openStream()
-   try:
-       for _ in range(steps):
-           phi_ase.run(gainMedium=medium, crossSections=spectra, openpmdSession=session)
-           result = phi_ase.getResults()
-   finally:
-       phi_ase.closeStream()
-
-Use ``openpmdSession="persistent"`` to let ``PhiASE`` own a reusable stream, or
-``openpmdSession="interval"`` to force one-shot behavior.  ``Simulation`` owns a separate transport session for each compiled run;
-caller-managed simulation sessions are not supported.
-
-``Simulation.runSteps(...)`` and ``Simulation.runUntil(...)`` launch the
-compiled ``calcPhiASE --cpp-control`` path. Python writes one initial input
-iteration with run-control attributes, then reads the snapshot series produced
-by the C++ time loop. For streaming backends, Python starts a dedicated
-snapshot receiver thread before sending the input iteration, so the C++ backend
-can drain its output stream and finish independently of slower Python
-``on_step`` callbacks such as VTK file writers. Caller-managed simulation
-openPMD sessions are not supported; the compiled run owns its transport
-lifetime.
+``Simulation.step`` owns the complete openPMD lifetime. Python writes one
+initial input iteration and reads snapshots produced by the compiled C++ time
+loop. Caller-managed sessions are not part of the public API. For streaming
+backends, an internal receiver drains snapshots independently of Python
+``on_step`` callback speed.
 
 Provider Compatibility
 ----------------------
@@ -103,10 +84,11 @@ openPMD libraries and Python bindings.
 openPMD Record Layout
 ---------------------
 
-The Python frontend has its own object model: ``MeshTopology``,
-``GainMedium``, ``CrossSectionData``, and ``PhiASE``. Those names are not an
-openPMD schema. The transport boundary is the openPMD series written for the
-C++ backend.
+The public frontend objects (``UnstructuredMesh``, ``MaterialDefinition``,
+``MaterialInstance``, layouts, and solver descriptors) are not an openPMD
+schema. The private compatibility adapter emits the openPMD series below. This
+wire contract remains single-material even though frontend compilation supports
+multiple materials and per-face interface tables.
 
 All array data at that boundary is written as openPMD ``Mesh`` records below
 each ``Iteration``'s ``meshes`` group. Scalar arrays are named openPMD records
@@ -157,11 +139,6 @@ The C++ backend writes result records under ``core_result_``:
 and ``dndt_ase``. ``standard_error`` has the same flux unit as ``phi_ase``;
 ``relative_standard_error`` is dimensionless. Result records use record-C
 layout.
-
-Custom fields declared with ``GainMedium.defineField(...)`` or
-``PrimitiveFieldSpec`` are serialized as additional openPMD mesh records with
-their unit metadata.  They are available to downstream readers; the current ASE
-backend ignores them unless a future backend explicitly consumes them.
 
 Result iterations also carry registered HASE extension attributes for SRM
 termination: ``srm_status``, ``srm_passes``, ``srm_remaining_fraction``,
@@ -225,14 +202,15 @@ is selected:
 
    import HASEonGPU
 
-   phi_ase = HASEonGPU.PhiASE(
-       parallelMode="mpi",
-       nPerNode=4,
-       openpmdBackend="adios-sst",
+   ase_solver = HASEonGPU.MonteCarloASESolver(
+       parallel_mode="mpi",
+       ranks_per_node=4,
+       openpmd_backend="adios-sst",
    )
-   phi_ase.run(gainMedium=medium, crossSections=spectra)
+   simulation = HASEonGPU.Simulation(..., ase_solver=ase_solver)
+   simulation.step()
 
-The scheduler controls the node allocation, while ``nPerNode`` controls the
+The scheduler controls the node allocation, while ``ranks_per_node`` controls the
 number of ranks launched on each allocated node. File-based transport data is
 created below ``./IO/phiase_mpi`` so the launch directory must be shared for a
 multi-node run.

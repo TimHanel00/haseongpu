@@ -8,7 +8,7 @@
 import numpy as np
 import pytest
 
-from HASEonGPU import CrossSectionData, LaserProperties
+from pyInclude.laser import CrossSectionData, LaserProperties
 
 
 def test_laserPropertiesExportCalcPhiAse():
@@ -95,3 +95,20 @@ def test_crossSectionOpenPmdFields():
     assert fields[0].spec.recordName == "lambda_absorption"
     assert fields[2].spec.recordName == "sigma_absorption"
     assert fields[0].context.spectral == 1
+
+
+def test_metre_wavelength_interpolation_can_straddle_one_micrometre():
+    cross_sections = CrossSectionData(
+        wavelengthsAbsorption=[900e-9, 1030e-9],
+        crossSectionAbsorption=[1.1e-21, 1.2e-21],
+        wavelengthsEmission=[900e-9, 1030e-9],
+        crossSectionEmission=[2.0e-21, 2.5e-21],
+    )
+
+    assert cross_sections.absorptionAt(940e-9) == pytest.approx(
+        np.interp(
+            940e-9,
+            cross_sections.wavelengthsAbsorption,
+            cross_sections.crossSectionAbsorption,
+        )
+    )

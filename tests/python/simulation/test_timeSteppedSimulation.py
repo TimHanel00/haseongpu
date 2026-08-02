@@ -11,22 +11,21 @@ import numpy as np
 import pytest
 
 from HASEonGPU import (
-    CrossSectionData,
     ExponentialEuler,
     ExplicitEuler,
     FrozenPhiAseRungeKutta4,
-    GainMedium,
     Heun,
     ImplicitEuler,
     Midpoint,
     MonteCarloPumpSolver,
-    PhiASE,
     Pump,
     PumpSpectrum,
     RungeKutta4,
     SurfacePumpInjector,
-    Simulation,
 )
+from pyInclude.geometry import GainMedium
+from pyInclude.laser import CrossSectionData
+from pyInclude.simulation import LegacySimulation as Simulation, PhiASE
 from pyInclude.openpmd import transport
 
 

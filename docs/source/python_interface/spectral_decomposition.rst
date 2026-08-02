@@ -1,85 +1,22 @@
-SpectralDecomposition
-=====================
+Cross-section tables
+====================
 
-``SpectralDecomposition`` stores absorption and emission spectra,
-:math:`\sigma_a(\lambda)` and :math:`\sigma_e(\lambda)`.  It is an alias for
-``CrossSectionData``.
+``CrossSectionTable`` belongs to ``MaterialDefinition`` rather than to the mesh,
+pump, or solver. It contains one strictly increasing wavelength grid and
+non-negative absorption and emission arrays.
 
 .. code-block:: python
 
-   from HASEonGPU import SpectralDecomposition
-
-   spectra = SpectralDecomposition(
-       wavelengthsAbsorption=[900.0, 910.0],
-       crossSectionAbsorption=[1.1e-21, 1.2e-21],
-       wavelengthsEmission=[1020.0, 1030.0],
-       crossSectionEmission=[2.0e-20, 2.48e-20],
-       resolution=2,
+   spectra = CrossSectionTable(
+       wavelengths=[900e-9, 1030e-9],
+       absorption=[1.1e-25, 1.2e-25],
+       emission=[2.0e-24, 2.48e-24],
    )
 
-The wavelength arrays :math:`\lambda` and matching cross-section arrays must
-have the same length.  ``resolution`` is the spectral interpolation resolution
-passed to the ASE calculation.
+All values use SI units (metres and square metres). ``monochromatic`` creates a
+one-sample table. ``from_directory`` reads the historical ``lambda_a.txt``,
+``sigma_a.txt``, ``lambda_e.txt``, and ``sigma_e.txt`` files and converts their
+nm/cm² values to SI.
 
-Constructors
-------------
-
-``SpectralDecomposition(...)``
-   Builds spectral data from explicit arrays.
-
-``SpectralDecomposition.monochromatic(...)``
-   Creates a single-wavelength :math:`\lambda` data set:
-
-.. code-block:: python
-
-   spectra = SpectralDecomposition.monochromatic(
-       wavelength=940e-9,
-       crossSectionAbsorption=1.2e-21,
-       crossSectionEmission=2.0e-20,
-   )
-
-``SpectralDecomposition.fromDirectory(path, resolution=1000)``
-   Loads four text files from a directory:
-
-* ``lambda_a.txt``
-* ``sigma_a.txt``
-* ``lambda_e.txt``
-* ``sigma_e.txt``
-
-Interpolation Utilities
------------------------
-
-.. code-block:: python
-
-   sigma_abs = spectra.absorptionAt(940e-9)
-   sigma_ems = spectra.emissionAt(1030.0)
-
-The interpolation helpers accept wavelengths :math:`\lambda` in the same unit
-as the stored data.  They also handle the common case where stored spectra are
-in ``nm`` and a pump wavelength is supplied in ``m``.
-
-Conversion Utilities
---------------------
-
-``toDict()`` returns the backend-compatible laser property dictionary:
-
-.. code-block:: python
-
-   data = spectra.toDict()
-   data["l_abs"]
-   data["s_abs"]
-   data["l_ems"]
-   data["s_ems"]
-   data["l_res"]
-
-``toLaserProperties()`` wraps the same data in ``LaserProperties``:
-
-.. code-block:: python
-
-   laser = spectra.toLaserProperties()
-   laser.maxSigmaA
-   laser.maxSigmaE
-
-``LaserProperties`` remains available for compatibility workflows, but normal
-simulation code passes ``SpectralDecomposition`` directly to
-``Pump``, ``PhiASE``, or ``Simulation``.
+The private openPMD 0.1 adapter converts cross sections back to the legacy
+backend units; user code should never perform that conversion.

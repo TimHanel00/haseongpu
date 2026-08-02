@@ -23,7 +23,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from HASEonGPU import GainMedium, MeshTopology, vtkWedge  # noqa: E402
+from pyInclude.geometry import GainMedium, MeshTopology  # noqa: E402
+from pyInclude.vtkWedge import vtkWedge  # noqa: E402
 
 
 DATASETS = ("cuboid", "cylindrical")

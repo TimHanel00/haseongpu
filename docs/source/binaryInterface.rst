@@ -1,8 +1,7 @@
 Binary Interface
 ================
 
-``calcPhiASE`` is the standalone C++ executable.  Most users call it through
-``PhiASE.run(...)``; use the binary directly when you already have a HASEonGPU
+``calcPhiASE`` is the standalone C++ executable.  Most users call it through ``Simulation.step(...)``; use the binary directly when you already have a HASEonGPU
 openPMD input series.
 
 Build

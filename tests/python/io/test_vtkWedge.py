@@ -7,7 +7,9 @@
 
 import numpy as np
 
-from HASEonGPU import Grid, MeshTopology, TimeStepState, vtkWedge
+from HASEonGPU import TimeStepState
+from pyInclude.geometry import Grid, MeshTopology
+from pyInclude.vtkWedge import vtkWedge
 
 
 def _scalarNamesByDataKind(path):

@@ -7,7 +7,8 @@
 import numpy as np
 import pytest
 
-from HASEonGPU import TimeStepState, calcGainFromState
+from HASEonGPU import TimeStepState
+from pyInclude.gainMap import calcGainFromState
 
 
 def _state(topology, beta):

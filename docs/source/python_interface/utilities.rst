@@ -1,16 +1,16 @@
 Utilities
 =========
 
-This page lists supporting public objects that are commonly used with the new
-Python interface.
+Time integration
+----------------
 
-Time Integration Solvers
-------------------------
-
-Import built-in solvers from ``HASEonGPU``:
+The public time integrators are lightweight descriptors for compiled backend
+algorithms: ``ExplicitEuler``, ``Heun``, ``Midpoint``, ``RungeKutta4``,
+``FrozenPhiAseRungeKutta4``, ``ImplicitEuler``, and ``ExponentialEuler``.
 
 .. code-block:: python
 
+<<<<<<< HEAD
    from HASEonGPU import (
        ExplicitEuler,
        Heun,
@@ -19,7 +19,6 @@ Import built-in solvers from ``HASEonGPU``:
        FrozenPhiAseRungeKutta4,
        ImplicitEuler,
        ExponentialEuler,
-       FrozenPhiAseRungeKutta4,
    )
 
 Available solvers:
@@ -29,7 +28,6 @@ Available solvers:
 * ``Midpoint()``
 * ``RungeKutta4()``
 * ``FrozenPhiAseRungeKutta4()``: reuses one ASE evaluation across RK4 stages.
-* ``FrozenPhiAseRungeKutta4()``
 * ``ImplicitEuler(iterations=8, tolerance=1e-10)``
 * ``ExponentialEuler()``
 
@@ -124,24 +122,30 @@ with ``vtkWedge``:
 
 
 Backend Names
+=======
+   from HASEonGPU import FrozenPhiAseRungeKutta4
+   integrator = FrozenPhiAseRungeKutta4()
+
+Backend names
+>>>>>>> 0a6b6680 (Introduce PICMI-aligned material and mesh API)
 -------------
 
-``AlpakaBackends`` can list backend names discovered from the installed
-HASEonGPU backend-name library.  Use these strings wherever the Python
-interface accepts a ``backend`` option, for example in ``PhiASE``:
+``AlpakaBackends.all()`` lists compute backends available in the installed
+runtime:
 
 .. code-block:: python
 
-   from HASEonGPU import AlpakaBackends, PhiASE
+   from HASEonGPU import AlpakaBackends, MonteCarloASESolver
 
-   available = AlpakaBackends.all()
-   backend = available[0]
+   backend = AlpakaBackends.all()[0]
+   ase_solver = MonteCarloASESolver(backend=backend)
 
-   phi_ase = PhiASE(backend=backend)
+See :doc:`../backendSelection` for compute versus openPMD backend selection.
 
-``AlpakaBackends.known()`` is an alias for ``AlpakaBackends.all()``.  Backend
-names that are valid Python identifiers are also exposed as class attributes,
-for example ``AlpakaBackends.Host_Cpu_CpuSerial``.
+State export
+------------
 
-For details on how the helper library is built and how backend names are
-formed, see :doc:`../backendSelection`.
+``writeParaviewState`` remains available for backend state export. Callback
+consumers can also use the NumPy arrays on ``TimeStepState`` directly. The
+public Tet4 views are ``excitation_fraction``, ``d_excitation_dt_ase``, and
+``d_excitation_dt_pump``.

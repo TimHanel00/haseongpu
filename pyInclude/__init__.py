@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Public Python convenience exports for HASEonGPU's openPMD frontend."""
+"""Public Python API for HASEonGPU."""
 
 __version__ = "2.2.0"
 
@@ -26,45 +26,39 @@ from .openpmd import (
     backendFlat,
     unitDimension,
 )
-from .geometry import (
-    DomainMap,
-    GainMedium,
-    GainMediumGeometry,
-    Gmsh,
-    Grid,
-    MeshTopology,
-    SurfaceDomainMap,
-    SurfaceOptics,
-    VolumeTopology,
-    writeGainMediumVtk,
+from .mesh import UnstructuredMesh
+from .materials import CrossSectionTable, MaterialDefinition, MaterialInstance
+from .solvers import ASESolver, PumpSolver
+from .problem import (
+    AbsorbingSurface,
+    BackendCapabilities,
+    BoundaryLayout,
+    CompiledProblem,
+    ConstantReflectivitySurface,
+    CURRENT_BACKEND_CAPABILITIES,
+    ExteriorBoundary,
+    ExteriorBoundaryModel,
+    FresnelInterface,
+    InitialState,
+    MaterialInterface,
+    MaterialInterfaceModel,
+    MaterialInterfaceLayout,
+    MaterialLayout,
+    PerfectTransmission,
 )
 from .laser import (
-    CrossSectionData,
     GaussianPump,
-    LaserProperties,
     MonteCarloPumpSolver,
     PlanarPumpRelay,
     Pump,
     PumpAngularDistribution,
     PumpSpectrum,
-    SpectralDecomposition,
     SuperGaussianPumpProfile,
     SurfacePumpInjector,
     UniformPumpProfile,
     integrate_pump_profile,
 )
-from .simulation import (
-    ConnectivityAverageBetaVolumeMapper,
-    LegacyGridDataBetaVolumeMapper,
-    PhiASE,
-    Simulation,
-    TimeStepState,
-    TimeSteppedSimulation,
-)
-from .structures import Result as TransportResult
-from .gainMap import calcGainFromState
-from .openpmd.paraview import writeParaviewState
-from .vtkWedge import vtkWedge
+from .simulation import MonteCarloASESolver, Simulation, TimeStepState
 from .timeIntegration import (
     ExplicitEuler,
     ExponentialEuler,
@@ -75,3 +69,63 @@ from .timeIntegration import (
     RungeKutta4,
     TimeIntegrationSolver,
 )
+
+from .openpmd.paraview import writeParaviewState
+
+
+__all__ = [
+    "ASESolver",
+    "AbsorbingSurface",
+    "AlpakaBackends",
+    "BackendCapabilities",
+    "BaseGroup",
+    "BaseSchema",
+    "BoundaryLayout",
+    "CURRENT_BACKEND_CAPABILITIES",
+    "CompiledProblem",
+    "ConstantReflectivitySurface",
+    "CrossSectionTable",
+    "ExplicitEuler",
+    "ExponentialEuler",
+    "ExteriorBoundary",
+    "ExteriorBoundaryModel",
+    "FresnelInterface",
+    "FrozenPhiAseRungeKutta4",
+    "GaussianPump",
+    "GroupFieldSpec",
+    "Heun",
+    "ImplicitEuler",
+    "InitialState",
+    "MaterialDefinition",
+    "MaterialInstance",
+    "MaterialInterface",
+    "MaterialInterfaceLayout",
+    "MaterialInterfaceModel",
+    "MaterialLayout",
+    "Midpoint",
+    "MonteCarloASESolver",
+    "MonteCarloPumpSolver",
+    "OpenPmdBackends",
+    "PerfectTransmission",
+    "PlanarPumpRelay",
+    "PointSchema",
+    "PrimitiveFieldSpec",
+    "PrismSchema",
+    "Pump",
+    "PumpAngularDistribution",
+    "PumpSolver",
+    "PumpSpectrum",
+    "RungeKutta4",
+    "Simulation",
+    "SuperGaussianPumpProfile",
+    "SurfacePumpInjector",
+    "TimeIntegrationSolver",
+    "TimeStepState",
+    "TriangleSchema",
+    "UniformPumpProfile",
+    "UnstructuredMesh",
+    "backendFlat",
+    "integrate_pump_profile",
+    "unitDimension",
+    "writeParaviewState",
+]

@@ -1,37 +1,35 @@
-Simulation
-==========
+Simulation assembly
+===================
 
-``Simulation`` is the central assembly object. Its public constructor and
-registration methods follow PICMI-style snake_case naming:
+``Simulation`` owns composition and evolving state, not physical material
+objects or topology.
 
 .. code-block:: python
 
    simulation = Simulation(
-       gain_medium=medium,
-       phi_ase=phi_ase,
+       mesh=mesh,
+       ase_solver=ase_solver,
+       pump_solver=pump_solver,
        time_integrator=RungeKutta4(),
        time_step_size=1e-5,
-       pump_solver=MonteCarloPumpSolver(ray_count=50000, seed=5489),
-       cross_sections=spectra,
-       max_steps=150,
-       enable_ase=True,
-       pre_pump=True,
+       initial_state=InitialState(excitation_fraction=0.0),
+       max_steps=100,
    )
-   simulation.add_pump(pump, injection_method=injector, relays=relays)
-   simulation.on_step(write_state, output_directory)
-   simulation.step()
+   simulation.add_material(material, MaterialLayout("crystal"))
+   simulation.add_boundary(boundary, BoundaryLayout("all_exterior"))
 
-As in PICMI, ``simulation.step(nsteps=1)`` advances the requested number of
-steps and defaults to one. ``max_steps`` and ``max_time`` describe the intended
-run limits; pass the desired count to ``step`` or use ``run_until`` for a time
-limit. ``pump_steps`` can override the pump solver's ``max_steps`` for a
-particular call.
+``compile()`` creates a backend-neutral ``CompiledProblem`` containing dense
+material IDs, boundary IDs, interface IDs, and cell-centred initial excitation.
+It validates exact coverage, unknown selectors, overlaps, and missing unlike
+material interfaces without invoking transport.
 
-``simulation.get_last_state()`` returns the latest ``TimeStepState``. The
-simulation does not retain the full history, so register ``on_step`` to store or
-write every snapshot.
+``validate_backend()`` additionally checks the current native capability set.
+At present that set is one isotropic active material, Monte Carlo ASE and pump
+solvers, and no internal material interfaces or per-material bulk attenuation.
+Frontend compilation of multiple materials and Fresnel/transmission interfaces
+is supported for inspection and future adapters.
 
-The full time loop, pump evaluation, ASE evaluation, derivative composition,
-time integration, clipping, and beta mapping run in C++/Alpaka. Python executes
-``on_init`` before launch and ``on_step`` callbacks as snapshots arrive.
-Per-step Python mutation is not supported inside a compiled run.
+``step(nsteps=1)`` and ``run_until`` execute the supported backend subset.
+``on_step`` callbacks receive ``TimeStepState``; its public state views include
+``excitation_fraction``, ``d_excitation_dt_ase``, and
+``d_excitation_dt_pump``.

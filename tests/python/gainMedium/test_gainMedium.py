@@ -6,7 +6,8 @@
 
 
 import numpy as np
-from HASEonGPU import GainMedium, Grid, MeshTopology, backendFlat
+from HASEonGPU import backendFlat
+from pyInclude.geometry import GainMedium, Grid, MeshTopology
 from pyInclude.openpmd import PrimitiveFieldSpec, PrismSchema
 
 

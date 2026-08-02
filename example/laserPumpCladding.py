@@ -4,6 +4,13 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Legacy regression driver for the historical laser-pump-cladding fixture.
+
+This file intentionally uses private compatibility objects to preserve the
+reference calculation. New user code should follow
+``minimalExampleNewInterface.py`` or ``gmshMinimalExample.py``.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -26,26 +33,22 @@ defaultPhiAseConfigPath = Path(
 ensure_hase_importable()
 
 from HASEonGPU import (  # noqa: E402
-    calcGainFromState,
-    CrossSectionData,
     FrozenPhiAseRungeKutta4,
-    GainMedium,
     integrate_pump_profile,
     PlanarPumpRelay,
     PumpAngularDistribution,
-    Pump,
     PumpSpectrum,
     SuperGaussianPumpProfile,
     SurfacePumpInjector,
-    VolumeTopology,
-    backendFlat,
-    PhiASE,
     MonteCarloPumpSolver,
-    Simulation,
-    SurfaceOptics,
-    vtkWedge,
 )
+from pyInclude.gainMap import calcGainFromState  # noqa: E402
+from pyInclude.geometry import GainMedium, SurfaceOptics, VolumeTopology  # noqa: E402
+from pyInclude.laser import CrossSectionData, _LegacyPump as Pump  # noqa: E402
+from pyInclude.openpmd import backendFlat  # noqa: E402
 from pyInclude.openpmd.paraview import writeParaviewState  # noqa: E402
+from pyInclude.simulation import LegacySimulation as Simulation, PhiASE  # noqa: E402
+from pyInclude.vtkWedge import vtkWedge  # noqa: E402
 
 
 def _loadLaserPumpCladdingRawSpectra():
@@ -242,7 +245,7 @@ def laserPumpCladdingMedium(cladAbsorption=5.5):
         claddingCellTypes=np.zeros(topology.numberOfCells, dtype=np.uint32),
         refractiveIndices=refractiveIndices,
         reflectivities=np.zeros((topology.numberOfCells, 2), dtype=np.float32),
-        nTot=2 * 1.388e20,
+        nTot = 2 * 1.388e20,
         crystalTFluo=9.41e-4,
         claddingNumber=1,
         claddingAbsorption=cladAbsorption,
@@ -268,20 +271,20 @@ def laserPumpCladdingMedium(cladAbsorption=5.5):
 
 
 def runExample(
-    phiAseConfigPath=defaultPhiAseConfigPath,
+    phiAseConfigPath= defaultPhiAseConfigPath,
     backend="UseConfig",
-    timeSlices=150,
+    timeSlices= 150,
     # pumpSteps: pumped outer simulation steps; None pumps for all timeSlices.
-    pumpSteps=50,
-    vtkOutputDir=scriptDir,
-    openPmdOutputDir=None,
-    openpmdBackend="UseConfig",
-    enableASE=True,
-    prePump=True,
-    spectralResolution=1000,
-    pumpRayCount=50000,
-    pumpRngSeed=5489,
-    reportTimings=False,
+    pumpSteps= 50,
+    vtkOutputDir= scriptDir,
+    openPmdOutputDir= None,
+    openpmdBackend= "UseConfig",
+    enableASE= True,
+    prePump= True,
+    spectralResolution= 1000,
+    pumpRayCount= 50000,
+    pumpRngSeed= 5489,
+    reportTimings= False,
     **AseOverride,
 ):
     vtkOutputDir = Path(vtkOutputDir)
@@ -351,7 +354,7 @@ def runExample(
     ).add_pump(
         pump,
         injection_method=SurfacePumpInjector(surface_domains="ase_bottom"),
-        relays=(PlanarPumpRelay.retroreflect("ase_top"),),
+        relays=(PlanarPumpRelay.retroreflect(domains=["ase_top"]),),
     )
     simulation.on_step(printState)
     simulation.on_step(
@@ -380,8 +383,7 @@ def main(argv=None):
             "Number of outer simulation steps with pump contribution. "
             "Default: 100. Use a value matching --timeSteps to pump for the full run. "
             "This is distinct from MonteCarloPumpSolver.ray_count, which controls "
-            "the Monte Carlo pump sampling resolution."
-        ),
+            "the Monte Carlo pump sampling resolution."),
     )
     parser.add_argument(
         "--phi-ase-config",

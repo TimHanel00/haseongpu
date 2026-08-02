@@ -16,7 +16,10 @@ import pytest
 repoRoot = Path(__file__).resolve().parents[3]
 
 
-from HASEonGPU import AlpakaBackends, GainMedium, PhiASE, SpectralDecomposition
+from HASEonGPU import AlpakaBackends
+from pyInclude.geometry import GainMedium
+from pyInclude.laser import SpectralDecomposition
+from pyInclude.simulation import PhiASE
 from pyInclude.geometry.vtk import _parseVtk
 
 _compare_serial_helper_path = repoRoot / "utils" / "compare_serial_wedge_projection.py"

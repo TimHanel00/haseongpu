@@ -1,59 +1,39 @@
 Python Interface Guide
 ======================
 
-The Python interface is the recommended way to build HASEonGPU simulations.  It
-keeps the physical setup in Python objects and uses the compiled C++ backend for
-the ASE calculation.
+The Python interface separates **what the device is made of** from **how it is
+meshed**. This follows PICMI's composition pattern and avoids storing material
+physics or evolving state inside the mesh.
 
-The usual workflow is:
+A simulation is assembled in this order:
 
-#. build a :doc:`topology <python_interface/topology>`
-#. attach material/state arrays with :doc:`GainMedium <python_interface/gain_medium>`
-#. provide :doc:`spectra <python_interface/spectral_decomposition>`
-#. define :doc:`pump properties <python_interface/pump_properties>`
-#. configure :doc:`PhiASE <python_interface/phi_ase>`
-#. run a :doc:`Simulation <python_interface/simulation>`
+#. create a Tet4 :doc:`mesh <python_interface/topology>`;
+#. define reusable material physics and run-specific material instances;
+#. attach each instance to volume domains with ``MaterialLayout``;
+#. attach boundary and internal-interface models to their layouts;
+#. choose ASE, pump, and time-integration solvers;
+#. supply ``InitialState`` and register physical pumps;
+#. call ``compile()``, ``validate_backend()``, or ``step()``.
 
-For explicit Tet4 geometry, use ``VolumeTopology`` instead of the legacy
-planar ``MeshTopology`` workflow. ``VolumeTopology`` supports Tet4 VTK, gmsh,
-and closed STL volume input, plus named cell and surface domains for material
-regions and ``SurfaceOptics``. See :doc:`python_interface/topology`.
+.. important::
 
-For generated signatures and member lists, use the
-:doc:`Python API Reference <pythonAPI>`.
+   The frontend can compile multiple materials and explicit
+   ``PerfectTransmission`` or ``FresnelInterface`` models today. The current
+   C++/openPMD 0.1 backend adapter supports only one isotropic active material
+   and no internal material interface. It rejects unsupported configurations
+   before transport. Fresnel reflection/refraction and transmission between
+   mesh domains are therefore not implemented in the backend yet.
 
-Installation
-------------
-
-Install from the repository root after following
-:doc:`Getting Started <gettingStarted>`:
-
-.. code-block:: bash
-
-   python3 utils/configure_hase.py
-   # run the printed command, typically:
-   CMAKE_ARGS="<selected CMake options>" python3 -m pip install -v .
-
-``pip install -v .`` configures or reuses the native runtime in ``build/`` and
-installs a thin Python frontend that remembers it. The configurator chooses
-compatible openPMD provider settings, prints the install command, and writes
-the optional ``config/hase-phiase.yaml`` run-control file.
-
-If you change CMake options or native sources, reconfigure or rebuild the
-durable runtime. The installed frontend uses the updated binary and provider
-metadata directly, so it does not need to be reinstalled:
-
-.. code-block:: bash
-
-   cmake -S . -B build <updated options>
-   cmake --build build
+   ``ASESolver`` and ``PumpSolver`` are extensible roles. The current adapter
+   implements only ``MonteCarloASESolver`` and ``MonteCarloPumpSolver``; a
+   different descriptor can be composed in Python but is rejected at backend
+   validation until an adapter is provided.
 
 Concept Pages
 -------------
 
 .. toctree::
    :maxdepth: 2
-   :caption: Python interface guide
 
    python_interface/topology
    python_interface/gain_medium
@@ -63,158 +43,42 @@ Concept Pages
    python_interface/simulation
    python_interface/utilities
 
-Minimal Example Tutorial
-------------------------
+One-material example
+--------------------
 
-The snippets below come from ``example/minimalExampleNewInterface.py`` and stay
-in sync with that runnable example.
-
-Geometry
-^^^^^^^^
-
-Describe the simulation geometry. Legacy planar workflows use a 2D triangular
-mesh extruded into prism layers; forward volume transport uses Tet4 geometry.
-
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: topology
-   :end-before: # docs:end: topology
-
-``Grid`` is the shortest path for rectangular media.  ``MeshTopology`` can also
-be created from point clouds, planar STL files, legacy VTK wedge files, and
-gmsh triangle meshes; see :doc:`python_interface/topology`.
-
-Material and State
-^^^^^^^^^^^^^^^^^^
-
-Attach physical arrays and scalar material properties to the topology:
-
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: gain-medium
-   :end-before: # docs:end: gain-medium
-
-Use ``medium.get("...").expectedShape`` when allocating mesh-dependent arrays.
-The most important fields are ``betaCells`` for point-level excited-state
-fraction, ``betaVolume`` for cell-centered beta, cladding labels,
-reflectivities, active-ion density ``nTot``, and fluorescence lifetime
-``crystalTFluo``.  See :doc:`python_interface/gain_medium` for field shapes and
-openPMD metadata.
-
-Spectra
-^^^^^^^
-
-Provide absorption and emission cross sections for pump and ASE calculations:
-
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: spectral-decomposition
-   :end-before: # docs:end: spectral-decomposition
-
-Each wavelength array must match the length of its cross-section array.  The
-``resolution`` value is passed to the ASE backend as spectral interpolation
-resolution.
-
-Pump
-^^^^
-
-Physical pumps and numerical injectors are registered separately on the
-simulation. The physical object describes total power, spectrum, cross
-sections, and beam distributions; the injector selects tagged launch surfaces.
-The compiled backend implements transport and does not accept custom Python
-pump solvers.
-
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: pump-properties
-   :end-before: # docs:end: pump-properties
-
-See :doc:`python_interface/pump_properties` for parameters and the model.
-
-PhiASE
-^^^^^^
-
-``PhiASE`` configures the ASE backend: Monte Carlo ray limits, adaptive
-sampling, reflections, compute backend, openPMD backend, and parallel mode.
-
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: phi-ase
-   :end-before: # docs:end: phi-ase
-
-Use a backend name reported by the installed build:
+All public physical values use SI units.
 
 .. code-block:: python
 
-   from HASEonGPU import AlpakaBackends
+   from HASEonGPU import *
 
-   backend = AlpakaBackends.all()[0]
+   mesh = UnstructuredMesh.from_file("crystal.msh")
+   spectra = CrossSectionTable.monochromatic(
+       wavelength=1030e-9, absorption=1.2e-25, emission=2.48e-24
+   )
+   yag = MaterialDefinition(
+       "Yb:YAG", refractive_index=1.82,
+       fluorescence_lifetime=941e-6, cross_sections=spectra,
+   )
+   crystal = MaterialInstance(yag, active_ion_density=2.76e26)
 
-``backend`` is the Alpaka compute backend.  ``openpmdBackend`` is the openPMD
-storage/streaming backend such as ``adios-sst``.  See
-:doc:`Backend Selection <backendSelection>` and
-:doc:`openPMD Transport <openpmdTransport>`.
+   simulation = Simulation(
+       mesh=mesh,
+       ase_solver=MonteCarloASESolver(backend="Host_Cpu_CpuSerial"),
+       pump_solver=MonteCarloPumpSolver(ray_count=100_000),
+       time_integrator=RungeKutta4(),
+       time_step_size=1e-5,
+       initial_state=InitialState(0.0),
+   )
+   simulation.add_material(crystal, MaterialLayout("crystal"))
+   simulation.add_boundary(
+       ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior")
+   )
+   simulation.add_pump(
+       Pump(total_power=16e3, spectrum=PumpSpectrum.monochromatic(940e-9)),
+       SurfacePumpInjector("pump_input"),
+   )
+   simulation.step(3)
 
-Simulation
-^^^^^^^^^^
-
-``Simulation`` sends the setup to the C++/Alpaka backend, which owns the pump,
-ASE, and time-integration loop. Python receives one ``TimeStepState`` snapshot
-per completed step and invokes ``on_step`` callbacks for each snapshot.
-
-Forward Tet4 runs support surface reflections and the same compiled controls as
-other simulations: set ``enable_ase=False`` for pump-only evolution, or use
-``FrozenPhiAseRungeKutta4`` when one ASE evaluation per RK4 step is sufficient.
-
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: simulation
-   :end-before: # docs:end: simulation
-
-Use ``simulation.step(150, pump_steps=50)`` to pump only the first 50 outer
-steps. ``MonteCarloPumpSolver.ray_count`` controls the sampling resolution of
-each pump evaluation. ``on_init`` is available before the backend launch;
-per-step Python mutation through pre-step callbacks is unsupported.
-
-YAML Compute Settings
-^^^^^^^^^^^^^^^^^^^^^
-
-``PhiASE.fromYaml(...)`` can load run-control settings while keeping geometry,
-material arrays, spectra, and pump setup in Python:
-
-.. code-block:: yaml
-
-   experiment:
-     minRays: 100000
-     maxRays: 1000000
-     relativeStandardErrorThreshold: 0.05
-     repetitions: 2
-     adaptive_steps: 4
-     use_reflections: true
-
-   compute:
-     backend: Host_Cpu_CpuSerial
-     openpmd_backend: auto
-     parallel_mode: single
-     numDevices: 1
-
-.. code-block:: python
-
-   phi_ase = PhiASE.fromYaml("config/hase-phiase.yaml", spectralProperties=spectra)
-
-Constructor keyword arguments override YAML values.  ``hase-configure`` writes a
-small YAML file with the default adaptive-ray controls and selected compute
-settings.
-
-Results
-^^^^^^^
-
-.. literalinclude:: ../../example/minimalExampleNewInterface.py
-   :language: python
-   :start-after: # docs:start: results
-   :end-before: # docs:end: results
-
-``simulation.get_last_state()`` returns the latest ``TimeStepState`` with step,
-time, ``beta_cells``, ``beta_volume``, ``phi_ase``, pump derivative, ASE
-derivative, and the raw ASE result object.  Use callbacks to store or export
-every step.
+See ``example/minimalExampleNewInterface.py`` for a self-contained mesh and
+``example/gmshMinimalExample.py`` for named gmsh volume/surface domains.

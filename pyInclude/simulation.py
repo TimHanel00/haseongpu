@@ -28,7 +28,9 @@ from .laser import (
     SurfacePumpInjector,
     _PumpProperties,
     _PumpSource,
+    _LegacyPump,
 )
+from .solvers import ASESolver, PumpSolver
 from .openpmd import backendFlat, transport
 from .timeIntegration import TimeIntegrationSolver
 
@@ -509,8 +511,22 @@ class TimeStepState:
         return self.volumeTotalRays
 
 
+    @property
+    def excitation_fraction(self):
+        """Cell-centred excited-state fraction for the public Tet4 API."""
+        return self.betaVolume
+
+    @property
+    def d_excitation_dt_ase(self):
+        return self.volumeDndtAse if self.volumeDndtAse is not None else self.dndtAse
+
+    @property
+    def d_excitation_dt_pump(self):
+        return self.dndtPump
+
+
 @dataclass(init=False)
-class Simulation:
+class LegacySimulation:
     """High-level Python wrapper for compiled C++/Alpaka simulation runs.
 
     Python sends the initial setup to the compiled backend and receives
@@ -935,4 +951,389 @@ class Simulation:
         self.gainMedium.get("betaVolume").value = beta_volume
 
 
-TimeSteppedSimulation = Simulation
+class MonteCarloASESolver(PhiASE, ASESolver):
+    """Monte Carlo ASE controls using the public snake-case API."""
+
+    def __init__(
+        self,
+        *,
+        config=None,
+        min_rays=100_000,
+        max_rays=100_000,
+        forward_ray_count=None,
+        relative_standard_error_threshold=0.1,
+        repetitions=4,
+        adaptive_steps=4,
+        use_reflections=False,
+        reflection_max_iterations=40,
+        reflection_tolerance=1.0e-4,
+        surface_reservoir_size=32,
+        monochromatic=False,
+        backend=None,
+        openpmd_backend="auto",
+        parallel_mode="single",
+        num_devices=1,
+        ranks_per_node=1,
+        min_sample_range=None,
+        max_sample_range=None,
+        rng_seed=None,
+    ):
+        super().__init__(
+            config=config,
+            minRays=min_rays,
+            maxRays=max_rays,
+            forwardRayCount=forward_ray_count,
+            relativeStandardErrorThreshold=relative_standard_error_threshold,
+            repetitions=repetitions,
+            adaptiveSteps=adaptive_steps,
+            useReflections=use_reflections,
+            reflectionMaxIterations=reflection_max_iterations,
+            reflectionTolerance=reflection_tolerance,
+            surfaceReservoirSize=surface_reservoir_size,
+            monochromatic=monochromatic,
+            backend=backend,
+            openpmdBackend=openpmd_backend,
+            parallelMode=parallel_mode,
+            numDevices=num_devices,
+            nPerNode=ranks_per_node,
+            minSampleRange=min_sample_range,
+            maxSampleRange=max_sample_range,
+            rngSeed=rng_seed,
+        )
+
+    @classmethod
+    def from_yaml(cls, filename, **overrides):
+        return cls(config=filename, **overrides)
+
+
+class Simulation:
+    """Compose a Tet4 mesh, physical definitions, layouts, and numerical solvers.
+
+    Multiple materials and internal interfaces are compiled and inspectable in
+    Python. The current native backend adapter intentionally accepts only one
+    isotropic active material and no internal material interfaces.
+    """
+
+    def __init__(
+        self,
+        *,
+        mesh,
+        ase_solver,
+        pump_solver,
+        time_integrator,
+        time_step_size,
+        initial_state,
+        max_steps=None,
+        max_time=None,
+        enable_ase=True,
+        pre_pump=False,
+        report_timings=False,
+    ):
+        from .mesh import UnstructuredMesh
+        from .problem import InitialState
+
+        if not isinstance(mesh, UnstructuredMesh):
+            raise TypeError("mesh must be UnstructuredMesh")
+        if not isinstance(ase_solver, ASESolver):
+            raise TypeError("ase_solver must implement the ASESolver role")
+        if not isinstance(pump_solver, PumpSolver):
+            raise TypeError("pump_solver must implement the PumpSolver role")
+        if not isinstance(initial_state, InitialState):
+            raise TypeError("initial_state must be InitialState")
+        if not isinstance(time_integrator, str) and not hasattr(time_integrator, "name"):
+            raise TypeError("time_integrator must be a solver name or descriptor with a name")
+        if not np.isfinite(time_step_size) or float(time_step_size) <= 0.0:
+            raise ValueError("time_step_size must be finite and positive")
+        if max_steps is not None and int(max_steps) <= 0:
+            raise ValueError("max_steps must be positive")
+        if max_time is not None and (not np.isfinite(max_time) or float(max_time) <= 0.0):
+            raise ValueError("max_time must be finite and positive")
+        self.mesh = mesh
+        self.ase_solver = ase_solver
+        self.pump_solver = pump_solver
+        self.time_integrator = time_integrator
+        self.time_step_size = float(time_step_size)
+        self.initial_state = initial_state
+        self.max_steps = None if max_steps is None else int(max_steps)
+        self.max_time = None if max_time is None else float(max_time)
+        self.enable_ase = bool(enable_ase)
+        self.pre_pump = bool(pre_pump)
+        self.report_timings = bool(report_timings)
+        self._material_registrations = []
+        self._boundary_registrations = []
+        self._interface_registrations = []
+        self._pump_registrations = []
+        self._init_callbacks = []
+        self._step_callbacks = []
+        self._initialized = False
+        self._compiled_problem = None
+        self._legacy_simulation = None
+        self._last_state = None
+
+    def _require_mutable(self, what):
+        if self._initialized:
+            raise RuntimeError(f"{what} must be configured before the simulation is initialized")
+
+    def add_material(self, material, layout):
+        self._require_mutable("materials")
+        self._material_registrations.append((material, layout))
+        self._compiled_problem = None
+        return self
+
+    def add_boundary(self, boundary, layout):
+        self._require_mutable("boundaries")
+        self._boundary_registrations.append((boundary, layout))
+        self._compiled_problem = None
+        return self
+
+    def add_interface(self, interface, layout):
+        self._require_mutable("material interfaces")
+        self._interface_registrations.append((interface, layout))
+        self._compiled_problem = None
+        return self
+
+    def add_pump(self, pump, injection_method, *, relays=()):
+        self._require_mutable("pumps")
+        if not isinstance(pump, Pump):
+            raise TypeError("pump must be Pump")
+        if not isinstance(injection_method, SurfacePumpInjector):
+            raise TypeError("injection_method must be SurfacePumpInjector")
+        relays = tuple(relays)
+        if not all(isinstance(relay, PlanarPumpRelay) for relay in relays):
+            raise TypeError("relays must contain PlanarPumpRelay values")
+        self._pump_registrations.append((pump, injection_method, relays))
+        return self
+
+    def compile(self):
+        """Validate registrations and return the backend-neutral problem."""
+        from .problem import compile_problem
+
+        self._compiled_problem = compile_problem(
+            self.mesh,
+            self._material_registrations,
+            self._boundary_registrations,
+            self._interface_registrations,
+            self.initial_state,
+        )
+        return self._compiled_problem
+
+    def validate_backend(self):
+        """Raise when the compiled problem exceeds the current backend subset."""
+        problem = self.compile().require_backend_support()
+        self._require_solver_support()
+        return problem
+
+    def _require_solver_support(self):
+        unsupported = []
+        if not isinstance(self.ase_solver, MonteCarloASESolver):
+            unsupported.append(f"ASE solver {type(self.ase_solver).__name__}")
+        if not isinstance(self.pump_solver, MonteCarloPumpSolver):
+            unsupported.append(f"pump solver {type(self.pump_solver).__name__}")
+        if unsupported:
+            raise NotImplementedError(
+                "the current HASEonGPU backend adapter supports only Monte Carlo solvers; unsupported "
+                + "; ".join(unsupported)
+            )
+
+    @staticmethod
+    def _legacy_cross_sections(material):
+        table = material.definition.cross_sections
+        return CrossSectionData(
+            wavelengthsAbsorption=table.wavelengths,
+            crossSectionAbsorption=table.absorption * 1.0e4,
+            wavelengthsEmission=table.wavelengths,
+            crossSectionEmission=table.emission * 1.0e4,
+            resolution=max(1, int(table.wavelengths.size)),
+        )
+
+    @staticmethod
+    def _legacy_topology(problem):
+        from .geometry.volume import VolumeTopology
+        from .problem import AbsorbingSurface, ConstantReflectivitySurface
+
+        mesh = problem.mesh
+        surface_ids = np.zeros_like(mesh.surface_domain_ids, dtype=np.int32)
+        next_surface_id = max(1, int(np.max(mesh.surface_domain_ids, initial=0)) + 1)
+        boundary_surface_ids = {}
+        surface_id_remap = {}
+        for boundary_id, boundary in enumerate(problem.boundaries):
+            mask = problem.face_boundary_id == boundary_id
+            if not isinstance(boundary.model, (AbsorbingSurface, ConstantReflectivitySurface)):
+                raise NotImplementedError(f"unsupported exterior boundary model {type(boundary.model).__name__}")
+            original_ids = np.asarray(mesh.surface_domain_ids)
+            identifiers = []
+            for original_id in np.unique(original_ids[mask]):
+                original_id = int(original_id)
+                if original_id > 0:
+                    identifier = original_id
+                else:
+                    identifier = next_surface_id
+                    next_surface_id += 1
+                    surface_id_remap[original_id] = identifier
+                surface_ids[mask & (original_ids == original_id)] = identifier
+                identifiers.append(identifier)
+            boundary_surface_ids[boundary_id] = tuple(identifiers)
+        surface_ids[np.asarray(mesh.neighbor_cells) >= 0] = 0
+        metadata = dict(mesh.metadata)
+        if surface_id_remap:
+            names = dict(metadata.get("surfaceDomainNames", {}))
+            for original_id, identifier in surface_id_remap.items():
+                if original_id in names:
+                    names[identifier] = names.pop(original_id)
+            metadata["surfaceDomainNames"] = names
+        topology = VolumeTopology(
+            points=np.asarray(mesh.points).copy(),
+            cellPointIndices=np.asarray(mesh.cell_connectivity).copy(),
+            cellTypes=np.asarray(mesh.cellTypes).copy(),
+            cellDomains=np.asarray(mesh.volume_domain_ids).copy(),
+            faceBoundaries=surface_ids,
+            metadata=metadata,
+        )
+        return topology, boundary_surface_ids
+
+    def _build_legacy_simulation(self, problem):
+        from .problem import AbsorbingSurface, ConstantReflectivitySurface
+
+        problem.require_backend_support()
+        self._require_solver_support()
+        material = problem.materials[0]
+        topology, boundary_surface_ids = self._legacy_topology(problem)
+        all_surface_ids = [
+            surface_id
+            for surface_ids in boundary_surface_ids.values()
+            for surface_id in surface_ids
+        ]
+        size = max(all_surface_ids, default=-1) + 1
+        surface_reflectivity = np.zeros(size, dtype=np.float32)
+        surface_inside = np.ones(size, dtype=np.float32)
+        surface_outside = np.ones(size, dtype=np.float32)
+        for boundary_id, surface_ids in boundary_surface_ids.items():
+            model = problem.boundaries[boundary_id].model
+            for surface_id in surface_ids:
+                if isinstance(model, AbsorbingSurface):
+                    surface_reflectivity[surface_id] = 0.0
+                    # Equal indices disable total internal reflection so a
+                    # positive, pump-addressable domain remains absorbing.
+                    surface_inside[surface_id] = 1.0
+                    surface_outside[surface_id] = 1.0
+                    continue
+                surface_reflectivity[surface_id] = np.float32(model.reflectivity)
+                surface_inside[surface_id] = np.float32(material.definition.refractive_index)
+                surface_outside[surface_id] = np.float32(model.exterior_refractive_index)
+
+        n_cells = topology.numberOfCells
+        excitation = np.asarray(problem.initial_excitation_fraction, dtype=np.float64)
+        medium = GainMedium(topology=topology).withPhysicalProperties(
+            betaVolume=excitation,
+            betaCells=excitation,
+            claddingCellTypes=np.zeros(n_cells, dtype=np.uint32),
+            refractiveIndices=np.asarray(
+                [material.definition.refractive_index, 1.0, material.definition.refractive_index, 1.0],
+                dtype=np.float32,
+            ),
+            reflectivities=np.zeros((n_cells, 2), dtype=np.float32),
+            surfaceReflectivity=surface_reflectivity,
+            surfaceRefractiveIndexInside=surface_inside,
+            surfaceRefractiveIndexOutside=surface_outside,
+            nTot=material.active_ion_density / 1.0e6,
+            crystalTFluo=material.definition.fluorescence_lifetime,
+            claddingNumber=np.iinfo(np.uint32).max,
+            claddingAbsorption=0.0,
+        )
+        cross_sections = self._legacy_cross_sections(material)
+        legacy = LegacySimulation(
+            gain_medium=medium,
+            phi_ase=self.ase_solver,
+            time_integrator=self.time_integrator,
+            time_step_size=self.time_step_size,
+            pump_solver=self.pump_solver,
+            cross_sections=cross_sections,
+            max_steps=self.max_steps,
+            max_time=self.max_time,
+            enable_ase=self.enable_ase,
+            pre_pump=self.pre_pump,
+            report_timings=self.report_timings,
+        )
+        for pump, injector, relays in self._pump_registrations:
+            legacy_pump = _LegacyPump(
+                total_power=pump.total_power,
+                spectrum=pump.spectrum,
+                profile=pump.profile,
+                angular_distribution=pump.angular_distribution,
+                name=pump.name,
+                cross_sections=cross_sections,
+            )
+            legacy.add_pump(legacy_pump, injector, relays=relays)
+
+        def receive_state(state):
+            state.topology = self.mesh
+            self._last_state = state
+            for callback, args, kwargs in self._step_callbacks:
+                callback(state, *args, **kwargs)
+
+        legacy.on_step(receive_state)
+        return legacy
+
+    def _initialize(self):
+        if self._initialized:
+            return
+        for callback, args, kwargs in self._init_callbacks:
+            callback(self, *args, **kwargs)
+        problem = self.compile()
+        problem.require_backend_support()
+        self._require_solver_support()
+        self._legacy_simulation = self._build_legacy_simulation(problem)
+        self._initialized = True
+
+    def on_init(self, callback, *args, **kwargs):
+        self._require_mutable("initialization callbacks")
+        self._init_callbacks.append((callback, args, kwargs))
+        return self
+
+    def on_step(self, callback, *args, **kwargs):
+        self._step_callbacks.append((callback, args, kwargs))
+        return self
+
+    def step(self, nsteps=1, *, pump_steps=None):
+        if int(nsteps) <= 0:
+            raise ValueError("nsteps must be positive")
+        if pump_steps is not None and int(pump_steps) < 0:
+            raise ValueError("pump_steps must be non-negative")
+        self.validate_backend()
+        if not self._pump_registrations:
+            raise ValueError(
+                "the current backend requires at least one pump registered with add_pump"
+            )
+        self._initialize()
+        self._legacy_simulation.step(nsteps, pump_steps=pump_steps)
+        return self
+
+    def run_until(self, max_time=None):
+        target = self.max_time if max_time is None else max_time
+        if target is None or not np.isfinite(target) or float(target) <= 0.0:
+            raise ValueError("run_until requires a finite, positive max_time")
+        self.validate_backend()
+        if not self._pump_registrations:
+            raise ValueError(
+                "the current backend requires at least one pump registered with add_pump"
+            )
+        self._initialize()
+        self._legacy_simulation.run_until(max_time=float(target))
+        return self
+
+    def get_last_state(self):
+        if self._last_state is None:
+            raise RuntimeError("simulation has not completed a time step yet")
+        return self._last_state
+
+    @property
+    def current_step(self):
+        return 0 if self._legacy_simulation is None else self._legacy_simulation.current_step
+
+    @property
+    def current_time(self):
+        return 0.0 if self._legacy_simulation is None else self._legacy_simulation.current_time
+
+    @property
+    def pumps(self):
+        return tuple(pump for pump, _injector, _relays in self._pump_registrations)

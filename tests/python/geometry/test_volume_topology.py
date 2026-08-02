@@ -13,7 +13,9 @@ import pytest
 repoRoot = Path(__file__).resolve().parents[3]
 
 
-from HASEonGPU import AlpakaBackends, PhiASE, SpectralDecomposition
+from HASEonGPU import AlpakaBackends
+from pyInclude.laser import SpectralDecomposition
+from pyInclude.simulation import PhiASE
 from pyInclude.geometry import GainMedium, Gmsh, GmshElement, SurfaceOptics, VolumeTopology
 import pyInclude.geometry.volume as volume_module
 import pyInclude.openpmd.transport as transport
@@ -535,7 +537,9 @@ def testExplicitOpenPmdStaticTopologyWriterStoresFaceLookupTables(tmp_path, open
 
 
 def testForwardOpenPmdInputWritesVolumeRecords(tmp_path, openPmdFileBackend):
-    from HASEonGPU import GainMedium, PhiASE, SpectralDecomposition
+    from pyInclude.geometry import GainMedium
+    from pyInclude.laser import SpectralDecomposition
+    from pyInclude.simulation import PhiASE
 
     topology = _oneTetTopology()
     medium = GainMedium(topology=topology)
