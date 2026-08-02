@@ -20,20 +20,21 @@ pythonTestPhiAseConfig = Path(
 )
 legacyPhiAseConfigFile = Path(__file__).parent / "data" / "cfg" / "legacy_config.yaml"
 requiredHaseApi = (
+    "ASESolver",
     "AlpakaBackends",
-    "GainMedium",
-    "Grid",
-    "MeshTopology",
-    "OpenPmdBackends",
-    "PhiASE",
+    "BoundaryLayout",
+    "CrossSectionTable",
+    "ExteriorBoundary",
+    "InitialState",
+    "MaterialDefinition",
+    "MaterialInstance",
+    "MaterialLayout",
+    "MonteCarloASESolver",
     "MonteCarloPumpSolver",
     "Pump",
-    "PumpAngularDistribution",
-    "PumpSpectrum",
-    "SpectralDecomposition",
-    "SuperGaussianPumpProfile",
-    "SurfacePumpInjector",
-    "VolumeTopology",
+    "PumpSolver",
+    "Simulation",
+    "UnstructuredMesh",
 )
 
 
@@ -117,16 +118,15 @@ def _import_hase_api():
 
 _hase_api = _import_hase_api()
 AlpakaBackends = _hase_api.AlpakaBackends
-GainMedium = _hase_api.GainMedium
-Grid = _hase_api.Grid
-MeshTopology = _hase_api.MeshTopology
-PhiASE = _hase_api.PhiASE
+# Legacy test fixtures remain internal while public API tests exercise the v3 model.
+from pyInclude.geometry import GainMedium, Grid, MeshTopology
+from pyInclude.simulation import PhiASE
 MonteCarloPumpSolver = _hase_api.MonteCarloPumpSolver
 Pump = _hase_api.Pump
 PumpAngularDistribution = _hase_api.PumpAngularDistribution
 PumpSpectrum = _hase_api.PumpSpectrum
 SurfacePumpInjector = _hase_api.SurfacePumpInjector
-SpectralDecomposition = _hase_api.SpectralDecomposition
+from pyInclude.laser import SpectralDecomposition, _LegacyPump
 
 import numpy as np
 import pytest
@@ -231,7 +231,7 @@ def smallGainMedium(smallTopology):
 @pytest.fixture
 def pumpProperties(crossSections):
     return SimpleNamespace(
-        physical=Pump(
+        physical=_LegacyPump(
             total_power=1.0,
             spectrum=PumpSpectrum.monochromatic(940e-9),
             cross_sections=crossSections,

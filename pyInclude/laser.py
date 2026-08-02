@@ -15,6 +15,7 @@ import numpy as np
 
 from .geometry import OpenPmdScalarField
 from .openpmd import fieldSpec
+from .solvers import PumpSolver
 
 
 @dataclass(frozen=True)
@@ -282,11 +283,14 @@ class CrossSectionData:
             return float(values[0])
 
         # Existing material files use nm, while pump wavelengths are commonly
-        # specified in m. Convert only when the magnitude makes that unambiguous.
-        scale = np.nanmax(np.abs(wavelengths))
-        if scale > 1e-6 and abs(query) < 1e-6:
+        # specified in m. Compare the table/query magnitude ratio rather than
+        # an absolute 1 um threshold: valid metre grids commonly straddle it.
+        finite_scale = np.abs(wavelengths[np.isfinite(wavelengths) & (wavelengths != 0.0)])
+        scale = np.median(finite_scale) if finite_scale.size else 0.0
+        ratio = np.inf if query == 0.0 else scale / abs(query)
+        if ratio > 1.0e6:
             query *= 1e9
-        elif scale < 1e-6 and abs(query) > 1e-6:
+        elif ratio < 1.0e-6:
             query *= 1e-9
 
         order = np.argsort(wavelengths)
@@ -479,7 +483,6 @@ class Pump:
 
     total_power: float
     spectrum: PumpSpectrum
-    cross_sections: CrossSectionData
     profile: object = field(default_factory=UniformPumpProfile)
     angular_distribution: PumpAngularDistribution = field(default_factory=PumpAngularDistribution.collimated)
     name: str | None = None
@@ -489,8 +492,6 @@ class Pump:
             raise ValueError("pump total_power must be finite and positive")
         if not isinstance(self.spectrum, PumpSpectrum):
             raise TypeError("pump spectrum must be PumpSpectrum")
-        if not isinstance(self.cross_sections, CrossSectionData):
-            raise TypeError("pump cross_sections must be CrossSectionData")
         if not isinstance(self.angular_distribution, PumpAngularDistribution):
             raise TypeError("pump angular_distribution must be PumpAngularDistribution")
         if not isinstance(self.profile, (UniformPumpProfile, SuperGaussianPumpProfile)):
@@ -505,7 +506,6 @@ class GaussianPump(Pump):
         *,
         total_power,
         spectrum,
-        cross_sections,
         waist,
         exponent=2.0,
         center=(0.0, 0.0, 0.0),
@@ -520,7 +520,6 @@ class GaussianPump(Pump):
         super().__init__(
             total_power=total_power,
             spectrum=spectrum,
-            cross_sections=cross_sections,
             profile=SuperGaussianPumpProfile(
                 radius_u=radii[0],
                 radius_v=radii[1],
@@ -609,7 +608,7 @@ class PlanarPumpRelay:
 
 
 @dataclass(frozen=True)
-class MonteCarloPumpSolver:
+class MonteCarloPumpSolver(PumpSolver):
     """Numerical controls shared by pumps registered on a simulation."""
 
     ray_count: int = 100_000
@@ -623,6 +622,13 @@ class MonteCarloPumpSolver:
             raise ValueError("MonteCarloPumpSolver.seed must fit uint32")
         if self.max_steps is not None and self.max_steps < 0:
             raise ValueError("MonteCarloPumpSolver.max_steps must be non-negative")
+
+
+@dataclass(frozen=True)
+class _LegacyPump(Pump):
+    """Private pump shape used by the openPMD 0.1 compatibility adapter."""
+
+    cross_sections: CrossSectionData | None = None
 
 
 @dataclass(frozen=True)

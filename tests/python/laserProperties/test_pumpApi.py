@@ -7,27 +7,17 @@ import numpy as np
 import pytest
 
 from HASEonGPU import (
-    CrossSectionData,
     GaussianPump,
     MonteCarloPumpSolver,
     PlanarPumpRelay,
     Pump,
     PumpAngularDistribution,
     PumpSpectrum,
-    Simulation,
+    Simulation as PublicSimulation,
     SuperGaussianPumpProfile,
     SurfacePumpInjector,
     UniformPumpProfile,
 )
-
-
-def monochromatic_cross_sections():
-    return CrossSectionData.monochromatic(
-        wavelength=940e-9,
-        crossSectionAbsorption=1e-22,
-        crossSectionEmission=2e-22,
-    )
-
 
 def test_public_pump_and_simulation_signatures_use_snake_case():
     public_classes = (
@@ -37,7 +27,7 @@ def test_public_pump_and_simulation_signatures_use_snake_case():
         Pump,
         PumpAngularDistribution,
         PumpSpectrum,
-        Simulation,
+        PublicSimulation,
         SuperGaussianPumpProfile,
         SurfacePumpInjector,
         UniformPumpProfile,
@@ -51,7 +41,6 @@ def test_gaussian_pump_keeps_physics_separate_from_injection_and_solver():
     pump = GaussianPump(
         total_power=12.5,
         spectrum=PumpSpectrum.monochromatic(940e-9),
-        cross_sections=monochromatic_cross_sections(),
         waist=(1.5, 1.25),
         exponent=40,
         angular_distribution=PumpAngularDistribution.collimated(),
@@ -67,6 +56,8 @@ def test_gaussian_pump_keeps_physics_separate_from_injection_and_solver():
     np.testing.assert_array_equal(pump.spectrum.weights, [1.0])
     assert injector.surface_domains == ("lower",)
     assert solver == MonteCarloPumpSolver(ray_count=1234, seed=99, max_steps=4)
+    assert "cross_sections" not in inspect.signature(Pump).parameters
+    assert not hasattr(pump, "cross_sections")
 
 
 def test_uniform_cone_uses_snake_case_sampling_controls():
@@ -81,4 +72,4 @@ def test_uniform_cone_uses_snake_case_sampling_controls():
 
 
 def test_simulation_step_signature_matches_picmi_default():
-    assert inspect.signature(Simulation.step).parameters["nsteps"].default == 1
+    assert inspect.signature(PublicSimulation.step).parameters["nsteps"].default == 1

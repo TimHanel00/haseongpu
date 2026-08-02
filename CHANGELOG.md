@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+The Python frontend now uses a breaking, PICMI-aligned composition API. Tet4
+``UnstructuredMesh`` objects contain topology and domain identity only;
+reusable ``MaterialDefinition`` physics, run-specific ``MaterialInstance``
+values, initial state, boundaries, and internal interfaces are registered
+separately on ``Simulation``. Multiple material layouts and explicit perfect
+transmission or Fresnel interface models compile to backend-neutral tables.
+
+The existing openPMD 0.1/native adapter intentionally supports only one
+isotropic active material and rejects multiple materials, internal interfaces,
+and unsupported solver descriptors before launching transport. Fresnel and
+transmission behavior across mesh domains are not implemented in the backend
+yet. ``ASESolver`` and ``PumpSolver`` extension roles keep alternative
+algorithms independent from the currently wired Monte Carlo solvers.
+
 ## HASEonGPU 2.2.0
 
 Feature release that replaces the target-driven backward PhiASE calculation

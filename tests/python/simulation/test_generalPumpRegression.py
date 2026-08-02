@@ -10,18 +10,17 @@ import numpy as np
 import pytest
 
 from HASEonGPU import (
-    CrossSectionData,
     FrozenPhiAseRungeKutta4,
-    PhiASE,
     MonteCarloPumpSolver,
     PlanarPumpRelay,
     Pump,
     PumpSpectrum,
-    Simulation,
     SuperGaussianPumpProfile,
     SurfacePumpInjector,
     integrate_pump_profile,
 )
+from pyInclude.laser import CrossSectionData, _LegacyPump
+from pyInclude.simulation import LegacySimulation as Simulation, PhiASE
 from example import laserPumpCladding as example
 
 
@@ -39,7 +38,7 @@ def test_general_pump_reproduces_legacy_crystal_inversion(openPmdFileBackend, al
     )
     medium = example.laserPumpCladdingMedium(cladAbsorption=5.5)
     profile = SuperGaussianPumpProfile(radius_u=1.5, radius_v=1.5, exponent=40)
-    pump = Pump(
+    pump = _LegacyPump(
         total_power=16e3 * integrate_pump_profile(medium.topology, "ase_bottom", profile),
         spectrum=PumpSpectrum.monochromatic(wavelength),
         cross_sections=pump_cross_sections,

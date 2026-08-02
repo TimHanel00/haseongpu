@@ -1,113 +1,26 @@
-PICMI-style pump configuration
-==============================
+Pumps and pump solvers
+======================
 
-The public pump API separates the physical pump, numerical injection method,
-and Monte Carlo solver controls. This follows the composition used by PICMI's
-laser and injection objects without claiming that HASEonGPU implements the PIC
-model itself.
+A ``Pump`` describes physical incident light only: power, wavelength spectrum,
+spatial profile, and angular distribution. Cross sections are material
+properties and are not repeated on a pump.
 
 .. code-block:: python
 
-   from HASEonGPU import (
-       MonteCarloPumpSolver,
-       PlanarPumpRelay,
-       Pump,
-       PumpAngularDistribution,
-       PumpSpectrum,
-       SuperGaussianPumpProfile,
-       SurfacePumpInjector,
-   )
-
-   profile = SuperGaussianPumpProfile(
-       radius_u=1.5,
-       radius_v=1.5,
-       exponent=40,
-       center=(0, 0, 0),
-       axis_u=(1, 0, 0),
-       axis_v=(0, 1, 0),
-   )
    pump = Pump(
-       total_power=100000.0,
+       total_power=100_000.0,
        spectrum=PumpSpectrum.monochromatic(940e-9),
-       cross_sections=pump_cross_sections,
-       angular_distribution=PumpAngularDistribution.collimated(),
-       profile=profile,
+       profile=SuperGaussianPumpProfile(
+           radius_u=1.5, radius_v=1.5, exponent=40
+       ),
    )
-   injector = SurfacePumpInjector(surface_domains=("pump_input",))
-   pump_solver = MonteCarloPumpSolver(
-       ray_count=100000,
-       seed=5489,
-       max_steps=50,
-   )
+   simulation.add_pump(pump, SurfacePumpInjector("pump_input"))
 
-   simulation = Simulation(
-       gain_medium=medium,
-       phi_ase=phi_ase,
-       time_integrator=FrozenPhiAseRungeKutta4(),
-       time_step_size=2e-5,
-       pump_solver=pump_solver,
-   )
-   simulation.add_pump(
-       pump,
-       injection_method=injector,
-       relays=(PlanarPumpRelay.retroreflect("pump_output"),),
-   )
-   simulation.step(150)
+``PlanarPumpRelay`` can describe explicit affine re-imaging between boundary
+domains. ``GaussianPump`` is a convenience constructor.
 
-Physical and numerical objects
-------------------------------
-
-``Pump`` contains total power, spectrum, material cross sections, spatial
-profile, and angular distribution. ``GaussianPump`` is a convenience class
-that creates a super-Gaussian physical pump from a scalar or two-component
-``waist``.
-
-``SurfacePumpInjector`` selects tagged exterior triangle domains. It describes
-where the physical pump is introduced, rather than duplicating those domains
-inside the pump itself. Multiple pumps can be registered through repeated
-``Simulation.add_pump`` calls.
-
-``MonteCarloPumpSolver`` owns the numerical ``ray_count`` and reproducibility
-``seed``. Its optional ``max_steps`` limits the pump contribution while the
-outer simulation may continue.
-
-Compiled transport
-------------------
-
-The solver launches equal-power rays from the selected exterior faces. Every
-ray samples the normalized spatial profile, discrete wavelength spectrum, and
-angular distribution, then traverses neighboring Tet4 cells until it reaches a
-physical boundary. In a segment of length :math:`\ell`, pump power changes as
-
-.. math::
-
-   P_{out}=P_{in}\exp(g_p\ell),
-   \qquad
-   g_p=N_{tot}[\beta(\sigma_a+\sigma_e)-\sigma_a].
-
-The corresponding net photon exchange is accumulated in the traversed cell
-and normalized by that cell's volume. The cell rate is consumed directly by
-the time integrator. This replaces the former point-scatter path and the former
-one-dimensional traversal through ordered z levels and allows injection on
-arbitrarily oriented, domain-tagged mesh regions.
-
-Power normalization
--------------------
-
-``total_power`` is integrated over the selected injector aperture. The profile
-changes the launch distribution but not total power.
-``integrate_pump_profile(topology, domains, profile)`` converts a legacy peak
-intensity into total power on a tagged triangular aperture.
-
-Planar relays
--------------
-
-``PlanarPumpRelay`` maps rays leaving tagged, coplanar ``exit_domains`` to
-``entry_domains``. It supports ``flip_u``, ``flip_v``, in-plane rotation,
-offset, tilt, magnification, transmission, and aperture vignetting. Ordered
-relays passed to ``add_pump`` represent finite return passes.
-
-The relay ``transmission`` is an explicitly configured scalar throughput. It is
-not calculated from Fresnel equations. Pump polarization, coating interactions,
-refraction, residual unlimited cavity recirculation, and arbitrary Python
-transport callbacks are outside the general pump core.
+``PumpSolver`` is the extension role for pumping algorithms.
+``MonteCarloPumpSolver(ray_count=..., seed=..., max_steps=...)`` is the only
+solver currently wired to the native backend. Physical pump definitions and
+solver selection remain separate so another pumping algorithm can be added
+without changing material or mesh APIs.

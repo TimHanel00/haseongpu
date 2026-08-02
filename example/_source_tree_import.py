@@ -37,7 +37,7 @@ def ensure_hase_importable():
     ]
     try:
         module = importlib.import_module("HASEonGPU")
-        if hasattr(module, "VolumeTopology"):
+        if hasattr(module, "UnstructuredMesh") and hasattr(module, "MaterialDefinition"):
             return
     except ModuleNotFoundError as err:
         if err.name != "HASEonGPU":

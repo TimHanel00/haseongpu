@@ -8,7 +8,7 @@ assigned on its node.
 Build Requirement
 -----------------
 
-Build with MPI support before selecting ``parallelMode="mpi"`` or YAML
+Build with MPI support before selecting ``parallel_mode="mpi"`` or YAML
 ``parallel_mode: mpi``.  The CMake option is ``DISABLE_MPI``:
 
 ``AUTO``
@@ -34,19 +34,19 @@ nodes.
 Runtime Settings
 ----------------
 
-These values are set through ``PhiASE`` or YAML. The scheduler supplies the
-node allocation; for ``parallelMode="mpi"``, the Python frontend starts
-``calcPhiASE`` with ``mpiexec -npernode <nPerNode>`` inside that allocation.
+These values are set through ``MonteCarloASESolver`` or YAML. The scheduler supplies the
+node allocation; for ``parallel_mode="mpi"``, the Python frontend starts
+``calcPhiASE`` with ``mpiexec -npernode <ranks_per_node>`` inside that allocation.
 
-``parallelMode`` / ``parallel_mode``
+``parallel_mode``
    ``single`` runs without MPI. ``mpi`` launches the executable under MPI and
    splits samples across ranks.
 
-``numDevices``
+``num_devices``
    Maximum number of local devices one node should use.  In MPI mode,
    HASEonGPU divides those devices across ranks on the same node.
 
-``nPerNode`` / ``n_per_node``
+``ranks_per_node`` / ``n_per_node``
    Number of MPI ranks per allocated node passed to ``mpiexec -npernode``.
 
 The frontend places temporary file-based openPMD transport data below
@@ -60,18 +60,18 @@ One rank per GPU is usually the most straightforward layout:
 
 .. code-block:: text
 
-   parallelMode = mpi
-   numDevices = $devicesPerNode
-   nPerNode = $devicesPerNode
+   parallel_mode = mpi
+   num_devices = $devicesPerNode
+   ranks_per_node = $devicesPerNode
 
 One rank per node lets one process drive multiple GPUs, but requires enough CPU
 cores for the GPU-driving host threads:
 
 .. code-block:: text
 
-   parallelMode = mpi
-   numDevices = $devicesPerNode
-   nPerNode = 1
+   parallel_mode = mpi
+   num_devices = $devicesPerNode
+   ranks_per_node = 1
 
 Slurm examples:
 

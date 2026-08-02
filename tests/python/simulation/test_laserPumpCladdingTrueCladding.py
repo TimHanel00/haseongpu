@@ -14,7 +14,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from HASEonGPU import AlpakaBackends, CrossSectionData, PhiASE
+from HASEonGPU import AlpakaBackends
+from pyInclude.laser import CrossSectionData
+from pyInclude.simulation import PhiASE
 
 
 repoRoot = Path(__file__).resolve().parents[3]

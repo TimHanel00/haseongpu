@@ -176,7 +176,8 @@ openPMD Provider Options
 
 CMake chooses the openPMD-api provider used to build HASEonGPU.  The storage
 backend used by a simulation is selected at runtime with
-``PhiASE.openpmdBackend`` or YAML ``openpmd_backend``.
+the ``MonteCarloASESolver(openpmd_backend=...)`` argument or YAML
+``openpmd_backend``.
 
 ``HASE_OPENPMD_PROVIDER``
    Default ``auto``.
@@ -244,7 +245,9 @@ Runtime selection is still done through user configuration:
 
 .. code-block:: python
 
-   phi_ase = PhiASE(..., backend="Host_Cpu_CpuSerial", openpmdBackend="auto")
+   ase_solver = MonteCarloASESolver(
+       backend="Host_Cpu_CpuSerial", openpmd_backend="auto"
+   )
 
 .. code-block:: yaml
 

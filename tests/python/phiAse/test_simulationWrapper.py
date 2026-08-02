@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyInclude import PhiASE
+from pyInclude.simulation import PhiASE
 import pyInclude.simulation as simulation_module
 
 class DummyResult:
@@ -344,10 +344,10 @@ def testPhiAseIntervalOpenPmdSessionUsesOneShotTransport(
 
 
 def testSimulationRunStepsRejectsExternalOpenPmdSessionOwnership():
-    simulation = object.__new__(simulation_module.Simulation)
+    simulation = object.__new__(simulation_module.LegacySimulation)
 
     try:
-        simulation_module.Simulation.runSteps(
+        simulation_module.LegacySimulation.runSteps(
             simulation,
             2,
             openpmdSession="persistent",
@@ -360,7 +360,7 @@ def testSimulationRunStepsRejectsExternalOpenPmdSessionOwnership():
 
 def testSimulationRunStepsPassesStreamingBackendToCompiledTransport(monkeypatch):
     captured = {}
-    simulation = object.__new__(simulation_module.Simulation)
+    simulation = object.__new__(simulation_module.LegacySimulation)
     simulation.phiASE = SimpleNamespace(
         openpmdBackend="adios-sst",
         _transportLaunchOptions=lambda: {},
@@ -383,7 +383,7 @@ def testSimulationRunStepsPassesStreamingBackendToCompiledTransport(monkeypatch)
 
     monkeypatch.setattr(simulation_module.transport, "runSimulation", fake_run_simulation)
 
-    simulation_module.Simulation.runSteps(simulation, 1)
+    simulation_module.LegacySimulation.runSteps(simulation, 1)
 
     assert captured == {
         "simulation": simulation,

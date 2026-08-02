@@ -38,8 +38,8 @@ backends should be treated as experimental unless validated in your environment.
 Runtime Compute Backend
 -----------------------
 
-The Python ``PhiASE.backend`` value, or the equivalent openPMD metadata used by
-``calcPhiASE``, selects one compiled-and-available compute backend.  Backend
+The Python ``MonteCarloASESolver.backend`` value, or equivalent openPMD metadata
+used by ``calcPhiASE``, selects one compiled-and-available compute backend.  Backend
 names have the form:
 
 .. code-block:: text
@@ -54,10 +54,10 @@ From Python, query the same list with ``AlpakaBackends``:
 
 .. code-block:: python
 
-   from HASEonGPU import AlpakaBackends, PhiASE
+   from HASEonGPU import AlpakaBackends, MonteCarloASESolver
 
    available = AlpakaBackends.all()
-   phi_ase = PhiASE(backend=available[0])
+   ase_solver = MonteCarloASESolver(backend=available[0])
 
 ``AlpakaBackends.known()`` is an alias for ``all()``.  Names that are valid
 Python identifiers are also exposed as attributes, for example

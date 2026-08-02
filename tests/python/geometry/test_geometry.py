@@ -10,7 +10,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from HASEonGPU import GainMedium, Grid, MeshTopology, backendFlat, unitDimension
+from HASEonGPU import backendFlat, unitDimension
+from pyInclude.geometry import GainMedium, Grid, MeshTopology
 
 
 def _lineCount(path):

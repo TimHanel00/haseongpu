@@ -9,6 +9,14 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+from pathlib import Path
+import sys
+
+
+# Autodoc only needs the Python sources.  Import them directly so documentation
+# builds do not compile the native runtime (in particular on Read the Docs).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 

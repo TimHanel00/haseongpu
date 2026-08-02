@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from pyInclude import PhiASE
+from pyInclude.simulation import PhiASE
 from pyInclude import config as configure_module
 from pyInclude.config import (
     BUNDLED_ADIOS2_FETCH,
