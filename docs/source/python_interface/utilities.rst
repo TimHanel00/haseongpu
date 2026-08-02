@@ -4,131 +4,35 @@ Utilities
 Time integration
 ----------------
 
-The public time integrators are lightweight descriptors for compiled backend
-algorithms: ``ExplicitEuler``, ``Heun``, ``Midpoint``, ``RungeKutta4``,
-``FrozenPhiAseRungeKutta4``, ``ImplicitEuler``, and ``ExponentialEuler``.
+The public time integrators are lightweight descriptors for native compiled
+algorithms:
 
 .. code-block:: python
 
-<<<<<<< HEAD
-   from HASEonGPU import (
-       ExplicitEuler,
-       Heun,
-       Midpoint,
-       RungeKutta4,
-       FrozenPhiAseRungeKutta4,
-       ImplicitEuler,
-       ExponentialEuler,
-   )
-
-Available solvers:
-
-* ``ExplicitEuler()``
-* ``Heun()``
-* ``Midpoint()``
-* ``RungeKutta4()``
-* ``FrozenPhiAseRungeKutta4()``: reuses one ASE evaluation across RK4 stages.
-* ``ImplicitEuler(iterations=8, tolerance=1e-10)``
-* ``ExponentialEuler()``
-
-These objects are lightweight descriptors. Python serializes their ``name`` to
-the openPMD run-control record and the compiled C++/Alpaka backend performs the
-actual time integration. You can also pass one of the names directly as a
-string.
-
-Custom Python time integrators are not supported by compiled simulation runs.
-
-VTK Export
-----------
-
-``vtkWedge`` writes point or cell data on the wedge mesh to a legacy ASCII
-VTK file. In a ``Simulation.on_step`` callback, pass the ``TimeStepState`` to
-``vtkWedge``; the state carries the static topology and the dynamic arrays.
-
-Callback use:
-
-.. code-block:: python
-
-   def write_vtk(state, output_dir, cladding_absorption):
-       vtkWedge(
-           output_dir / "fields_{step:03d}.vtk",
-           state,
-           fields={
-               "betaCells": state.beta_cells,
-               "phiASE": state.phi_ase,
-               "dndtAse": state.dndt_ase,
-               "cladAbs": state.phi_ase * cladding_absorption,
-           },
-       )
-
-   simulation.on_step(write_vtk, output_dir, 5.5)
-
-Direct use after one step:
-
-.. code-block:: python
-
-   simulation.step()
-   state = simulation.get_last_state()
-   vtkWedge("phi.vtk", state)
-   vtkWedge("fields.vtk", state, field=["phiAse", "dndtAse"])
-   vtkWedge("named.vtk", state, field={"phi": "phiAse", "dn": "dndtAse"})
-
-For standalone array exports outside a simulation state, pass ``geometry`` as a
-``GainMedium`` or ``MeshTopology``:
-
-.. code-block:: python
-
-   vtkWedge("fields.vtk", geometry=medium, fields={"phi": phi, "dn": dndt})
-
-The older callback-factory form is still accepted and can use ``every`` to
-reduce output frequency:
-
-.. code-block:: python
-
-   simulation.on_step(vtkWedge("phi_{step:03d}.vtk", medium, every=10))
-
-For new code, prefer an explicit callback when output frequency or derived
-fields are needed:
-
-.. code-block:: python
-
-   def write_every_tenth(state, output_dir):
-       if state.step % 10 == 0:
-           vtkWedge(output_dir / "phi_{step:03d}.vtk", state)
-
-   simulation.on_step(write_every_tenth, output_dir)
-
-The data shape must match either:
-
-* point data: ``(numberOfPoints, numberOfLevels)``
-* cell data: ``(numberOfTriangles, numberOfLevels - 1)``
-
-Gain Field Export
------------------
-
-``calcGainFromState`` calculates small-signal laser gain from a
-``TimeStepState`` and returns a point-shaped array that can be written directly
-with ``vtkWedge``:
-
-.. code-block:: python
-
-   vtkWedge(
-       output_path,
-       state,
-       fields={
-           "gain": calcGainFromState(state, spectra, nTot),
-       },
-   )
-
-
-Backend Names
-=======
    from HASEonGPU import FrozenPhiAseRungeKutta4
-   integrator = FrozenPhiAseRungeKutta4()
 
-Backend names
->>>>>>> 0a6b6680 (Introduce PICMI-aligned material and mesh API)
--------------
+   simulation = Simulation(
+       # ...
+       time_integrator=FrozenPhiAseRungeKutta4(),
+   )
+
+Available descriptors are:
+
+* ``ExplicitEuler()``;
+* ``Heun()``;
+* ``Midpoint()``;
+* ``RungeKutta4()``;
+* ``FrozenPhiAseRungeKutta4()``, which reuses one ASE evaluation across RK4
+  stages;
+* ``ImplicitEuler(iterations=8, tolerance=1e-10)``;
+* ``ExponentialEuler()``.
+
+Python serializes the descriptor's ``name`` into native run control. A valid
+solver-name string is also accepted. Custom Python integration callables are
+not executed by compiled simulations.
+
+Backend discovery
+-----------------
 
 ``AlpakaBackends.all()`` lists compute backends available in the installed
 runtime:
@@ -137,15 +41,44 @@ runtime:
 
    from HASEonGPU import AlpakaBackends, MonteCarloASESolver
 
-   backend = AlpakaBackends.all()[0]
-   ase_solver = MonteCarloASESolver(backend=backend)
+   available = AlpakaBackends.all()
+   if not available:
+       raise RuntimeError("HASEonGPU was built without an available backend")
+   ase_solver = MonteCarloASESolver(backend=available[0])
 
-See :doc:`../backendSelection` for compute versus openPMD backend selection.
+``known()`` is an alias for ``all()``. Names that are valid Python identifiers
+are also class attributes. These are Alpaka compute names, not openPMD backend
+names; see :doc:`../backendSelection`.
 
 State export
 ------------
 
-``writeParaviewState`` remains available for backend state export. Callback
-consumers can also use the NumPy arrays on ``TimeStepState`` directly. The
-public Tet4 views are ``excitation_fraction``, ``d_excitation_dt_ase``, and
-``d_excitation_dt_pump``.
+``writeParaviewState(state, output_dir, ...)`` appends a completed
+``TimeStepState`` to an openPMD series and writes a small ``.pmd`` handle for
+ParaView. It can be registered directly as a callback:
+
+.. code-block:: python
+
+   simulation.on_step(writeParaviewState, "output/openpmd")
+
+For custom analysis, consume the NumPy views directly:
+
+.. code-block:: python
+
+   def save_excitation(state, output_dir):
+       np.save(output_dir / f"beta-{state.step:06d}.npy", state.excitation_fraction)
+
+   simulation.on_step(save_excitation, output_dir)
+
+The former ``vtkWedge`` and ``calcGainFromState`` helpers are not part of the
+public composition API. Repository-owned compatibility regressions still use
+them privately for historical wedge references.
+
+Low-level openPMD schema helpers
+--------------------------------
+
+The public namespace still exposes schema-building objects such as
+``PrimitiveFieldSpec``, ``PointSchema``, ``TriangleSchema``, and
+``PrismSchema`` for advanced openPMD tooling. They do not replace
+``UnstructuredMesh`` or the material/layout API and are not required for a
+normal simulation.

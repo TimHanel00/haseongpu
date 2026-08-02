@@ -183,6 +183,41 @@ def test_solver_roles_accept_future_descriptors_but_current_adapter_rejects_them
         configured.validate_backend()
 
 
+def test_monte_carlo_ase_yaml_uses_explicit_snake_case_overrides(tmp_path):
+    config = tmp_path / "phi-ase.yaml"
+    config.write_text(
+        """
+experiment:
+  minRays: 1000
+  maxRays: 10000
+compute:
+  backend: FromYaml
+  nPerNode: 2
+""",
+        encoding="utf-8",
+    )
+
+    solver = MonteCarloASESolver.from_yaml(
+        config,
+        min_rays=2500,
+        backend="ExplicitOverride",
+        ranks_per_node=4,
+    )
+
+    assert solver.minRays == 2500
+    assert solver.maxRays == 10000
+    assert solver.backend == "ExplicitOverride"
+    assert solver.nPerNode == 4
+
+
+def test_monte_carlo_ase_yaml_rejects_unknown_overrides(tmp_path):
+    config = tmp_path / "phi-ase.yaml"
+    config.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(TypeError, match="unexpected.*made_up"):
+        MonteCarloASESolver.from_yaml(config, made_up=1)
+
+
 @pytest.mark.parametrize(
     "configure, match, error_type",
     [

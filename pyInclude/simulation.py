@@ -1003,7 +1003,36 @@ class MonteCarloASESolver(PhiASE, ASESolver):
 
     @classmethod
     def from_yaml(cls, filename, **overrides):
-        return cls(config=filename, **overrides)
+        attribute_names = {
+            "min_rays": "minRays",
+            "max_rays": "maxRays",
+            "forward_ray_count": "forwardRayCount",
+            "relative_standard_error_threshold": "relativeStandardErrorThreshold",
+            "repetitions": "repetitions",
+            "adaptive_steps": "adaptiveSteps",
+            "use_reflections": "useReflections",
+            "reflection_max_iterations": "reflectionMaxIterations",
+            "reflection_tolerance": "reflectionTolerance",
+            "surface_reservoir_size": "surfaceReservoirSize",
+            "monochromatic": "monochromatic",
+            "backend": "backend",
+            "openpmd_backend": "openpmdBackend",
+            "parallel_mode": "parallelMode",
+            "num_devices": "numDevices",
+            "ranks_per_node": "nPerNode",
+            "min_sample_range": "minSampleRange",
+            "max_sample_range": "maxSampleRange",
+            "rng_seed": "rngSeed",
+        }
+        unknown = sorted(set(overrides) - set(attribute_names))
+        if unknown:
+            names = ", ".join(unknown)
+            raise TypeError(f"unexpected MonteCarloASESolver override(s): {names}")
+
+        solver = cls(config=filename)
+        for name, value in overrides.items():
+            setattr(solver, attribute_names[name], value)
+        return solver
 
 
 class Simulation:

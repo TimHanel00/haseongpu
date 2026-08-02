@@ -81,7 +81,10 @@ def main():
         simulation = build_simulation(mesh)
         problem = simulation.compile()
         print(f"gmsh topology: {mesh.number_of_cells} tetrahedra")
+        print(f"volume domains: {mesh.volume_domain_names}")
+        print(f"surface domains: {mesh.surface_domain_names}")
         print(f"material table: {[material.display_name for material in problem.materials]}")
+        print(f"backend-compatible: {problem.unsupported_features() == ()}")
 
 
 if __name__ == "__main__":

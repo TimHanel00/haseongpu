@@ -41,9 +41,10 @@ material = MaterialInstance(
     MaterialDefinition("gain", 1.8, 1.0e-3, cross_sections),
     active_ion_density=2.5e26,
 )
+ase_solver = MonteCarloASESolver(backend="Host_Cpu_CpuSerial")
 simulation = Simulation(
     mesh=mesh,
-    ase_solver=MonteCarloASESolver(backend="Host_Cpu_CpuSerial"),
+    ase_solver=ase_solver,
     pump_solver=MonteCarloPumpSolver(ray_count=16),
     time_integrator=RungeKutta4(),
     time_step_size=1.0e-6,
@@ -54,7 +55,12 @@ simulation.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("al
 compiled = simulation.compile()
 
 assert mesh.number_of_cells == 1
+assert ase_solver.minRays == 100_000
+assert ase_solver.maxRays == 100_000
 assert compiled.materials == (material,)
+np.testing.assert_array_equal(compiled.cell_material_id, [0])
+np.testing.assert_array_equal(compiled.face_boundary_id, [[0, 0, 0, 0]])
+np.testing.assert_array_equal(compiled.initial_excitation_fraction, [0.0])
 for legacy_name in (
     "CrossSectionData",
     "DomainMap",

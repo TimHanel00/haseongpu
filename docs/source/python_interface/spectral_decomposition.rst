@@ -14,9 +14,16 @@ non-negative absorption and emission arrays.
    )
 
 All values use SI units (metres and square metres). ``monochromatic`` creates a
-one-sample table. ``from_directory`` reads the historical ``lambda_a.txt``,
-``sigma_a.txt``, ``lambda_e.txt``, and ``sigma_e.txt`` files and converts their
-nm/cm² values to SI.
+one-sample table. Historical four-file tables can be loaded with:
 
-The private openPMD 0.1 adapter converts cross sections back to the legacy
-backend units; user code should never perform that conversion.
+.. code-block:: python
+
+   spectra = CrossSectionTable.from_directory("example/input")
+
+This reads ``lambda_a.txt`` and ``lambda_e.txt`` as nanometres and
+``sigma_a.txt`` and ``sigma_e.txt`` as ``cm^2``. It creates the union of both
+wavelength grids and interpolates missing absorption or emission values.
+
+Arrays are copied, validated, and made read-only. The private openPMD 0.1
+adapter converts cross sections back to the native wire units; user code should
+never perform that conversion.

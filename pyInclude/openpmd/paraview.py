@@ -18,7 +18,9 @@ def _unit_dimensionless(io):
 def _reset_scalar_record(iteration, name, values, primitive_shape, axis_labels):
     import openpmd_api as io
 
-    data = np.ascontiguousarray(np.asarray(values).reshape(-1))
+    # Public mesh arrays are deliberately read-only. openPMD's store_chunk
+    # requires a writable contiguous buffer, so always materialize one here.
+    data = np.array(values, copy=True, order="C").reshape(-1)
     record = iteration.meshes[name]
     record.set_attribute("geometry", "other")
     record.set_attribute("geometryParameters", "topology=extruded_triangular_prism")
@@ -90,13 +92,24 @@ def writeParaviewState(
 
     if topology is not None:
         _reset_scalar_record(iteration, "points", np.asarray(topology.points), topology.points.shape, ["point", "coordinate"])
-        _reset_scalar_record(
-            iteration,
-            "triangle_point_indices",
-            np.asarray(topology.trianglePointIndices, dtype=np.uint32),
-            topology.trianglePointIndices.shape,
-            ["cell", "local_vertex"],
-        )
+        if hasattr(topology, "cell_connectivity"):
+            connectivity = np.asarray(topology.cell_connectivity, dtype=np.uint32)
+            _reset_scalar_record(
+                iteration,
+                "cell_point_indices",
+                connectivity,
+                connectivity.shape,
+                ["cell", "local_vertex"],
+            )
+        else:
+            connectivity = np.asarray(topology.trianglePointIndices, dtype=np.uint32)
+            _reset_scalar_record(
+                iteration,
+                "triangle_point_indices",
+                connectivity,
+                connectivity.shape,
+                ["cell", "local_vertex"],
+            )
 
     iteration.close()
     series.close()
