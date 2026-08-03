@@ -32,6 +32,7 @@ classifiers = [
 ]
 dependencies=[
     "gmsh",
+    "h5py",
     "numpy>=2.0",
     "scipy",
     "numba",
@@ -57,6 +58,7 @@ dev = [
 
 [project.scripts]
 hase-configure = "pyInclude.config:main"
+hase-material-convert = "material_library.cli:main"
 
 [project.urls]
 Documentation = "https://haseongpu.readthedocs.io/en/latest/"
@@ -66,7 +68,7 @@ Changelog = "https://github.com/computationalradiationphysics/haseongpu/releases
 
 [tool.scikit-build]
 build-dir = ".hase-python-build/{wheel_tag}"
-wheel.packages = ["pyInclude"]
+wheel.packages = ["pyInclude", "material_library", "hase_units"]
 install.components = ["python"]
 
 [[tool.scikit-build.generate]]

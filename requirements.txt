@@ -2,6 +2,7 @@ pytest
 pytest-cov
 scikit-build-core
 gmsh
+h5py
 numpy
 scipy
 numba
