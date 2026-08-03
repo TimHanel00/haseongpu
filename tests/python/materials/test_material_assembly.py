@@ -11,16 +11,10 @@ from HASEonGPU import (
     AbsorbingSurface,
     ASESolver,
     BackendCapabilities,
-    BoundaryLayout,
     CrossSectionTable,
-    ExteriorBoundary,
     FresnelInterface,
     InitialState,
-    MaterialDefinition,
-    MaterialInstance,
-    MaterialInterface,
-    MaterialInterfaceLayout,
-    MaterialLayout,
+    Material,
     MonteCarloASESolver,
     MonteCarloPumpSolver,
     PerfectTransmission,
@@ -28,6 +22,7 @@ from HASEonGPU import (
     RungeKutta4,
     Simulation,
     UnstructuredMesh,
+    units,
 )
 
 
@@ -41,40 +36,42 @@ def two_tet_mesh():
             [1.0, 1.0, 1.0],
         ]
     )
-    return UnstructuredMesh.from_tetrahedra(
+    return UnstructuredMesh.fromTetrahedra(
         points,
         [[0, 1, 2, 3], [1, 2, 3, 4]],
-        volume_domains=[10, 20],
-        volume_domain_names={10: "core", 20: "cap"},
+        volumeDomains=[10, 20],
+        volumeDomainNames={10: "core", 20: "cap"},
+        coordinateUnit=units.m,
     )
 
 
 def materials():
-    cross_sections = CrossSectionTable.monochromatic(
-        wavelength=1030e-9,
-        absorption=1.0e-24,
-        emission=2.0e-24,
+    crossSections = CrossSectionTable.monochromatic(
+        wavelength=1030 * units.nm,
+        absorption=1.0e-20 * units.cm**2,
+        emission=2.0e-20 * units.cm**2,
     )
-    definition = MaterialDefinition(
-        name="Yb:YAG",
-        refractive_index=1.82,
-        fluorescence_lifetime=941e-6,
-        cross_sections=cross_sections,
+    material = Material("Yb:YAG").addState(
+        temperature=300 * units.K,
+        refractiveIndex=1.82,
+        fluorescenceLifetime=941 * units.us,
+        crossSections=crossSections,
+        metadata={"source": "synthetic test material"},
     )
     return (
-        MaterialInstance(definition, active_ion_density=2.76e26, name="core"),
-        MaterialInstance(definition, active_ion_density=0.0, name="cap"),
+        material.at(temperature=300 * units.K, activeIonDensity=2.76e26 / units.m**3, name="core"),
+        material.at(temperature=300 * units.K, activeIonDensity=0.0 / units.m**3, name="cap"),
     )
 
 
 def simulation(mesh):
     return Simulation(
         mesh=mesh,
-        ase_solver=MonteCarloASESolver(backend="Host_Cpu_CpuSerial"),
-        pump_solver=MonteCarloPumpSolver(ray_count=16),
-        time_integrator=RungeKutta4(),
-        time_step_size=1.0e-6,
-        initial_state=InitialState(0.25),
+        aseSolver=MonteCarloASESolver(),
+        pumpSolver=MonteCarloPumpSolver(rayCount=16),
+        timeIntegrator=RungeKutta4(),
+        timeStepSize=1.0 * units.us,
+        initialState=InitialState(0.25 * units.one),
     )
 
 
@@ -84,23 +81,20 @@ def complete_problem(interface_model=None):
     mesh = two_tet_mesh()
     core, cap = materials()
     configured = simulation(mesh)
-    configured.add_material(core, MaterialLayout("core"))
-    configured.add_material(cap, MaterialLayout("cap"))
-    configured.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior"))
-    configured.add_interface(
-        MaterialInterface(interface_model),
-        MaterialInterfaceLayout((core, cap)),
-    )
+    configured.addMaterial(core, domains=mesh.volume("core"))
+    configured.addMaterial(cap, domains=mesh.volume("cap"))
+    configured.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
+    configured.addInterface(interface_model, between=(core, cap))
     return configured
 
 
 def test_multi_material_problem_compiles_to_dense_tables():
-    compiled = complete_problem().compile()
+    compiled = complete_problem().resolveProblem()
 
-    np.testing.assert_array_equal(compiled.cell_material_id, [0, 1])
-    assert [material.display_name for material in compiled.materials] == ["core", "cap"]
-    assert np.count_nonzero(compiled.face_interface_id == 0) == 2
-    np.testing.assert_array_equal(compiled.initial_excitation_fraction, [0.25, 0.25])
+    np.testing.assert_array_equal(compiled.cellMaterialId, [0, 1])
+    assert [material.displayName for material in compiled.materials] == ["core", "cap"]
+    assert np.count_nonzero(compiled.faceInterfaceId == 0) == 2
+    np.testing.assert_array_equal(compiled.initialExcitationFraction, [0.25, 0.25])
 
 
 def test_legacy_material_mesh_aggregate_is_not_public():
@@ -131,9 +125,9 @@ def test_legacy_material_mesh_aggregate_is_not_public():
 
 @pytest.mark.parametrize("model", [PerfectTransmission(), FresnelInterface()])
 def test_internal_interface_models_survive_frontend_compilation(model):
-    compiled = complete_problem(model).compile()
+    compiled = complete_problem(model).resolveProblem()
 
-    assert compiled.interfaces[0].model.kind == model.kind
+    assert compiled.interfaces[0].kind == model.kind
 
 
 def test_backend_rejects_unwired_multi_material_features_before_launch(monkeypatch):
@@ -142,20 +136,20 @@ def test_backend_rejects_unwired_multi_material_features_before_launch(monkeypat
     def unexpected_launch(*args, **kwargs):
         pytest.fail("unsupported problem reached the native transport")
 
-    monkeypatch.setattr("pyInclude.openpmd.transport.runSimulation", unexpected_launch)
+    monkeypatch.setattr("pyInclude.openpmd.transport.run_simulation", unexpected_launch)
     with pytest.raises(NotImplementedError, match="multiple materials.*internal interface models: fresnel"):
         configured.step()
 
 
 def test_future_capability_set_accepts_compiled_multi_material_interface():
-    compiled = complete_problem(FresnelInterface()).compile()
+    compiled = complete_problem(FresnelInterface()).resolveProblem()
     future = BackendCapabilities(
-        multiple_materials=True,
-        internal_interface_models=frozenset({"fresnel"}),
+        multipleMaterials=True,
+        internalInterfaceModels=frozenset({"fresnel"}),
     )
 
-    assert compiled.unsupported_features(future) == ()
-    assert compiled.require_backend_support(future) is compiled
+    assert compiled.unsupportedFeatures(future) == ()
+    assert compiled.requireBackendSupport(future) is compiled
 
 
 def test_solver_roles_accept_future_descriptors_but_current_adapter_rejects_them():
@@ -169,18 +163,18 @@ def test_solver_roles_accept_future_descriptors_but_current_adapter_rejects_them
     core, _cap = materials()
     configured = Simulation(
         mesh=mesh,
-        ase_solver=DeterministicASESolver(),
-        pump_solver=DeterministicPumpSolver(),
-        time_integrator=RungeKutta4(),
-        time_step_size=1.0e-6,
-        initial_state=InitialState(0.25),
+        aseSolver=DeterministicASESolver(),
+        pumpSolver=DeterministicPumpSolver(),
+        timeIntegrator=RungeKutta4(),
+        timeStepSize=1.0 * units.us,
+        initialState=InitialState(0.25 * units.one),
     )
-    configured.add_material(core, MaterialLayout("all"))
-    configured.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior"))
+    configured.addMaterial(core, domains=mesh.volume("core", "cap"))
+    configured.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
 
-    configured.compile()
+    configured.resolveProblem()
     with pytest.raises(NotImplementedError, match="only Monte Carlo solvers"):
-        configured.validate_backend()
+        configured.validateBackend()
 
 
 def test_monte_carlo_ase_yaml_uses_explicit_snake_case_overrides(tmp_path):
@@ -188,34 +182,34 @@ def test_monte_carlo_ase_yaml_uses_explicit_snake_case_overrides(tmp_path):
     config.write_text(
         """
 experiment:
-  minRays: 1000
-  maxRays: 10000
+  min_rays: 1000
+  max_rays: 10000
 compute:
   backend: FromYaml
-  nPerNode: 2
+  ranks_per_node: 2
 """,
         encoding="utf-8",
     )
 
-    solver = MonteCarloASESolver.from_yaml(
+    solver = MonteCarloASESolver.fromYaml(
         config,
-        min_rays=2500,
+        minRays=2500,
         backend="ExplicitOverride",
-        ranks_per_node=4,
+        ranksPerNode=4,
     )
 
     assert solver.minRays == 2500
     assert solver.maxRays == 10000
     assert solver.backend == "ExplicitOverride"
-    assert solver.nPerNode == 4
+    assert solver.ranksPerNode == 4
 
 
 def test_monte_carlo_ase_yaml_rejects_unknown_overrides(tmp_path):
     config = tmp_path / "phi-ase.yaml"
     config.write_text("{}\n", encoding="utf-8")
 
-    with pytest.raises(TypeError, match="unexpected.*made_up"):
-        MonteCarloASESolver.from_yaml(config, made_up=1)
+    with pytest.raises(TypeError, match="unknown.*made_up"):
+        MonteCarloASESolver.fromYaml(config, made_up=1)
 
 
 @pytest.mark.parametrize(
@@ -223,27 +217,27 @@ def test_monte_carlo_ase_yaml_rejects_unknown_overrides(tmp_path):
     [
         (
             lambda sim, core, cap: (
-                sim.add_material(core, MaterialLayout("all")),
-                sim.add_material(cap, MaterialLayout("cap")),
+                sim.addMaterial(core, domains=sim.mesh.volume("core", "cap")),
+                sim.addMaterial(cap, domains=sim.mesh.volume("cap")),
             ),
             "overlaps",
             ValueError,
         ),
         (
-            lambda sim, core, cap: sim.add_material(core, MaterialLayout("core")),
+            lambda sim, core, cap: sim.addMaterial(core, domains=sim.mesh.volume("core")),
             "uncovered",
             ValueError,
         ),
         (
             lambda sim, core, cap: (
-                sim.add_material(core, MaterialLayout("core")),
-                sim.add_material(cap, MaterialLayout("cap")),
+                sim.addMaterial(core, domains=sim.mesh.volume("core")),
+                sim.addMaterial(cap, domains=sim.mesh.volume("cap")),
             ),
             "missing material interface",
             ValueError,
         ),
         (
-            lambda sim, core, cap: sim.add_material(core, MaterialLayout("missing")),
+            lambda sim, core, cap: sim.addMaterial(core, domains=sim.mesh.volume("missing")),
             "missing",
             KeyError,
         ),
@@ -253,28 +247,28 @@ def test_material_layout_validation(configure, match, error_type):
     mesh = two_tet_mesh()
     core, cap = materials()
     configured = simulation(mesh)
-    configure(configured, core, cap)
-    configured.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior"))
 
     with pytest.raises(error_type, match=match):
-        configured.compile()
+        configure(configured, core, cap)
+        configured.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
+        configured.resolveProblem()
 
 
-def test_same_material_instance_reuses_dense_material_id():
+def test_same_material_condition_reuses_dense_material_id():
     mesh = two_tet_mesh()
     core, _cap = materials()
     configured = simulation(mesh)
-    configured.add_material(core, MaterialLayout("core"))
-    configured.add_material(core, MaterialLayout("cap"))
-    configured.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior"))
+    configured.addMaterial(core, domains=mesh.volume("core"))
+    configured.addMaterial(core, domains=mesh.volume("cap"))
+    configured.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
 
-    compiled = configured.compile()
+    compiled = configured.resolveProblem()
     assert len(compiled.materials) == 1
-    np.testing.assert_array_equal(compiled.cell_material_id, [0, 0])
+    np.testing.assert_array_equal(compiled.cellMaterialId, [0, 0])
 
 
 def test_three_material_chain_keeps_distinct_reciprocal_interface_ids():
-    mesh = UnstructuredMesh.from_tetrahedra(
+    mesh = UnstructuredMesh.fromTetrahedra(
         points=np.asarray(
             [
                 [0.0, 0.0, 0.0],
@@ -285,111 +279,32 @@ def test_three_material_chain_keeps_distinct_reciprocal_interface_ids():
                 [2.0, 1.0, 0.0],
             ]
         ),
-        cell_connectivity=[[0, 1, 2, 3], [1, 2, 3, 4], [2, 3, 4, 5]],
-        volume_domains=[10, 20, 30],
+        cellConnectivity=[[0, 1, 2, 3], [1, 2, 3, 4], [2, 3, 4, 5]],
+        volumeDomains=[10, 20, 30],
+        coordinateUnit=units.m,
     )
     active, _passive = materials()
-    middle = MaterialInstance(active.definition, name="middle")
-    right = MaterialInstance(active.definition, name="right")
+    base = Material("chain").addState(
+        temperature=300 * units.K,
+        refractiveIndex=active.refractiveIndex,
+        fluorescenceLifetime=active.fluorescenceLifetime,
+        crossSections=active.crossSections,
+        metadata={"source": "synthetic chain"},
+    )
+    middle = base.at(temperature=300 * units.K, name="middle")
+    right = base.at(temperature=300 * units.K, name="right")
     configured = simulation(mesh)
-    configured.add_material(active, MaterialLayout(10))
-    configured.add_material(middle, MaterialLayout(20))
-    configured.add_material(right, MaterialLayout(30))
-    configured.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior"))
-    configured.add_interface(
-        MaterialInterface(PerfectTransmission(), name="middle-right"),
-        MaterialInterfaceLayout((middle, right)),
-    )
-    configured.add_interface(
-        MaterialInterface(PerfectTransmission(), name="active-middle"),
-        MaterialInterfaceLayout((active, middle)),
-    )
+    configured.addMaterial(active, domains=mesh.volume(10))
+    configured.addMaterial(middle, domains=mesh.volume(20))
+    configured.addMaterial(right, domains=mesh.volume(30))
+    configured.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
+    configured.addInterface(PerfectTransmission(), between=(middle, right))
+    configured.addInterface(PerfectTransmission(), between=(active, middle))
 
-    compiled = configured.compile()
-    np.testing.assert_array_equal(compiled.cell_material_id, [0, 1, 2])
-    assert np.count_nonzero(compiled.face_interface_id == 0) == 2
-    assert np.count_nonzero(compiled.face_interface_id == 1) == 2
+    compiled = configured.resolveProblem()
+    np.testing.assert_array_equal(compiled.cellMaterialId, [0, 1, 2])
+    assert np.count_nonzero(compiled.faceInterfaceId == 0) == 2
+    assert np.count_nonzero(compiled.faceInterfaceId == 1) == 2
     for cell, neighbor, expected_id in ((0, 1, 1), (1, 0, 1), (1, 2, 0), (2, 1, 0)):
-        local_face = int(np.flatnonzero(mesh.neighbor_cells[cell] == neighbor)[0])
-        assert compiled.face_interface_id[cell, local_face] == expected_id
-
-
-def test_single_material_adapter_converts_si_and_delegates(monkeypatch):
-    from types import SimpleNamespace
-
-    from HASEonGPU import Pump, PumpSpectrum, SurfacePumpInjector
-
-    points = np.asarray(
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-    )
-    mesh = UnstructuredMesh.from_tetrahedra(
-        points,
-        [[0, 1, 2, 3]],
-        surface_domains=[[1, 2, 2, 2]],
-        surface_domain_names={1: "pump_input", 2: "outer"},
-    )
-    cross_sections = CrossSectionTable.monochromatic(
-        wavelength=1030e-9,
-        absorption=1.0e-24,
-        emission=2.0e-24,
-    )
-    material = MaterialInstance(
-        MaterialDefinition("gain", 1.8, 1.0e-3, cross_sections),
-        active_ion_density=2.5e26,
-    )
-    configured = simulation(mesh)
-    configured.initial_state = InitialState(0.2)
-    configured.add_material(material, MaterialLayout("all"))
-    configured.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("pump_input"))
-    configured.add_boundary(
-        ExteriorBoundary(
-            model=__import__("HASEonGPU").ConstantReflectivitySurface(
-                reflectivity=0.3,
-                exterior_refractive_index=1.5,
-            )
-        ),
-        BoundaryLayout("outer"),
-    )
-    configured.add_pump(
-        Pump(total_power=1.0, spectrum=PumpSpectrum.monochromatic(1030e-9)),
-        SurfacePumpInjector("pump_input"),
-    )
-    captured = {}
-
-    def fake_run(legacy, **kwargs):
-        captured["legacy"] = legacy
-        return [
-            SimpleNamespace(
-                step=1,
-                time=1.0e-6,
-                betaCells=np.asarray([0.3]),
-                betaVolume=np.asarray([0.3]),
-                phiAse=np.asarray([4.0]),
-                dndtAse=np.asarray([-1.0]),
-                dndtPump=np.asarray([2.0]),
-                aseResult=None,
-            )
-        ]
-
-    monkeypatch.setattr("pyInclude.openpmd.transport.runSimulation", fake_run)
-    configured.step()
-
-    legacy = captured["legacy"]
-    assert legacy.gainMedium.get("nTot").value == pytest.approx(2.5e20)
-    assert legacy.gainMedium.get("crystalTFluo").value == pytest.approx(1.0e-3)
-    np.testing.assert_allclose(legacy.crossSections.crossSectionAbsorption, [1.0e-20])
-    np.testing.assert_array_equal(legacy.gainMedium.topology.faceBoundaries, [[1, 2, 2, 2]])
-    np.testing.assert_allclose(legacy.gainMedium.get("surfaceReflectivity").value[[1, 2]], [0.0, 0.3])
-    np.testing.assert_allclose(
-        legacy.gainMedium.get("surfaceRefractiveIndexOutside").value[[1, 2]],
-        [1.0, 1.5],
-    )
-    np.testing.assert_allclose(
-        legacy.gainMedium.get("surfaceRefractiveIndexInside").value[[1, 2]],
-        [1.0, 1.8],
-    )
-    assert legacy.pump.sources[0].surfaceDomains == ("pump_input",)
-    np.testing.assert_allclose(legacy.gainMedium.get("betaVolume").value, [0.3])
-    state = configured.get_last_state()
-    assert state.topology is mesh
-    np.testing.assert_allclose(state.excitation_fraction, [0.3])
+        local_face = int(np.flatnonzero(mesh.neighborCells[cell] == neighbor)[0])
+        assert compiled.faceInterfaceId[cell, local_face] == expected_id

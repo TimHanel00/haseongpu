@@ -11,7 +11,7 @@ from .unit_dimension import unitDimension
 
 
 HASE_TRANSPORT_ATTRIBUTES = {
-    "haseTopologyConvention": "vtkWedgeExtrudedTriangularPrism",
+    "haseTopologyConvention": "tet4UnstructuredMesh",
     "simulationType": "laserCrystalASE",
     "geometryType": "unstructuredTet4",
 }
@@ -44,7 +44,6 @@ SIMULATION_ATTRIBUTE_SPECS = (
     ExtensionAttributeSpec("reflectionMaxIterations", "reflection_max_iterations", "int", unit="count", unitDimension=unitDimension.reflectionMaxIterations),
     ExtensionAttributeSpec("reflectionTolerance", "reflection_tolerance", "float", unitDimension=unitDimension.reflectionTolerance),
     ExtensionAttributeSpec("surfaceReservoirSize", "surface_reservoir_size", "int", unit="count", unitDimension=unitDimension.surfaceReservoirSize),
-    ExtensionAttributeSpec("spectralResolution", "spectral_resolution", "int", unit="count", unitDimension=unitDimension.spectralResolution),
     ExtensionAttributeSpec("monochromatic", "monochromatic", "bool", unitDimension=unitDimension.monochromatic),
     ExtensionAttributeSpec(
         "maxSigmaAbsorption", "max_sigma_absorption", "float", unit="cm^2", unitSI=1.0e-4, unitDimension=unitDimension.crossSection
@@ -74,6 +73,7 @@ RESULT_ATTRIBUTE_SPECS = (
 
 
 class PointSchema(PrimitiveSchemaDefinition):
+    """Built-in sample-point fields, including ASE results and uncertainty."""
     primitiveName = "point"
     axes = ("point",)
     shapeField = "position"
@@ -143,6 +143,7 @@ class PointSchema(PrimitiveSchemaDefinition):
 
 
 class TriangleSchema(PrimitiveSchemaDefinition):
+    """Built-in triangular-face connectivity, geometry, and optical fields."""
     primitiveName = "triangle"
     axes = ("cell",)
     shapeField = "connectivity"
@@ -162,6 +163,7 @@ class TriangleSchema(PrimitiveSchemaDefinition):
 
 
 class PrismSchema(PrimitiveSchemaDefinition):
+    """Built-in prism/cell fields used by the legacy transport layout."""
     primitiveName = "prism"
     axes = ("cell", "layer")
     shapeField = "betaVolume"
@@ -180,10 +182,10 @@ BACKEND_FIELD_SPECS = (
 
 COMPONENT_FIELD_SPECS = (
     PrimitiveFieldSpec(
-        "lambdaAbsorption", "lambda_absorption", np.float64, axes=("wavelength",), unit="m", unitDimension=unitDimension.lambdaAbsorption, backendRequired=False
+        "lambdaAbsorption", "lambda_absorption", np.float64, axes=("wavelength",), unit="nm", unitSI=1.0e-9, unitDimension=unitDimension.lambdaAbsorption, backendRequired=False
     ),
     PrimitiveFieldSpec(
-        "lambdaEmission", "lambda_emission", np.float64, axes=("wavelength",), unit="m", unitDimension=unitDimension.lambdaEmission, backendRequired=False
+        "lambdaEmission", "lambda_emission", np.float64, axes=("wavelength",), unit="nm", unitSI=1.0e-9, unitDimension=unitDimension.lambdaEmission, backendRequired=False
     ),
     PrimitiveFieldSpec(
         "sigmaAbsorption",

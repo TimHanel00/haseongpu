@@ -238,6 +238,13 @@ class VolumeTopology:
     faceBoundaries: np.ndarray | None = None
     metadata: dict = field(default_factory=dict)
 
+    cellCenters: np.ndarray = field(init=False, repr=False)
+    """Cell-centroid coordinates in the same numeric unit as :attr:`points`."""
+    neighborCells: np.ndarray = field(init=False, repr=False)
+    """Adjacent cell ids by local face; negative ids denote exterior faces."""
+    neighborLocalFaces: np.ndarray = field(init=False, repr=False)
+    """Matching local-face ids on each non-exterior neighboring cell."""
+
     def __post_init__(self):
         self.points = _asPoints3(self.points)
         self.cellPointIndices = _asTetrahedra(self.cellPointIndices)
@@ -320,14 +327,17 @@ class VolumeTopology:
 
     @property
     def numberOfPoints(self):
+        """Number of vertices stored in :attr:`points`."""
         return int(self.points.shape[0])
 
     @property
     def numberOfCells(self):
+        """Number of tetrahedral volume cells."""
         return int(self.cellPointIndices.shape[0])
 
     @property
     def numberOfFacesPerCell(self):
+        """Number of local faces per Tet4 cell, always four."""
         return int(TET4_FACE_VERTICES.shape[0])
 
     @property
@@ -355,10 +365,12 @@ class VolumeTopology:
 
     @property
     def cellDomainNames(self):
+        """Mapping from numeric cell-domain tags to physical names."""
         return dict(self.metadata.get("cellDomainNames", {})) if isinstance(self.metadata, dict) else {}
 
     @property
     def surfaceDomainNames(self):
+        """Mapping from numeric exterior-face tags to physical names."""
         return dict(self.metadata.get("surfaceDomainNames", {})) if isinstance(self.metadata, dict) else {}
 
     def cellDomainMap(self):
@@ -411,6 +423,7 @@ class VolumeTopology:
         # Domain reassignment does not alter connectivity or geometry.  Keep
         # the value semantics of the previous constructor-based copy without
         # rebuilding all Tet4 faces, neighbors, normals, and volumes.
+        preserve_read_only = not np.asarray(self.points).flags.writeable
         topology = copy.copy(self)
         topology.points = self.points.copy()
         topology.cellPointIndices = self.cellPointIndices.copy()
@@ -436,6 +449,24 @@ class VolumeTopology:
         ):
             setattr(topology, name, np.asarray(getattr(self, name)).copy())
         topology.samplePoints = np.asarray(self.samplePoints, dtype=np.float64).copy()
+        if preserve_read_only:
+            for name in (
+                "points",
+                "cellPointIndices",
+                "cellTypes",
+                "cellDomains",
+                "faceBoundaries",
+                "facePointIndices",
+                "neighborCells",
+                "neighborLocalFaces",
+                "faceCenters",
+                "faceNormals",
+                "faceAreas",
+                "cellCenters",
+                "cellVolumes",
+                "samplePoints",
+            ):
+                getattr(topology, name).flags.writeable = False
         return topology
 
     def openPmdAttributes(self, context=None):

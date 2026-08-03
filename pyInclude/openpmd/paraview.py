@@ -5,6 +5,27 @@ from pathlib import Path
 import numpy as np
 
 
+_DEFAULT_PATTERN_STEM = "laserPumpCladding_%06T"
+_PARAVIEW_BACKEND_SUFFIXES = (
+    ("adios2", "bp"),
+    ("hdf5", "h5"),
+)
+
+
+def _default_series_pattern(io):
+    """Return a ParaView series pattern supported by the active provider."""
+    variants = getattr(io, "variants", {})
+    extensions = set(getattr(io, "file_extensions", ()))
+    for variant, suffix in _PARAVIEW_BACKEND_SUFFIXES:
+        if variants.get(variant, False) and suffix in extensions:
+            return f"{_DEFAULT_PATTERN_STEM}.{suffix}"
+    available = ", ".join(sorted(extensions)) or "none"
+    raise RuntimeError(
+        "writeParaviewState requires an openPMD-api build with ADIOS2 or HDF5 support; "
+        f"the active provider reports file extensions: {available}"
+    )
+
+
 def _access(io, name):
     if hasattr(io, "Access_Type"):
         return getattr(io.Access_Type, name)
@@ -44,12 +65,39 @@ def writeParaviewState(
     state,
     outputDir,
     claddingAbsorption=1.0,
-    pattern="laserPumpCladding_%06T.bp",
+    pattern=None,
     handleName="laserPumpCladding.pmd",
 ):
-    """Append one simulation state to an openPMD series and write a ParaView handle."""
+    """Append a state to an openPMD series and create a ParaView handle.
+
+    Parameters
+    ----------
+    state : TimeStepState
+        Completed :class:`TimeStepState`. Its ``step`` selects the openPMD
+        iteration and its physical ``time`` is stored in seconds.
+    outputDir : path-like
+        Directory containing the series and ``.pmd`` handle.
+    claddingAbsorption : float, optional
+        Numeric reciprocal-length factor multiplying :attr:`TimeStepState.phiAse`
+        for the derived
+        ``cladding_absorption`` record. It is retained for legacy visualization
+        workflows and must already use the intended reciprocal-length scaling.
+    pattern : str or path-like, optional
+        Optional openPMD filename pattern containing an iteration placeholder
+        such as ``%06T``. By default ADIOS2 ``.bp`` is used when available,
+        otherwise HDF5 ``.h5`` is selected from the active ``openpmd_api``
+        provider. An explicit pattern is not replaced.
+    handleName : str or path-like, optional
+        Name of the text ``.pmd`` file that points ParaView to ``pattern``.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to the written ParaView handle.
+    """
     import openpmd_api as io
 
+    pattern = _default_series_pattern(io) if pattern is None else str(pattern)
     output_dir = Path(outputDir)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / handleName).write_text(pattern + "\n", encoding="utf-8")
@@ -61,36 +109,41 @@ def writeParaviewState(
     series.set_software("HASEonGPU")
 
     iteration = series.iterations[int(state.step)]
-    iteration.time = float(state.time)
+    from hase_units import units
+
+    iteration.time = float(state.time.toValue(units.s))
     iteration.dt = 1.0
     iteration.time_unit_SI = 1.0
 
-    topology = state.topology
-    beta_volume = np.asarray(state.betaVolume)
-    cell_axes = ["cell"] if beta_volume.ndim == 1 else ["cell", "layer"]
-    _reset_scalar_record(iteration, "beta_volume", beta_volume, beta_volume.shape, cell_axes)
+    topology = state.mesh
+    beta_cells = np.asarray(state.sampledExcitationFraction)
+    primitive_shape = beta_cells.shape
+    _reset_scalar_record(iteration, "beta_cells", beta_cells, primitive_shape, ["point", "level"])
 
     if state.phiAse is not None:
         phi_ase = np.asarray(state.phiAse)
-        _reset_scalar_record(iteration, "phi_ase", phi_ase, phi_ase.shape, cell_axes)
+        _reset_scalar_record(iteration, "phi_ase", phi_ase, phi_ase.shape, ["point", "level"])
         _reset_scalar_record(
             iteration,
             "cladding_absorption",
             phi_ase * np.float64(claddingAbsorption),
             phi_ase.shape,
-            cell_axes,
+            ["point", "level"],
         )
-    if state.dndtAse is not None:
-        dndt_ase = np.asarray(state.dndtAse)
-        _reset_scalar_record(iteration, "dndt_ase", dndt_ase, dndt_ase.shape, cell_axes)
-    if state.dndtPump is not None:
-        dndt_pump = np.asarray(state.dndtPump)
-        _reset_scalar_record(iteration, "dndt_pump", dndt_pump, dndt_pump.shape, cell_axes)
+    if state.sampledDExcitationDtAse is not None:
+        dndt_ase = np.asarray(state.sampledDExcitationDtAse)
+        _reset_scalar_record(iteration, "dndt_ase", dndt_ase, dndt_ase.shape, ["point", "level"])
+    if state.dExcitationDtPump is not None:
+        dndt_pump = np.asarray(state.dExcitationDtPump)
+        _reset_scalar_record(iteration, "dndt_pump", dndt_pump, dndt_pump.shape, ["point", "level"])
+    if state.excitationFraction is not None:
+        beta_volume = np.asarray(state.excitationFraction)
+        _reset_scalar_record(iteration, "beta_volume", beta_volume, beta_volume.shape, ["cell", "layer"])
 
     if topology is not None:
         _reset_scalar_record(iteration, "points", np.asarray(topology.points), topology.points.shape, ["point", "coordinate"])
-        if hasattr(topology, "cell_connectivity"):
-            connectivity = np.asarray(topology.cell_connectivity, dtype=np.uint32)
+        if hasattr(topology, "cellConnectivity"):
+            connectivity = np.asarray(topology.cellConnectivity, dtype=np.uint32)
             _reset_scalar_record(
                 iteration,
                 "cell_point_indices",

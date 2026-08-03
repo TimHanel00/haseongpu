@@ -18,9 +18,15 @@ class TimeIntegrationSolver:
     Python no longer performs time-step algorithms. ``Simulation`` serializes
     this descriptor to openPMD run-control attributes and the C++/Alpaka backend
     executes the selected integrator.
+
+    Parameters
+    ----------
+    name
+        Native run-control identifier for the compiled algorithm.
     """
 
     name: str
+    """Native run-control identifier selecting the time-integration algorithm."""
 
 
 class ExplicitEuler(TimeIntegrationSolver):
@@ -59,7 +65,15 @@ class FrozenPhiAseRungeKutta4(TimeIntegrationSolver):
 
 
 class ImplicitEuler(TimeIntegrationSolver):
-    """Fixed-iteration implicit Euler compiled integrator descriptor."""
+    """Fixed-iteration implicit Euler compiled integrator descriptor.
+
+    Parameters
+    ----------
+    iterations
+        Positive maximum nonlinear/fixed-point iterations per time step.
+    tolerance
+        Non-negative convergence tolerance for the implicit update.
+    """
 
     def __init__(self, iterations=8, tolerance=1e-10):
         super().__init__("implicit-euler")

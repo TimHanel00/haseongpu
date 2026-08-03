@@ -16,10 +16,12 @@ from HASEonGPU import (
     Simulation as PublicSimulation,
     SuperGaussianPumpProfile,
     SurfacePumpInjector,
+    UnstructuredMesh,
     UniformPumpProfile,
+    units,
 )
 
-def test_public_pump_and_simulation_signatures_use_snake_case():
+def test_public_pump_and_simulation_signatures_use_lower_camel_case():
     public_classes = (
         GaussianPump,
         MonteCarloPumpSolver,
@@ -34,42 +36,48 @@ def test_public_pump_and_simulation_signatures_use_snake_case():
     )
     for cls in public_classes:
         for name in inspect.signature(cls).parameters:
-            assert not any(character.isupper() for character in name), (cls.__name__, name)
+            assert "_" not in name, (cls.__name__, name)
 
 
 def test_gaussian_pump_keeps_physics_separate_from_injection_and_solver():
+    mesh = UnstructuredMesh.fromTetrahedra(
+        np.eye(4, 3),
+        [[0, 1, 2, 3]],
+        surfaceDomains=[[1, 1, 1, 1]],
+        coordinateUnit=units.cm,
+    )
     pump = GaussianPump(
-        total_power=12.5,
-        spectrum=PumpSpectrum.monochromatic(940e-9),
-        waist=(1.5, 1.25),
+        totalPower=12.5 * units.W,
+        spectrum=PumpSpectrum.monochromatic(940 * units.nm),
+        waist=np.asarray([1.5, 1.25]) * units.cm,
         exponent=40,
-        angular_distribution=PumpAngularDistribution.collimated(),
+        angularDistribution=PumpAngularDistribution.collimated(),
         name="lower_pump",
     )
-    injector = SurfacePumpInjector(surface_domains=("lower",))
-    solver = MonteCarloPumpSolver(ray_count=1234, seed=99, max_steps=4)
+    injector = SurfacePumpInjector(mesh.surface(1))
+    solver = MonteCarloPumpSolver(rayCount=1234, seed=99, maxSteps=4)
 
-    assert pump.total_power == 12.5
-    assert pump.profile.radius_u == 1.5
-    assert pump.profile.radius_v == 1.25
-    assert pump.profile.weight_at([[0.0, 0.0, 0.0]])[0] == pytest.approx(1.0)
+    assert pump.totalPower.toValue(units.W) == pytest.approx(12.5)
+    assert pump.profile.radiusU.toValue(units.cm) == pytest.approx(1.5)
+    assert pump.profile.radiusV.toValue(units.cm) == pytest.approx(1.25)
+    assert pump.profile.weightAt([[0.0, 0.0, 0.0]], units.cm)[0] == pytest.approx(1.0)
     np.testing.assert_array_equal(pump.spectrum.weights, [1.0])
-    assert injector.surface_domains == ("lower",)
-    assert solver == MonteCarloPumpSolver(ray_count=1234, seed=99, max_steps=4)
-    assert "cross_sections" not in inspect.signature(Pump).parameters
-    assert not hasattr(pump, "cross_sections")
+    assert injector.surface.names == ("1",)
+    assert solver == MonteCarloPumpSolver(rayCount=1234, seed=99, maxSteps=4)
+    assert "crossSections" not in inspect.signature(Pump).parameters
+    assert not hasattr(pump, "crossSections")
 
 
-def test_uniform_cone_uses_snake_case_sampling_controls():
-    distribution = PumpAngularDistribution.uniform_cone(
+def test_uniform_cone_uses_lower_camel_case_sampling_controls():
+    distribution = PumpAngularDistribution.uniformCone(
         np.pi / 6.0,
-        polar_samples=2,
-        azimuthal_samples=3,
+        polarSamples=2,
+        azimuthalSamples=3,
     )
     assert distribution.weights.size == 6
     assert distribution.weights.sum() == pytest.approx(1.0)
-    assert np.all(distribution.polar_angles < np.pi / 6.0)
+    assert np.all(distribution.polarAngles < np.pi / 6.0)
 
 
 def test_simulation_step_signature_matches_picmi_default():
-    assert inspect.signature(PublicSimulation.step).parameters["nsteps"].default == 1
+    assert inspect.signature(PublicSimulation.step).parameters["numberOfSteps"].default == 1

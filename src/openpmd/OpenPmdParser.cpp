@@ -2,7 +2,6 @@
 #include <openPMD/openPMD.hpp>
 #include <openpmd/OpenPmdParser.hpp>
 #include <openpmd/SimulationSnapshotWriter.hpp>
-#include <utils/interpolation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -51,7 +50,6 @@ namespace
         constexpr char const* srmRemainingFraction = "srm_remaining_fraction";
         constexpr char const* srmMaxIterations = "srm_max_iterations";
         constexpr char const* srmDivergenceStreak = "srm_divergence_streak";
-        constexpr char const* spectralResolution = "spectral_resolution";
         constexpr char const* monochromatic = "monochromatic";
         constexpr char const* maxSigmaAbsorption = "max_sigma_absorption";
         constexpr char const* maxSigmaEmission = "max_sigma_emission";
@@ -129,7 +127,7 @@ namespace
 
     constexpr char const* OPENPMD_HDF5_CONFIG = R"({"backend":"hdf5"})";
     constexpr char const* OPENPMD_DEFAULT_CONFIG = "{}";
-    constexpr char const* HASE_TRANSPORT_VERSION = "0.1";
+    constexpr char const* HASE_TRANSPORT_VERSION = "0.2";
 
     bool hasSuffix(std::string_view value, std::string_view suffix)
     {
@@ -964,7 +962,6 @@ namespace hase::openpmd
             iteration,
             field::surfaceReservoirSize,
             simulation.experiment.surfaceReservoirSize);
-        validateUnchangedAttribute<unsigned>(iteration, field::spectralResolution, simulation.experiment.spectral);
         validateUnchangedAttribute<bool>(iteration, field::monochromatic, simulation.experiment.monochromatic);
         validateUnchangedAttribute<double>(iteration, field::maxSigmaAbsorption, simulation.experiment.maxSigmaA);
         validateUnchangedAttribute<double>(iteration, field::maxSigmaEmission, simulation.experiment.maxSigmaE);
@@ -1175,11 +1172,6 @@ namespace hase::openpmd
                 "is retired; configure relative_standard_error_threshold instead");
         }
 
-        auto const spectralResolution = attribute<unsigned>(iteration, field::spectralResolution);
-        if(spectralResolution == 0u)
-        {
-            validationError(field::spectralResolution, "must be greater than zero");
-        }
         auto loadRawSpectrum = [&](std::string const& name, std::string const& unit)
         {
             auto const sampleCount = componentExtent(iteration, name, io::MeshRecordComponent::SCALAR);
@@ -1194,33 +1186,29 @@ namespace hase::openpmd
                 false,
                 unit);
         };
-        auto lambdaA = loadRawSpectrum(prefix + "lambda_absorption", "m");
-        auto lambdaE = loadRawSpectrum(prefix + "lambda_emission", "m");
+        auto lambdaA = loadRawSpectrum(prefix + "lambda_absorption", "nm");
+        auto lambdaE = loadRawSpectrum(prefix + "lambda_emission", "nm");
         auto sigmaA = loadRawSpectrum(prefix + "sigma_absorption", "cm^2");
         auto sigmaE = loadRawSpectrum(prefix + "sigma_emission", "cm^2");
-        auto interpolateSpectrum
+        auto validateSpectrum
             = [&](std::string const& name, std::vector<double>& wavelengths, std::vector<double>& values)
         {
             if(wavelengths.size() != values.size())
             {
                 validationError(name, "wavelength and cross-section sample counts must match");
             }
-            if(spectralResolution < wavelengths.size())
+            if(wavelengths.empty())
             {
-                validationError(
-                    field::spectralResolution,
-                    "must be greater than or equal to every input spectrum sample count");
+                validationError(name, "must contain at least one sample");
             }
-            if(spectralResolution == wavelengths.size())
-            {
-                return;
-            }
-            auto interpolatedValues = hase::utils::interpolateLinear(values, wavelengths, spectralResolution);
-            wavelengths = hase::utils::interpolateLinear(wavelengths, wavelengths, spectralResolution);
-            values = std::move(interpolatedValues);
         };
-        interpolateSpectrum("absorption spectrum", lambdaA, sigmaA);
-        interpolateSpectrum("emission spectrum", lambdaE, sigmaE);
+        validateSpectrum("absorption spectrum", lambdaA, sigmaA);
+        validateSpectrum("emission spectrum", lambdaE, sigmaE);
+        if(lambdaA.size() != lambdaE.size())
+        {
+            validationError("material spectra", "absorption and emission sample counts must match before transport");
+        }
+        auto const spectralSampleCount = static_cast<unsigned>(lambdaA.size());
 
         core::ExperimentParameters experiment(
             renamedAttribute<unsigned>(iteration, field::minRays, field::legacyMinRays),
@@ -1233,7 +1221,7 @@ namespace hase::openpmd
             0.0,
             attribute<double>(iteration, field::relativeStandardErrorThreshold),
             attribute<bool>(iteration, field::useReflections),
-            spectralResolution,
+            spectralSampleCount,
             attributeOr<bool>(iteration, field::monochromatic, false));
 
         experiment.propagationMode = propagationMode;
@@ -1690,7 +1678,7 @@ namespace hase::openpmd
                 prefix + "lambda_absorption",
                 experiment.lambdaA,
                 {"wavelength"},
-                {experiment.spectral},
+                {experiment.spectralSampleCount},
                 false,
                 "m");
             writeFlatScalar<double>(
@@ -1698,7 +1686,7 @@ namespace hase::openpmd
                 prefix + "lambda_emission",
                 experiment.lambdaE,
                 {"wavelength"},
-                {experiment.spectral},
+                {experiment.spectralSampleCount},
                 false,
                 "m");
             writeFlatScalar<double>(
@@ -1706,7 +1694,7 @@ namespace hase::openpmd
                 prefix + "sigma_absorption",
                 experiment.sigmaA,
                 {"wavelength"},
-                {experiment.spectral},
+                {experiment.spectralSampleCount},
                 false,
                 "cm^2",
                 1.0e-4,
@@ -1716,7 +1704,7 @@ namespace hase::openpmd
                 prefix + "sigma_emission",
                 experiment.sigmaE,
                 {"wavelength"},
-                {experiment.spectral},
+                {experiment.spectralSampleCount},
                 false,
                 "cm^2",
                 1.0e-4,

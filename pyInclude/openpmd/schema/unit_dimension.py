@@ -13,6 +13,9 @@ INV_VOLUME = (-3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 PHOTON_FLUX = (-2.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0)
 RATE = (0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0)
 
+#: Named seven-component SI dimension tuples used by HASE openPMD fields and
+#: extension attributes. Tuple order is length, mass, time, electric current,
+#: temperature, amount, and luminous intensity.
 unitDimension = SimpleNamespace(
     dimensionless=DIMENSIONLESS,
     length=LENGTH,
@@ -51,7 +54,6 @@ unitDimension = SimpleNamespace(
     srmRemainingFraction=DIMENSIONLESS,
     srmMaxIterations=DIMENSIONLESS,
     srmDivergenceStreak=DIMENSIONLESS,
-    spectralResolution=DIMENSIONLESS,
     lambdaResolution=DIMENSIONLESS,
     monochromatic=DIMENSIONLESS,
     maxSigmaAbsorption=CROSS_SECTION,

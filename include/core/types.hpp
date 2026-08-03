@@ -72,7 +72,6 @@ namespace hase::core
         static inline std::string const max_rays = "max-rays";
         static inline std::string const relativeStandardError = "relative-standard-error-threshold";
         static inline std::string const reflection = "reflection";
-        static inline std::string const spectral = "spectral-resolution";
         static inline std::string const monochromatic = "monochromatic";
     };
 
@@ -262,7 +261,7 @@ namespace hase::core
             double maxSigmaE,
             double relativeStandardErrorThreshold,
             bool useReflections,
-            unsigned spectral,
+            unsigned spectralSampleCount,
             bool monochromatic = false)
             : minRays(minRays)
             , maxRays(maxRays)
@@ -275,7 +274,7 @@ namespace hase::core
             , relativeStandardErrorThreshold(relativeStandardErrorThreshold)
             , useReflections(useReflections)
             , monochromatic(monochromatic)
-            , spectral(spectral)
+            , spectralSampleCount(spectralSampleCount)
         {
         }
 
@@ -324,7 +323,7 @@ namespace hase::core
         double relativeStandardErrorThreshold;
         bool useReflections;
         bool monochromatic = false;
-        unsigned spectral;
+        unsigned spectralSampleCount;
         unsigned reflectionMaxIterations = 40u;
         double reflectionTolerance = 1.0e-4;
         unsigned surfaceReservoirSize = 32u;

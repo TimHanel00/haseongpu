@@ -8,19 +8,18 @@
 
 import numpy as np
 
-from _source_tree_import import ensure_hase_importable
+try:
+    from ._source_tree_import import ensure_hase_importable
+except ImportError:
+    from _source_tree_import import ensure_hase_importable
 
 ensure_hase_importable()
 
 from HASEonGPU import (  # noqa: E402
-    BoundaryLayout,
     ConstantReflectivitySurface,
     CrossSectionTable,
-    ExteriorBoundary,
     InitialState,
-    MaterialDefinition,
-    MaterialInstance,
-    MaterialLayout,
+    Material,
     MonteCarloASESolver,
     MonteCarloPumpSolver,
     Pump,
@@ -29,84 +28,90 @@ from HASEonGPU import (  # noqa: E402
     Simulation,
     SurfacePumpInjector,
     UnstructuredMesh,
+    units,
 )
 
 
 def print_state(state):
     print(
-        f"step={state.step:03d} time={state.time:.3e}s "
-        f"mean_excitation={state.excitation_fraction.mean():.6e}"
+        f"step={state.step:03d} time={float(state.time.toValue(units.s)):.3e}s "
+        f"mean_excitation={state.excitationFraction.mean():.6e}"
     )
 
 
 def build_simulation():
     # docs:start: mesh
     # Mesh topology and domain identity contain no optical material data.
-    mesh = UnstructuredMesh.from_tetrahedra(
+    mesh = UnstructuredMesh.fromTetrahedra(
         points=np.asarray(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
         ),
-        cell_connectivity=[[0, 1, 2, 3]],
-        volume_domains=[10],
-        surface_domains=np.ones((1, 4), dtype=np.int32),
-        volume_domain_names={10: "crystal"},
-        surface_domain_names={1: "exterior"},
+        cellConnectivity=[[0, 1, 2, 3]],
+        volumeDomains=[10],
+        surfaceDomains=np.ones((1, 4), dtype=np.int32),
+        volumeDomainNames={10: "crystal"},
+        surfaceDomainNames={1: "exterior"},
+        coordinateUnit=units.cm,
     )
     # docs:end: mesh
 
     # docs:start: material
     cross_sections = CrossSectionTable(
-        wavelengths=[900e-9, 1030e-9],
-        absorption=[1.1e-25, 1.2e-25],
-        emission=[2.0e-24, 2.48e-24],
+        wavelengths=np.asarray([900, 1030]) * units.nm,
+        absorption=np.asarray([1.1e-21, 1.2e-21]) * units.cm**2,
+        emission=np.asarray([2.0e-20, 2.48e-20]) * units.cm**2,
     )
-    yag = MaterialDefinition(
-        name="Yb:YAG",
-        refractive_index=1.82,
-        fluorescence_lifetime=941e-6,
-        cross_sections=cross_sections,
+    yag = Material("Yb:YAG").addState(
+        temperature=300 * units.K,
+        refractiveIndex=1.82,
+        fluorescenceLifetime=941 * units.us,
+        crossSections=cross_sections,
+        metadata={"source": "synthetic minimal example"},
     )
-    crystal = MaterialInstance(yag, active_ion_density=2.76e26)
+    crystal = yag.at(
+        temperature=300 * units.K,
+        activeIonDensity=2.76e20 / units.cm**3,
+    )
     # docs:end: material
 
     # docs:start: simulation
     simulation = Simulation(
         mesh=mesh,
-        ase_solver=MonteCarloASESolver(
-            min_rays=100_000,
-            max_rays=100_000,
+        aseSolver=MonteCarloASESolver(
+            minRays=100_000,
+            maxRays=100_000,
             backend="Host_Cpu_CpuSerial",
         ),
-        pump_solver=MonteCarloPumpSolver(ray_count=100_000),
-        time_integrator=RungeKutta4(),
-        time_step_size=1e-5,
-        initial_state=InitialState(excitation_fraction=0.0),
-        max_time=1e-3,
+        pumpSolver=MonteCarloPumpSolver(rayCount=100_000),
+        timeIntegrator=RungeKutta4(),
+        timeStepSize=10 * units.us,
+        initialState=InitialState(excitationFraction=0 * units.one),
+        maxTime=1 * units.ms,
     )
-    simulation.add_material(crystal, MaterialLayout("crystal"))
-    simulation.add_boundary(
-        ExteriorBoundary(ConstantReflectivitySurface(reflectivity=0.0)),
-        BoundaryLayout("exterior"),
+    simulation.addMaterial(crystal, domains=mesh.volume("crystal"))
+    simulation.addBoundary(
+        ConstantReflectivitySurface(reflectivity=0.0),
+        domains=mesh.exteriorFaces,
     )
     # docs:end: simulation
 
     # docs:start: pump
-    simulation.add_pump(
-        Pump(total_power=16e3, spectrum=PumpSpectrum.monochromatic(940e-9)),
-        SurfacePumpInjector("exterior"),
+    simulation.addPump(
+        Pump(totalPower=16 * units.kW, spectrum=PumpSpectrum.monochromatic(940 * units.nm)),
+        SurfacePumpInjector(mesh.exteriorFaces),
     )
     # docs:end: pump
-    simulation.on_step(print_state)
+    simulation.onStep(print_state)
     return simulation
 
 
 def main():
     simulation = build_simulation()
 
-    # Compilation checks domain coverage without launching the native backend.
-    problem = simulation.compile()
+    # Problem resolution checks domain coverage without launching the backend.
+    problem = simulation.resolveProblem()
     print(
-        f"compiled {problem.mesh.number_of_cells} cell(s) with "
+        f"resolved {problem.mesh.numberOfCells} cell(s) with "
         f"{len(problem.materials)} material(s)"
     )
 

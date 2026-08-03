@@ -59,7 +59,7 @@ def _loadBackendNames():
 
 
 class AlpakaBackends:
-    """Namespace of backend strings accepted by ``PhiASE`` and ``calcPhiASE``.
+    """Namespace of backend strings accepted by ``MonteCarloASESolver`` and ``calcPhiASE``.
 
     Backend availability depends on how the C++ extension was compiled. Use
     ``AlpakaBackends.all()`` to inspect the strings for this environment.

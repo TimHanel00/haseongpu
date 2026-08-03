@@ -10,7 +10,7 @@ from example import _source_tree_import
 
 
 def test_example_helper_accepts_installed_material_mesh_api(monkeypatch):
-    installed = SimpleNamespace(UnstructuredMesh=object(), MaterialDefinition=object())
+    installed = SimpleNamespace(UnstructuredMesh=object(), MaterialLibrary=object())
     monkeypatch.setitem(sys.modules, "HASEonGPU", installed)
 
     def unexpected_fallback():

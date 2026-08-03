@@ -10,24 +10,24 @@ import sys
 from pathlib import Path
 
 
-def repoRoot() -> Path:
+def repo_root() -> Path:
     return Path(os.environ.get("GITHUB_WORKSPACE", Path(__file__).resolve().parents[1]))
 
 
-def launchCommand(openpmdBackend: str, outputDir: Path) -> list[str]:
+def launch_command(openpmd_backend: str, output_dir: Path) -> list[str]:
     command = [
         sys.executable,
-        str(repoRoot() / "example" / "laserPumpCladding.py"),
+        str(repo_root() / "example" / "laserPumpCladding.py"),
         "--backend",
         "Host_Cpu_CpuSerial",
         "--openpmd-backend",
-        openpmdBackend,
-        "--timeSteps",
+        openpmd_backend,
+        "--time-steps",
         "1",
-        "--pumpSteps",
+        "--pump-steps",
         "1",
         "--vtk-output-dir",
-        str(outputDir),
+        str(output_dir),
         "--rng-seed",
         "5489",
     ]
@@ -37,22 +37,22 @@ def launchCommand(openpmdBackend: str, outputDir: Path) -> list[str]:
     return command
 
 
-def launchLaserPump(openpmdBackend: str, outputDir: Path) -> int:
-    outputDir = outputDir.resolve()
-    outputDir.mkdir(parents=True, exist_ok=True)
+def launch_laser_pump(openpmd_backend: str, output_dir: Path) -> int:
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
-        launchCommand(openpmdBackend, outputDir),
-        cwd=outputDir,
+        launch_command(openpmd_backend, output_dir),
+        cwd=output_dir,
         check=False,
     ).returncode
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("openpmdBackend")
-    parser.add_argument("outputDir", type=Path)
+    parser.add_argument("openpmd_backend")
+    parser.add_argument("output_dir", type=Path)
     args = parser.parse_args(argv)
-    return launchLaserPump(args.openpmdBackend, args.outputDir)
+    return launch_laser_pump(args.openpmd_backend, args.output_dir)
 
 
 if __name__ == "__main__":
