@@ -13,7 +13,7 @@ algorithms:
 
    simulation = Simulation(
        # ...
-       time_integrator=FrozenPhiAseRungeKutta4(),
+       timeIntegrator=FrozenPhiAseRungeKutta4(),
    )
 
 Available descriptors are:
@@ -44,7 +44,7 @@ runtime:
    available = AlpakaBackends.all()
    if not available:
        raise RuntimeError("HASEonGPU was built without an available backend")
-   ase_solver = MonteCarloASESolver(backend=available[0])
+   aseSolver = MonteCarloASESolver(backend=available[0])
 
 ``known()`` is an alias for ``all()``. Names that are valid Python identifiers
 are also class attributes. These are Alpaka compute names, not openPMD backend
@@ -59,20 +59,40 @@ ParaView. It can be registered directly as a callback:
 
 .. code-block:: python
 
-   simulation.on_step(writeParaviewState, "output/openpmd")
+   simulation.onStep(writeParaviewState, "output/openpmd")
+
+When ``pattern`` is omitted, the exporter inspects the active Python
+``openpmd_api`` provider. It uses an ADIOS2 ``.bp`` series when ADIOS2 is
+available and otherwise falls back to HDF5 ``.h5``. An explicitly supplied
+pattern remains authoritative, so its suffix must name a backend supported by
+that provider.
+
+``writeVtkState(file_name, state, ...)`` writes the same public state as a
+legacy ASCII Tet4 VTK file. Arrays whose length matches the number of mesh
+points become ``POINT_DATA``; arrays matching the number of cells become
+``CELL_DATA``:
+
+.. code-block:: python
+
+   writeVtkState("output/ase-{step}.vtk", state, field="volumePhiAse")
+   writeVtkState("output/state-{step}.vtk", state,
+                   field=("excitationFraction", "volumeRelativeStandardError"))
+
+Filenames may contain ``{step}``, ``{time}``, and ``{field}`` placeholders.
+Use ``fields={"gain": gain_array}`` to write explicitly named custom arrays.
 
 For custom analysis, consume the NumPy views directly:
 
 .. code-block:: python
 
    def save_excitation(state, output_dir):
-       np.save(output_dir / f"beta-{state.step:06d}.npy", state.excitation_fraction)
+       np.save(output_dir / f"beta-{state.step:06d}.npy", state.excitationFraction)
 
-   simulation.on_step(save_excitation, output_dir)
+   simulation.onStep(save_excitation, output_dir)
 
-The former ``vtkWedge`` and ``calcGainFromState`` helpers are not part of the
-public composition API. Repository-owned compatibility regressions still use
-them privately for historical wedge references.
+The former ``vtkWedge`` and ``calcGainFromState`` modules have been removed.
+Use ``writeVtkState`` for VTK output and compute application-specific derived
+fields explicitly before passing them through ``fields=...``.
 
 Low-level openPMD schema helpers
 --------------------------------
@@ -81,4 +101,11 @@ The public namespace still exposes schema-building objects such as
 ``PrimitiveFieldSpec``, ``PointSchema``, ``TriangleSchema``, and
 ``PrismSchema`` for advanced openPMD tooling. They do not replace
 ``UnstructuredMesh`` or the material/layout API and are not required for a
-normal simulation.
+normal simulation. Field specifications accept a physical ``Unit`` and expose
+conversion helpers after resolution to ``FieldSpec``:
+
+.. code-block:: python
+
+   spec = PrimitiveFieldSpec("temperature", float, unit=units.K)
+   field = spec.toFieldSpec(("cell",))
+   stored = field.storage_value(300 * units.K)

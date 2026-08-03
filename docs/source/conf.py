@@ -41,6 +41,11 @@ autosummary_generate = True
 autosummary_generate_overwrite = True
 autodoc_typehints = "description"
 autodoc_member_order = "bysource"
+autodoc_default_options = {
+    "members": True,
+    "member-order": "bysource",
+    "show-inheritance": True,
+}
 
 templates_path = ['_templates']
 # Autosummary pages are generated into an ignored source directory. Exclude

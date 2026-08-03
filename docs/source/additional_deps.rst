@@ -8,6 +8,11 @@ in ``pyproject.toml``. Source builds and tests may still need development tools
 and runtime libraries from the operating system, especially in minimal
 containers.
 
+There are two separate uses of HDF5. The Python material library uses ``h5py``,
+which pip installs as a normal Python dependency. ``libhdf5-dev`` is needed
+only when building against a system openPMD/HDF5 provider (or when pip cannot
+use a compatible ``h5py`` wheel and must compile it locally).
+
 On Ubuntu-like systems, a CPU-only source install or test environment commonly
 starts with:
 

@@ -20,7 +20,6 @@ from material_library import (
 )
 from material_library.hdf5 import FORMAT_NAME, FORMAT_VERSION
 from hase_units import units
-from material_library.cli import main as convert_text_material
 
 
 def spectra(scale=1.0):
@@ -299,39 +298,3 @@ def test_builtin_yb_yag_cross_sections_are_recorded_at_room_temperature():
             temperature.attrs["unitDimension"],
             [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
         )
-
-
-def test_text_conversion_utility_creates_readable_hdf5(tmp_path):
-    source = tmp_path / "text"
-    source.mkdir()
-    np.savetxt(source / "lambda_a.txt", [900.0, 1000.0])
-    np.savetxt(source / "lambda_e.txt", [900.0, 1000.0])
-    np.savetxt(source / "sigma_a.txt", [1.0e-21, 2.0e-21])
-    np.savetxt(source / "sigma_e.txt", [3.0e-21, 4.0e-21])
-    target = tmp_path / "converted.h5"
-
-    with pytest.warns(LegacyMaterialTextWarning):
-        convert_text_material(
-            [
-                str(source),
-                str(target),
-                "--key",
-                "TestMaterial",
-                "--name",
-                "test material",
-                "--refractive-index",
-                "1.7",
-                "--fluorescence-lifetime-seconds",
-                "0.002",
-                "--temperature-kelvin",
-                "295",
-                "--source",
-                "test fixture",
-            ]
-        )
-
-    restored = MaterialLibrary.fromHdf5(target)["TestMaterial"]
-    state = restored.at(temperature=295 * units.K)
-    assert state.refractiveIndex == pytest.approx(1.7)
-    assert state.fluorescenceLifetime.toValue(units.ms) == pytest.approx(2.0)
-    assert state.metadata["source"] == "test fixture"

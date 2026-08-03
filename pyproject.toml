@@ -58,7 +58,6 @@ dev = [
 
 [project.scripts]
 hase-configure = "pyInclude.config:main"
-hase-material-convert = "material_library.cli:main"
 
 [project.urls]
 Documentation = "https://haseongpu.readthedocs.io/en/latest/"

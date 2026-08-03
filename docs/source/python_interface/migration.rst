@@ -20,37 +20,40 @@ Object mapping
      - ``UnstructuredMesh``
      - Public geometry is explicit Tet4 topology with immutable views.
    * - ``GainMedium``
-     - ``MaterialDefinition`` + ``MaterialInstance`` + layouts + ``InitialState``
+     - ``Material`` + ``MaterialCondition`` + mesh selections + ``InitialState``
      - Material physics and evolving excitation no longer live in the mesh.
    * - ``SpectralDecomposition`` or ``CrossSectionData``
      - ``CrossSectionTable``
-     - One wavelength grid, expressed in metres and square metres.
+     - One wavelength grid with explicit length and area units.
    * - ``PhiASE``
      - ``MonteCarloASESolver``
-     - Constructor keywords are snake case, for example ``min_rays``.
-   * - old ``Simulation(gain_medium=..., phi_ase=...)``
-     - ``Simulation(mesh=..., ase_solver=..., ...)``
-     - Physics is registered after construction with ``add_*`` methods.
-   * - pump ``cross_sections``
+     - Constructor keywords use lower camel case, for example ``minRays``.
+   * - old ``Simulation(gain_medium=..., phiASE=...)``
+     - ``Simulation(mesh=..., aseSolver=..., ...)``
+     - Physics is registered after construction with ``addMaterial``,
+       ``addBoundary``, ``addInterface``, and ``addPump``.
+   * - pump ``crossSections``
      - the selected material's ``CrossSectionTable``
      - A pump describes incident light; interaction data belongs to material.
    * - ``TransportResult``
-     - ``TimeStepState`` from ``on_step`` or ``get_last_state()``
+     - ``TimeStepState`` from ``onStep`` or ``getLastState()``
      - Completed-step state is the supported public result surface.
 
 Units
 -----
 
-The public composition API uses SI values. When porting historical setup data:
+The public composition API uses explicit unit-bearing values. Attach the unit
+present in the source data instead of applying a manual SI conversion:
 
-* wavelengths in nanometres are multiplied by ``1e-9``;
-* cross sections in ``cm^2`` are multiplied by ``1e-4``;
-* active-ion density in ``cm^-3`` is multiplied by ``1e6``;
-* attenuation in ``cm^-1`` is multiplied by ``100``.
+.. code-block:: python
 
-``CrossSectionTable.from_directory(path)`` reads the historical
+   wavelength = 940 * units.nm
+   density = 2.76e20 / units.cm**3
+
+``CrossSectionTable.fromTextDirectory(path)`` reads the historical
 ``lambda_a.txt``, ``sigma_a.txt``, ``lambda_e.txt``, and ``sigma_e.txt`` files
-and performs the wavelength/cross-section conversions.
+and declares their historical ``nm`` and ``cm^2`` units. It emits a warning;
+new material databases use the versioned HDF5 representation.
 
 Before and after
 ----------------
@@ -61,34 +64,32 @@ responsibility:
 
 .. code-block:: python
 
-   mesh = UnstructuredMesh.from_file("crystal.msh")
-   spectra = CrossSectionTable.from_directory("material-data")
-   definition = MaterialDefinition(
-       "Yb:YAG",
-       refractive_index=1.82,
-       fluorescence_lifetime=941e-6,
-       cross_sections=spectra,
+   mesh = UnstructuredMesh.fromFile("crystal.msh", coordinateUnit=units.mm)
+   spectra = CrossSectionTable.fromTextDirectory("material-data")
+   yag = Material("Yb:YAG").addState(
+       temperature=None,
+       refractiveIndex=1.82,
+       fluorescenceLifetime=941 * units.us,
+       crossSections=spectra,
+       metadata={"temperature_status": "not documented by source"},
    )
-   material = MaterialInstance(definition, active_ion_density=2.76e26)
+   material = yag.at(activeIonDensity=2.76e20 / units.cm**3)
 
    simulation = Simulation(
        mesh=mesh,
-       ase_solver=MonteCarloASESolver(
-           min_rays=100_000,
-           max_rays=1_000_000,
+       aseSolver=MonteCarloASESolver(
+           minRays=100_000,
+           maxRays=1_000_000,
            backend="Host_Cpu_CpuSerial",
        ),
-       pump_solver=MonteCarloPumpSolver(ray_count=100_000),
-       time_integrator=RungeKutta4(),
-       time_step_size=1e-5,
-       initial_state=InitialState(0.0),
+       pumpSolver=MonteCarloPumpSolver(rayCount=100_000),
+       timeIntegrator=RungeKutta4(),
+       timeStepSize=10 * units.us,
+       initialState=InitialState(0.0 * units.one),
    )
-   simulation.add_material(material, MaterialLayout("crystal"))
-   simulation.add_boundary(
-       ExteriorBoundary(AbsorbingSurface()),
-       BoundaryLayout("all_exterior"),
-   )
+   simulation.addMaterial(material, domains=mesh.volume("crystal"))
+   simulation.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
 
-Do not import retired objects from ``pyInclude`` to migrate an application.
-That path exists only for repository-owned frozen regression fixtures and may
-change without notice. Use :doc:`../pythonAPI` to verify what is public.
+Retired frontend structures and compatibility aliases are not supported.
+Do not import them from ``pyInclude``; migrate to the public objects listed in
+:doc:`../pythonAPI`.

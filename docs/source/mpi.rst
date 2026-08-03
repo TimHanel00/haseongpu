@@ -8,7 +8,7 @@ assigned on its node.
 Build Requirement
 -----------------
 
-Build with MPI support before selecting ``parallel_mode="mpi"`` or YAML
+Build with MPI support before selecting ``parallelMode="mpi"`` or YAML
 ``parallel_mode: mpi``.  The CMake option is ``DISABLE_MPI``:
 
 ``AUTO``
@@ -35,18 +35,20 @@ Runtime Settings
 ----------------
 
 These values are set through ``MonteCarloASESolver`` or YAML. The scheduler supplies the
-node allocation; for ``parallel_mode="mpi"``, the Python frontend starts
-``calcPhiASE`` with ``mpiexec -npernode <ranks_per_node>`` inside that allocation.
+node allocation; for ``parallelMode="mpi"``, the Python frontend starts
+``calcPhiASE`` with ``mpiexec -npernode <ranksPerNode>`` inside that allocation.
+The corresponding YAML keys are ``parallel_mode``, ``num_devices``, and
+``ranks_per_node``.
 
-``parallel_mode``
+``parallelMode``
    ``single`` runs without MPI. ``mpi`` launches the executable under MPI and
    splits samples across ranks.
 
-``num_devices``
+``numDevices``
    Maximum number of local devices one node should use.  In MPI mode,
    HASEonGPU divides those devices across ranks on the same node.
 
-``ranks_per_node`` / ``n_per_node``
+``ranksPerNode``
    Number of MPI ranks per allocated node passed to ``mpiexec -npernode``.
 
 The frontend places temporary file-based openPMD transport data below
@@ -58,20 +60,21 @@ Common Layouts
 
 One rank per GPU is usually the most straightforward layout:
 
-.. code-block:: text
+.. code-block:: python
 
-   parallel_mode = mpi
-   num_devices = $devicesPerNode
-   ranks_per_node = $devicesPerNode
+   solver = MonteCarloASESolver(
+       parallelMode="mpi", numDevices=devicesPerNode,
+       ranksPerNode=devicesPerNode,
+   )
 
 One rank per node lets one process drive multiple GPUs, but requires enough CPU
 cores for the GPU-driving host threads:
 
-.. code-block:: text
+.. code-block:: python
 
-   parallel_mode = mpi
-   num_devices = $devicesPerNode
-   ranks_per_node = 1
+   solver = MonteCarloASESolver(
+       parallelMode="mpi", numDevices=devicesPerNode, ranksPerNode=1,
+   )
 
 Slurm examples:
 

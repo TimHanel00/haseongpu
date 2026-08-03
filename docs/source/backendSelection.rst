@@ -57,7 +57,7 @@ From Python, query the same list with ``AlpakaBackends``:
    from HASEonGPU import AlpakaBackends, MonteCarloASESolver
 
    available = AlpakaBackends.all()
-   ase_solver = MonteCarloASESolver(backend=available[0])
+   aseSolver = MonteCarloASESolver(backend=available[0])
 
 ``AlpakaBackends.known()`` is an alias for ``all()``.  Names that are valid
 Python identifiers are also exposed as attributes, for example
