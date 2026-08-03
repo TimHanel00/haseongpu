@@ -66,11 +66,20 @@ caller-managed simulation sessions are not supported.
 compiled ``calcPhiASE --cpp-control`` path. Python writes one initial input
 iteration with run-control attributes, then reads the snapshot series produced
 by the C++ time loop. For streaming backends, Python starts a dedicated
-snapshot receiver thread before sending the input iteration, so the C++ backend
-can drain its output stream and finish independently of slower Python
-``on_step`` callbacks such as VTK file writers. Caller-managed simulation
-openPMD sessions are not supported; the compiled run owns its transport
-lifetime.
+snapshot receiver thread before sending the input iteration. The autonomous
+backend owns stepping; Python only consumes the completed-step indices and
+fields selected by ``output_steps`` and ``output_fields`` in the initial
+iteration. A bounded handoff keeps memory use finite, so a slow callback can
+apply ordinary stream backpressure without turning Python into the step
+controller. Caller-managed simulation openPMD sessions are not supported; the
+compiled run owns its transport lifetime.
+
+With ``execution_mode="synchronized-debug"``, the input series remains open.
+After output step *N*, Python writes dynamic input iteration *N* and the backend
+waits for it before starting step *N+1*. Only records listed in
+``control_fields`` are written in these later iterations; currently that list
+may contain ``beta_volume``. Static topology, spectra, backend selection, and
+all other initialization records are transferred only in iteration zero.
 
 Provider Compatibility
 ----------------------

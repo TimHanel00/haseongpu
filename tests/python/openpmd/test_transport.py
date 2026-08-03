@@ -1847,6 +1847,102 @@ def test_streaming_simulation_keeps_input_series_open_until_backend_exits(monkey
     assert input_closed.is_set()
 
 
+def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monkeypatch, tmp_path):
+    initial_written = threading.Event()
+    controls_written = threading.Event()
+    writes = []
+
+    class FakeInputSeries:
+        def __init__(self, path, *, backend=None):
+            assert Path(path).name == "input.sst"
+            assert backend == "adios-sst"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            pass
+
+        def write(
+            self,
+            phi_ase,
+            gain_medium,
+            cross_sections,
+            *,
+            iteration_index,
+            include_static,
+            runControl=None,
+            dynamic_fields=None,
+        ):
+            writes.append(
+                (
+                    iteration_index,
+                    include_static,
+                    dynamic_fields,
+                    float(gain_medium.beta),
+                )
+            )
+            if iteration_index == 0:
+                initial_written.set()
+            if iteration_index == 2:
+                controls_written.set()
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, command, **kwargs):
+            pass
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            raise AssertionError("the successful backend must not be killed")
+
+        def communicate(self):
+            assert controls_written.wait(timeout=2.0)
+            return "", ""
+
+    def fake_read_simulation_output(path, *, on_state=None):
+        assert initial_written.wait(timeout=2.0)
+        for step in (1, 2, 3):
+            state = SimpleNamespace(step=step)
+            if on_state is not None:
+                on_state(state)
+        return [SimpleNamespace(step=3)]
+
+    def update_control(state):
+        simulation.gainMedium.beta = float(state.step)
+
+    monkeypatch.setattr(transport, "OpenPmdInputSeries", FakeInputSeries)
+    monkeypatch.setattr(transport.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(transport, "read_simulation_output", fake_read_simulation_output)
+
+    simulation = SimpleNamespace(
+        executionMode="synchronized-debug",
+        controlFields=("beta_volume",),
+        phiASE=object(),
+        gainMedium=SimpleNamespace(beta=0.0),
+        crossSections=object(),
+    )
+    states = transport._run_streaming_simulation(
+        ["calcPhiASE", "--cpp-control"],
+        tmp_path / "input.sst",
+        tmp_path / "output.sst",
+        SimpleNamespace(name="adios-sst"),
+        simulation,
+        {"number_of_steps": 3},
+        on_state=update_control,
+    )
+
+    assert states[-1].step == 3
+    assert writes == [
+        (0, True, None, 0.0),
+        (1, False, {"beta_volume"}, 1.0),
+        (2, False, {"beta_volume"}, 2.0),
+    ]
+
+
 def test_streaming_simulation_reports_backend_exit_when_input_sender_is_blocked(monkeypatch, tmp_path):
     writer_started = threading.Event()
     release_writer = threading.Event()

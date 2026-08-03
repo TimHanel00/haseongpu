@@ -70,6 +70,10 @@ namespace
         constexpr char const* enableAse = "enable_ase";
         constexpr char const* prePump = "pre_pump";
         constexpr char const* pumpSteps = "pump_steps";
+        constexpr char const* executionMode = "execution_mode";
+        constexpr char const* outputSteps = "output_steps";
+        constexpr char const* outputFields = "output_fields";
+        constexpr char const* controlFields = "control_fields";
         constexpr char const* timeIntegrator = "time_integrator";
         constexpr char const* implicitIterations = "implicit_iterations";
         constexpr char const* implicitTolerance = "implicit_tolerance";
@@ -1277,6 +1281,16 @@ namespace hase::openpmd
         run.enableAse = attributeOr<bool>(iteration, field::enableAse, true);
         run.prePump = attributeOr<bool>(iteration, field::prePump, false);
         run.pumpSteps = attributeOr<unsigned>(iteration, field::pumpSteps, std::numeric_limits<unsigned>::max());
+        run.executionMode = attributeOr<std::string>(
+            iteration,
+            field::executionMode,
+            core::SimulationExecutionMode::AUTONOMOUS);
+        if(iteration.containsAttribute(field::outputSteps))
+            run.outputSteps = unsignedVectorAttribute(iteration, field::outputSteps);
+        if(iteration.containsAttribute(field::outputFields))
+            run.outputFields = attribute<std::vector<std::string>>(iteration, field::outputFields);
+        if(iteration.containsAttribute(field::controlFields))
+            run.controlFields = attribute<std::vector<std::string>>(iteration, field::controlFields);
         run.timeIntegration.method
             = attributeOr<std::string>(iteration, field::timeIntegrator, core::TimeIntegrator::EXPLICIT_EULER);
         run.timeIntegration.implicitIterations = attributeOr<unsigned>(iteration, field::implicitIterations, 8u);
@@ -1709,64 +1723,74 @@ namespace hase::openpmd
                 {-4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
         }
 
-        writeFlatScalar<double>(
-            iteration,
-            prefix + "beta_volume",
-            snapshot.betaVolume,
-            {"cell"},
-            {mesh.numberOfCells},
-            true);
+        iteration.setAttribute(field::outputFields, snapshot.fields);
+        if(snapshot.contains(core::SimulationOutputField::BETA_VOLUME))
+        {
+            writeFlatScalar<double>(
+                iteration,
+                prefix + "beta_volume",
+                snapshot.betaVolume,
+                {"cell"},
+                {mesh.numberOfCells},
+                true);
+        }
 
         std::string const resultPrefix = prefix + "result_";
-        writeScalar(
-            iteration,
-            resultPrefix + "phi_ase",
-            snapshot.aseResult.phiAse,
-            io::Extent{mesh.numberOfCells},
-            {"cell"},
-            "cm^-2 s^-1",
-            1.0e4,
-            {-2.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
-        writeScalar(
-            iteration,
-            resultPrefix + "standard_error",
-            snapshot.aseResult.standardError,
-            io::Extent{mesh.numberOfCells},
-            {"cell"},
-            "cm^-2 s^-1",
-            1.0e4,
-            {-2.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
-        writeScalar(
-            iteration,
-            resultPrefix + "relative_standard_error",
-            snapshot.aseResult.relativeStandardError,
-            io::Extent{mesh.numberOfCells},
-            {"cell"});
-        writeScalar(
-            iteration,
-            resultPrefix + "total_rays",
-            snapshot.aseResult.totalRays,
-            io::Extent{mesh.numberOfCells},
-            {"cell"},
-            "count");
-        writeScalar(
-            iteration,
-            resultPrefix + "dndt_ase",
-            snapshot.dndtAse,
-            io::Extent{mesh.numberOfCells},
-            {"cell"},
-            "s^-1",
-            1.0,
-            {0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
-        writeScalar(
-            iteration,
-            prefix + "result_dndt_pump",
-            snapshot.dndtPump,
-            io::Extent{mesh.numberOfCells},
-            {"cell"},
-            "s^-1",
-            1.0,
-            {0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
+        if(snapshot.contains(core::SimulationOutputField::PHI_ASE))
+            writeScalar(
+                iteration,
+                resultPrefix + "phi_ase",
+                snapshot.aseResult.phiAse,
+                io::Extent{mesh.numberOfCells},
+                {"cell"},
+                "cm^-2 s^-1",
+                1.0e4,
+                {-2.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
+        if(snapshot.contains(core::SimulationOutputField::STANDARD_ERROR))
+            writeScalar(
+                iteration,
+                resultPrefix + "standard_error",
+                snapshot.aseResult.standardError,
+                io::Extent{mesh.numberOfCells},
+                {"cell"},
+                "cm^-2 s^-1",
+                1.0e4,
+                {-2.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
+        if(snapshot.contains(core::SimulationOutputField::RELATIVE_STANDARD_ERROR))
+            writeScalar(
+                iteration,
+                resultPrefix + "relative_standard_error",
+                snapshot.aseResult.relativeStandardError,
+                io::Extent{mesh.numberOfCells},
+                {"cell"});
+        if(snapshot.contains(core::SimulationOutputField::TOTAL_RAYS))
+            writeScalar(
+                iteration,
+                resultPrefix + "total_rays",
+                snapshot.aseResult.totalRays,
+                io::Extent{mesh.numberOfCells},
+                {"cell"},
+                "count");
+        if(snapshot.contains(core::SimulationOutputField::DNDT_ASE))
+            writeScalar(
+                iteration,
+                resultPrefix + "dndt_ase",
+                snapshot.dndtAse,
+                io::Extent{mesh.numberOfCells},
+                {"cell"},
+                "s^-1",
+                1.0,
+                {0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
+        if(snapshot.contains(core::SimulationOutputField::DNDT_PUMP))
+            writeScalar(
+                iteration,
+                prefix + "result_dndt_pump",
+                snapshot.dndtPump,
+                io::Extent{mesh.numberOfCells},
+                {"cell"},
+                "s^-1",
+                1.0,
+                {0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0});
         iteration.close();
     }
 
@@ -1839,7 +1863,18 @@ namespace hase::openpmd
 
     void Parser::runCoreSimulation()
     {
-        auto simulation = read();
+        auto const inputStream = m_inputPath.string();
+#if defined(MPI_FOUND) && !defined(DISABLE_MPI)
+        io::Series inputSeries(inputStream, io::Access::READ_LINEAR, m_comm, seriesConfig(inputStream));
+#else
+        io::Series inputSeries(inputStream, io::Access::READ_LINEAR, seriesConfig(inputStream));
+#endif
+        auto inputIterations = inputSeries.readIterations();
+        auto inputIterator = inputIterations.begin();
+        if(inputIterator == inputIterations.end())
+            throw std::runtime_error("No iteration was available in the openPMD input stream.");
+        auto initialIteration = *inputIterator;
+        auto simulation = readIteration(inputSeries, initialIteration);
         bool const writesOutput = isHeadRank();
 
         std::unique_ptr<io::Series> series;
@@ -1862,14 +1897,13 @@ namespace hase::openpmd
             writesOutput,
             [&](core::SimulationSnapshot const& snapshot)
             {
-                bool const includeStatic = snapshot.step == 1u;
                 writeSimulationSnapshotIteration(
                     *series,
                     snapshot.step - 1u,
                     snapshot,
                     simulation.mesh,
                     simulation.experiment,
-                    includeStatic);
+                    false);
                 series->flush();
             },
             simulation.compute.parallelMode != core::ParallelMode::MPI};
@@ -1883,7 +1917,35 @@ namespace hase::openpmd
                 simulation.compute,
                 simulation.run,
                 simulation.mesh,
-                [&](core::SimulationSnapshot const& snapshot) { snapshotWriter.enqueue(snapshot); });
+                [&](core::SimulationSnapshot const& snapshot) { snapshotWriter.enqueue(snapshot); },
+                [&](unsigned completedStep)
+                {
+                    ++inputIterator;
+                    if(inputIterator == inputIterations.end())
+                        throw std::runtime_error(
+                            "synchronized-debug input ended before control iteration "
+                            + std::to_string(completedStep));
+                    auto controlIteration = *inputIterator;
+                    if(controlIteration.iterationIndex != completedStep)
+                        throw std::runtime_error(
+                            "synchronized-debug expected control iteration " + std::to_string(completedStep)
+                            + ", received " + std::to_string(controlIteration.iterationIndex));
+                    if(containsStaticMeshUpdate(controlIteration))
+                        validationError(
+                            "synchronized-debug control",
+                            "static topology updates are not supported after initialization");
+                    validateDynamicOnlyIteration(controlIteration, simulation);
+                    if(std::ranges::find(
+                           simulation.run.controlFields,
+                           core::SimulationControlField::BETA_VOLUME)
+                       != simulation.run.controlFields.end())
+                    {
+                        updateDynamicIteration(inputSeries, controlIteration, simulation);
+                        return simulation.mesh.betaVolume;
+                    }
+                    controlIteration.close();
+                    return std::vector<double>{};
+                });
         }
         catch(...)
         {
@@ -1891,6 +1953,7 @@ namespace hase::openpmd
         }
 
         snapshotWriter.finish();
+        inputSeries.close();
         if(series)
         {
             series->close();
