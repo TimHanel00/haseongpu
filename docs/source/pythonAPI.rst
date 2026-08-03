@@ -2,7 +2,7 @@ Python API Reference
 ====================
 
 The public API follows a PICMI-style composition: topology, physical material
-models, layouts, solver descriptors, and state are independent objects composed
+models, selections, solver descriptors, and state are independent objects composed
 by ``Simulation``.
 
 .. currentmodule:: HASEonGPU
@@ -15,10 +15,28 @@ Mesh and materials
    :nosignatures:
 
    UnstructuredMesh
+   MeshSelection
    CrossSectionTable
-   MaterialDefinition
-   MaterialInstance
-   MaterialLayout
+   Material
+   MaterialState
+   MaterialCondition
+   MaterialLibrary
+   Unit
+   Quantity
+
+``materialLibrary`` is the preloaded built-in ``MaterialLibrary``. Its
+``YbYAG`` cross sections were recorded at room temperature, represented as
+``293.15 * units.K``. Select it with ``materialLibrary["YbYAG"]``.
+
+Material data warnings
+----------------------
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   LegacyMaterialTextWarning
+   TemperatureInterpolationWarning
 
 Boundaries and interfaces
 -------------------------
@@ -27,14 +45,10 @@ Boundaries and interfaces
    :toctree: generated
    :nosignatures:
 
-   ExteriorBoundary
    ExteriorBoundaryModel
-   BoundaryLayout
    AbsorbingSurface
    ConstantReflectivitySurface
-   MaterialInterface
    MaterialInterfaceModel
-   MaterialInterfaceLayout
    PerfectTransmission
    FresnelInterface
 
@@ -57,7 +71,7 @@ Pumps and solvers
    MonteCarloASESolver
    PumpSolver
    MonteCarloPumpSolver
-   integrate_pump_profile
+   integratePumpProfile
 
 Simulation and state
 --------------------
@@ -68,9 +82,9 @@ Simulation and state
 
    InitialState
    Simulation
-   CompiledProblem
+   ResolvedProblem
    BackendCapabilities
-   CURRENT_BACKEND_CAPABILITIES
+   currentBackendCapabilities
    TimeStepState
    ExplicitEuler
    ExponentialEuler
@@ -90,12 +104,15 @@ Utilities
 
    AlpakaBackends
    writeParaviewState
+   writeVtkState
 
 Advanced openPMD schema helpers
 -------------------------------
 
 These helpers are public for applications that build HASE-compatible openPMD
-records directly. Normal ``Simulation`` assembly does not need them.
+records directly. Their field and attribute specifications accept ``Unit``
+objects and retain ``unitSI`` and ``unitDimension`` metadata. Normal
+``Simulation`` assembly does not need them.
 
 .. autosummary::
    :toctree: generated
@@ -109,4 +126,3 @@ records directly. Normal ``Simulation`` assembly does not need them.
    PrimitiveFieldSpec
    PrismSchema
    TriangleSchema
-   backendFlat

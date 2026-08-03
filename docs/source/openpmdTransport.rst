@@ -2,11 +2,15 @@ openPMD Transport
 =================
 
 HASEonGPU uses openPMD as the transport boundary between the Python frontend and
-the C++ ``calcPhiASE`` backend. Users work with ``UnstructuredMesh``, material
-definitions/layouts, solver descriptors, and ``Simulation``. A private adapter
-converts the supported single-material problem into the established openPMD
-0.1 records and attributes consumed by the backend. Multiple-material and
-internal-interface tables are not serialized yet.
+the C++ ``calcPhiASE`` backend. Users work with ``UnstructuredMesh``,
+``MaterialCondition``, typed selections, solver descriptors, and ``Simulation``.
+The transport encoder converts the supported single-material problem into the
+established openPMD 0.2 records and attributes consumed by the backend.
+Multiple-material and internal-interface tables are not serialized yet.
+
+This transport is separate from the HDF5 :doc:`material database
+<python_interface/material_library>`. The latter is read with ``h5py`` and is
+not an openPMD series.
 
 Storage Backends
 ----------------
@@ -33,7 +37,7 @@ Select it in Python or YAML:
 
 .. code-block:: python
 
-   ase_solver = MonteCarloASESolver(..., openpmd_backend="auto")
+   aseSolver = MonteCarloASESolver(..., openPmdBackend="auto")
 
 .. code-block:: yaml
 
@@ -41,7 +45,7 @@ Select it in Python or YAML:
      backend: Host_Cpu_CpuSerial       # Alpaka compute backend
      openpmd_backend: auto              # choose a compatible backend
 
-Set the ``MonteCarloASESolver(openpmd_backend=...)`` argument or YAML
+Set the ``MonteCarloASESolver(openPmdBackend=...)`` argument or YAML
 ``openpmd_backend`` to override automatic selection for a particular run.
 
 Simulation transport lifetime
@@ -51,7 +55,7 @@ Simulation transport lifetime
 initial input iteration and reads snapshots produced by the compiled C++ time
 loop. Caller-managed sessions are not part of the public API. For streaming
 backends, an internal receiver drains snapshots independently of Python
-``on_step`` callback speed.
+``onStep`` callback speed.
 
 Provider Compatibility
 ----------------------
@@ -84,11 +88,20 @@ openPMD libraries and Python bindings.
 openPMD Record Layout
 ---------------------
 
-The public frontend objects (``UnstructuredMesh``, ``MaterialDefinition``,
-``MaterialInstance``, layouts, and solver descriptors) are not an openPMD
-schema. The private compatibility adapter emits the openPMD series below. This
+The public frontend objects (``UnstructuredMesh``, ``Material``,
+``MaterialCondition``, typed selections, and solver descriptors) are not an
+openPMD schema. The transport encoder emits the openPMD series below. This
 wire contract remains single-material even though frontend compilation supports
 multiple materials and per-face interface tables.
+
+Input ``Quantity`` objects are converted to the wire schema's canonical units:
+wavelengths to ``nm``, cross sections to ``cm^2``, active-ion density to
+``cm^-3``, fluorescence lifetime to ``s``, and geometry to the declared mesh
+unit. Mesh records carry ``unitSI`` and ``unitDimension`` metadata, which the
+native parser validates before using the stored magnitudes. Scalar extension
+attributes are first converted by their unit-aware schema specifications; their
+stored units are fixed by the HASE 0.2 wire contract rather than repeated as
+openPMD record metadata.
 
 All array data at that boundary is written as openPMD ``Mesh`` records below
 each ``Iteration``'s ``meshes`` group. Scalar arrays are named openPMD records
@@ -101,16 +114,16 @@ the normal openPMD mesh and component metadata: ``geometry``,
 and component ``position``.
 
 Scalar simulation and backend settings are not openPMD field records. Values
-such as ``number_of_points``, ``thickness``, ``rng_seed``, ``backend``, and
-``parallel_mode`` are stored as attributes on the openPMD iteration.
+such as ``numberOfPoints``, ``thickness``, ``rngSeed``, ``backend``, and
+``parallelMode`` are stored as attributes on the openPMD iteration.
 These values configure the HASE backend and do
 not represent sampled mesh data. They therefore are not part of ``/meshes``
 and do not carry record metadata such as ``axisLabels`` or component
 ``position``.
 
 Forward-reflection request attributes follow the same HASE openPMD extension
-schema: ``use_reflections``, ``reflection_max_iterations``,
-``reflection_tolerance``, and ``surface_reservoir_size``. The parser rejects
+schema: ``useReflections``, ``reflectionMaxIterations``,
+``reflectionTolerance``, and ``surfaceReservoirSize``. The parser rejects
 the retired ``forward_ray_length`` attribute; forward rays now traverse to a
 physical boundary. Runtime environment overrides ``HASE_SRM_MAX_ITERATIONS``
 and ``HASE_SRM_DIVERGENCE_STREAK`` are deliberately not serialized because
@@ -135,8 +148,8 @@ Main input field records are:
   ``core_sigma_absorption``, and ``core_sigma_emission`` for spectra
 
 The C++ backend writes result records under ``core_result_``:
-``phi_ase``, ``standard_error``, ``relative_standard_error``, ``total_rays``,
-and ``dndt_ase``. ``standard_error`` has the same flux unit as ``phi_ase``;
+``phiAse``, ``standard_error``, ``relative_standard_error``, ``total_rays``,
+and ``dndt_ase``. ``standard_error`` has the same flux unit as ``phiAse``;
 ``relative_standard_error`` is dimensionless. Result records use record-C
 layout.
 
@@ -154,9 +167,9 @@ For compiled ``Simulation`` runs, iteration attributes also include run-control
 metadata:
 
 * ``time_step`` and ``number_of_steps``
-* ``pump_steps``
-* ``enable_ase`` and ``pre_pump``
-* ``time_integrator`` (``explicit-euler``, ``heun``, ``midpoint``,
+* ``pumpSteps``
+* ``enableAse`` and ``prePump``
+* ``timeIntegrator`` (``explicit-euler``, ``heun``, ``midpoint``,
   ``runge-kutta-4``, ``frozen-phi-ase-runge-kutta-4``,
   ``implicit-euler``, or ``exponential-euler``)
 * ``implicit_iterations`` and ``implicit_tolerance`` for implicit Euler
@@ -202,15 +215,15 @@ is selected:
 
    import HASEonGPU
 
-   ase_solver = HASEonGPU.MonteCarloASESolver(
-       parallel_mode="mpi",
-       ranks_per_node=4,
-       openpmd_backend="adios-sst",
+   aseSolver = HASEonGPU.MonteCarloASESolver(
+       parallelMode="mpi",
+       ranksPerNode=4,
+       openPmdBackend="adios-sst",
    )
-   simulation = HASEonGPU.Simulation(..., ase_solver=ase_solver)
+   simulation = HASEonGPU.Simulation(..., aseSolver=aseSolver)
    simulation.step()
 
-The scheduler controls the node allocation, while ``ranks_per_node`` controls the
+The scheduler controls the node allocation, while ``ranksPerNode`` controls the
 number of ranks launched on each allocated node. File-based transport data is
 created below ``./IO/phiase_mpi`` so the launch directory must be shared for a
 multi-node run.

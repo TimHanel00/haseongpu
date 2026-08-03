@@ -17,7 +17,11 @@ and overall amplifier performance.
 Start with :doc:`Getting Started <gettingStarted>` for installation and
 interface selection.  Use :doc:`CMake Build Options <compilation>` only when
 you need manual build configuration.  The :doc:`Theory and Model
-<theoryAndModel>` page explains the ASE model and pump coupling.
+<theoryAndModel>` page explains the ASE model and pump coupling. The Python
+guide has dedicated references for :doc:`physical quantities and units
+<python_interface/physical_quantities>`, the :doc:`temperature-aware material
+library <python_interface/material_library>`, and :doc:`Monte Carlo RSE
+thresholds <python_interface/uncertainty>`.
 
 Contents
 --------

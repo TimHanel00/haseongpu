@@ -1,82 +1,111 @@
-Simulation assembly and execution
-=================================
+Simulation assembly, time, and result quantities
+================================================
 
-``Simulation`` owns composition and evolving state. It references topology and
-physical definitions but does not move those responsibilities into one
-aggregate object.
+``Simulation`` composes mesh topology, physical definitions, numerical
+solvers, and evolving state. Configuration remains separate so each quantity
+has an unambiguous owner.
 
-Construction and registration
------------------------------
+Construction and time controls
+------------------------------
+
+``timeStepSize`` and ``maxTime`` require physical time quantities.
+``maxSteps`` is a dimensionless integer limit:
 
 .. code-block:: python
 
-   simulation = Simulation(
-       mesh=mesh,
-       ase_solver=ase_solver,
-       pump_solver=pump_solver,
-       time_integrator=RungeKutta4(),
-       time_step_size=1e-5,
-       initial_state=InitialState(0.0),
-       max_steps=100,
-       max_time=1e-3,
-       enable_ase=True,
-       pre_pump=False,
-   )
-   simulation.add_material(material, MaterialLayout("crystal"))
-   simulation.add_boundary(boundary, BoundaryLayout("all_exterior"))
-   simulation.add_pump(pump, SurfacePumpInjector("pump_input"))
+   simulation = Simulation(mesh=mesh, aseSolver=aseSolver, pumpSolver=pumpSolver,
+       timeIntegrator=RungeKutta4(), timeStepSize=20 * units.us,
+       initialState=InitialState(0.0 * units.one), maxTime=3 * units.ms)
 
-The ``add_*`` methods return the simulation, so chaining is possible, but
-separate calls are often clearer. Registration order determines dense table
-IDs, not physical precedence. Overlapping layouts are errors.
+``InitialState`` is the dimensionless upper-state fraction :math:`\beta`, not
+an ion density. Material density is configured independently on
+``MaterialCondition``.
 
-Compile, validate, execute
+Register physics with selections owned by the simulation mesh:
+
+.. code-block:: python
+
+   simulation.addMaterial(material, domains=mesh.volume("crystal"))
+   simulation.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
+   simulation.addPump(pump, SurfacePumpInjector(mesh.surface("pump_input")))
+
+Registration order determines dense table IDs, not physical precedence.
+Overlapping registrations are errors.
+
+Resolve, validate, execute
 --------------------------
 
-``compile()`` returns ``CompiledProblem`` without launching the backend. Its
-main tables are:
-
-* ``materials`` and ``cell_material_id``;
-* ``boundaries`` and ``face_boundary_id``;
-* ``interfaces`` and ``face_interface_id``;
-* ``initial_excitation_fraction``.
-
-This is the right stage for configuration tools and tests to inspect domain
-resolution. ``compiled.unsupported_features()`` reports the difference between
-the problem and ``CURRENT_BACKEND_CAPABILITIES``.
-
-``validate_backend()`` compiles and then raises ``NotImplementedError`` for an
-unsupported physical feature or solver role. ``step(nsteps=1,
-pump_steps=None)`` performs that validation and executes a fixed number of
-steps. ``run_until(max_time=None)`` uses the argument or the constructor's
-``max_time``. The current adapter requires at least one registered pump.
-
-Execution initializes the private native/openPMD adapter only once. After that
-point, physical registrations and initialization callbacks cannot be changed.
-``current_step`` and ``current_time`` report completed progress.
-
-Callbacks and state
--------------------
-
-``on_init(callback, *args, **kwargs)`` runs once just before adapter creation.
-It receives the public ``Simulation``. ``on_step`` runs after each completed
-native step and receives a ``TimeStepState``:
+``resolveProblem()`` resolves selections and validates complete material, exterior
+boundary, interface, and initial-state coverage without launching transport:
 
 .. code-block:: python
 
-   def report(state, label):
-       print(label, state.step, state.time, state.excitation_fraction.mean())
+   problem = simulation.resolveProblem()
+   print(problem.cellMaterialId, problem.unsupportedFeatures())
 
-   simulation.on_step(report, "amplifier")
+``validateBackend()`` additionally rejects a valid frontend model when the
+current adapter cannot execute one of its physical features. ``step(numberOfSteps=1,
+pumpSteps=None)`` then advances a fixed number of outer time steps.
+``runUntil(maxTime=...)`` accepts another time quantity.
+
+After initialization, material, boundary, interface, pump, and initialization
+callback registrations are frozen. ``currentStep`` is an integer;
+``currentTime`` is a time ``Quantity``:
+
+.. code-block:: python
+
    simulation.step(3)
-   final = simulation.get_last_state()
+   print(simulation.currentTime.toValue(units.ms))
 
-For public Tet4 runs, the principal views are ``excitation_fraction``,
-``d_excitation_dt_ase``, and ``d_excitation_dt_pump``. ``phi_ase`` exposes the
-ASE flux when enabled. Lower-level compatibility names remain on
-``TimeStepState`` for the private adapter, but new callback code should use the
-snake-case public views.
+Callbacks
+---------
 
-``get_last_state()`` raises before the first completed step. The arrays are
-snapshots from that completed step; changing them is not a supported way to
-modify native simulation state.
+``onInit(callback, *args, **kwargs)`` runs once before adapter creation and
+receives the ``Simulation``. ``onStep`` runs after each completed native step
+and receives a ``TimeStepState``:
+
+.. code-block:: python
+
+   def report(state):
+       print(state.step, state.time.toValue(units.us), state.excitationFraction.mean())
+
+   simulation.onStep(report).step(3)
+
+State fields and physical meaning
+---------------------------------
+
+``TimeStepState`` is a snapshot; its arrays are not a supported mutation path
+for native state. The principal fields are:
+
+``time``
+   Physical time as a ``Quantity``.
+
+``sampledExcitationFraction`` and ``excitationFraction``
+   Dimensionless upper-state fractions on the backend's sample points and
+   Tet4 cells, respectively.
+
+``phiAse`` and ``volumePhiAse``
+   ASE photon flux on sample points and Tet4 cells, physically
+   :math:`\mathrm{m}^{-2}\,\mathrm{s}^{-1}`. The value already includes the
+   active-ion-density and fluorescence-lifetime scaling.
+
+``sampledDExcitationDtAse``, ``volumeDExcitationDtAse``, and ``dExcitationDtPump``
+   Rates of change of the dimensionless excitation fraction, in
+   :math:`\mathrm{s}^{-1}`.
+
+``volumeStandardError`` and ``volumeRelativeStandardError``
+   Absolute ASE sampling uncertainty in photon-flux units and dimensionless
+   relative uncertainty. See :doc:`uncertainty`.
+
+``volumeTotalRays``
+   The number of deposited ray visits per Tet4, not the globally launched ray
+   budget.
+
+Read a completed snapshot with:
+
+.. code-block:: python
+
+   state = simulation.getLastState()
+   print(state.volumePhiAse, state.volumeRelativeStandardError)
+
+``getLastState()`` raises before the first completed step.

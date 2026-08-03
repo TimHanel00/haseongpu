@@ -20,10 +20,10 @@ The object model
      - ``UnstructuredMesh``
      - Tet4 points, connectivity, adjacency, and named domain tags.
    * - Material physics
-     - ``CrossSectionTable``, ``MaterialDefinition``, ``MaterialInstance``
-     - Reusable optical data and run-specific active-ion density.
+     - ``Material``, ``MaterialLibrary``, ``MaterialCondition``
+     - Temperature-resolved optical data, HDF5 persistence, and one selected run condition.
    * - Placement and optics
-     - ``MaterialLayout``, ``BoundaryLayout``, ``MaterialInterfaceLayout``
+     - ``MeshSelection``, exterior boundary and material-interface models
      - Attach physical models to mesh domains without putting them in the mesh.
    * - Algorithms
      - ``MonteCarloASESolver``, ``MonteCarloPumpSolver``, time integrators
@@ -38,18 +38,19 @@ The lifecycle
 A frontend run has distinct assembly and execution phases:
 
 #. create or load a Tet4 ``UnstructuredMesh``;
-#. create material definitions and instances;
+#. load or define temperature-resolved materials and select a condition;
 #. construct ``Simulation`` with solver descriptors and initial state;
-#. register materials, exterior boundaries, internal interfaces, and pumps;
+#. register materials, exterior boundaries, internal interfaces, and pumps on
+   ``mesh.volume(...)`` or ``mesh.surface(...)`` selections;
 #. call ``compile()`` to validate layouts and inspect backend-neutral tables;
-#. call ``validate_backend()`` to check that the current native adapter can
+#. call ``validateBackend()`` to check that the current native adapter can
    execute those tables;
-#. call ``step()`` or ``run_until()`` and consume ``TimeStepState`` callbacks.
+#. call ``step()`` or ``runUntil()`` and consume ``TimeStepState`` callbacks.
 
-``compile()`` performs no native launch. It resolves named or numeric domains,
+``compile()`` performs no native launch. It resolves typed mesh selections,
 requires every cell and exterior face to be covered exactly once, and requires
 an explicit interface wherever adjacent cells contain different material
-instances. ``validate_backend()`` is deliberately separate: a problem may be a
+conditions. ``validateBackend()`` is deliberately separate: a problem may be a
 valid frontend model even when the current native adapter cannot execute all of
 its features yet.
 
@@ -64,9 +65,10 @@ its features yet.
 Minimal complete setup
 ----------------------
 
-All public physical values use SI units. The following snippets are included
-from ``example/minimalExampleNewInterface.py`` so the guide and runnable
-example share one source.
+All public physical values carry explicit units; see
+:doc:`python_interface/physical_quantities`. The following snippets are
+included from ``example/minimalExampleNewInterface.py`` so the guide and
+runnable example share one source.
 
 Create topology with domain identity but no material data:
 
@@ -76,8 +78,8 @@ Create topology with domain identity but no material data:
    :end-before: # docs:end: mesh
    :dedent: 4
 
-Define cross sections, reusable material physics, and a run-specific material
-instance:
+Define cross sections, temperature-resolved material physics, and a selected
+simulation condition:
 
 .. literalinclude:: ../../example/minimalExampleNewInterface.py
    :language: python
@@ -115,15 +117,18 @@ Where to continue
 
    python_interface/migration
    python_interface/topology
+   python_interface/physical_quantities
+   python_interface/material_library
    python_interface/gain_medium
    python_interface/spectral_decomposition
    python_interface/pump_properties
-   python_interface/phi_ase
+   python_interface/ase_solver
+   python_interface/uncertainty
    python_interface/simulation
    python_interface/utilities
 
 Use ``example/minimalExampleNewInterface.py`` for a self-contained Tet4 run and
-``example/gmshMinimalExample.py`` for named Gmsh physical groups. The
-``example/laserPumpCladding.py`` driver intentionally remains a private legacy
-compatibility regression; it is not a template for new user code. Generated
+``example/gmshMinimalExample.py`` for named Gmsh physical groups. The larger
+``example/laserPumpCladding.py`` uses the same public composition API and the
+bundled HDF5 material database for its time-stepped Tet4 calculation. Generated
 signatures and members are listed in :doc:`pythonAPI`.

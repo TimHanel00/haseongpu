@@ -139,6 +139,10 @@ instead. Dropped or non-finite histories prevent the affected cell from being
 reported as converged. RSE measures Monte Carlo sampling uncertainty; it does
 not include mesh discretization or model error.
 
+The dedicated :doc:`python_interface/uncertainty` page gives a worked example,
+explains how the threshold controls adaptive batches, and shows how to inspect
+the cell-wise result fields from Python.
+
 Tet4 Traversal
 ^^^^^^^^^^^^^^
 
@@ -241,7 +245,7 @@ The compiled C++/Alpaka simulation advances
 Standard RK4 reevaluates ASE and pump transport at every stage.
 ``FrozenPhiAseRungeKutta4`` reuses its first ASE calculation for the remaining
 stages, while still evaluating the pump contribution. Setting
-``Simulation(enable_ase=False, ...)`` advances pump excitation and fluorescence
+``Simulation(enableAse=False, ...)`` advances pump excitation and fluorescence
 without an ASE calculation.
 
 Model Limits

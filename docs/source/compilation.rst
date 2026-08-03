@@ -137,7 +137,7 @@ MPI Option
    * ``OFF``: require MPI; configuration fails if MPI is unavailable
    * ``ON``: disable MPI support
 
-The runtime ``parallel_mode``/``parallelMode`` setting must agree with how the
+The Python ``parallelMode`` / YAML ``parallel_mode`` setting must agree with how the
 binary was built and launched.  See :doc:`mpi` for execution guidance.
 
 Alpaka and Accelerator Options
@@ -176,7 +176,7 @@ openPMD Provider Options
 
 CMake chooses the openPMD-api provider used to build HASEonGPU.  The storage
 backend used by a simulation is selected at runtime with
-the ``MonteCarloASESolver(openpmd_backend=...)`` argument or YAML
+the ``MonteCarloASESolver(openPmdBackend=...)`` argument or YAML
 ``openpmd_backend``.
 
 ``HASE_OPENPMD_PROVIDER``
@@ -245,8 +245,8 @@ Runtime selection is still done through user configuration:
 
 .. code-block:: python
 
-   ase_solver = MonteCarloASESolver(
-       backend="Host_Cpu_CpuSerial", openpmd_backend="auto"
+   aseSolver = MonteCarloASESolver(
+       backend="Host_Cpu_CpuSerial", openPmdBackend="auto"
    )
 
 .. code-block:: yaml

@@ -35,6 +35,10 @@ Optional dependencies depend on the run mode:
 * ParaView for VTK visualization
 * ``matplotlib`` for helper plotting scripts
 
+The normal pip installation also installs ``h5py``. HASEonGPU uses it to read
+the bundled, temperature-aware HDF5 material database; no system HDF5 package
+is required for that Python feature when a compatible wheel is available.
+
 Additional system packages
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -148,14 +152,17 @@ you intentionally install into such an environment.
 6. Verify and Continue
 ----------------------
 
-Check that the package imports:
+Check that the package imports and that its bundled material database opens:
 
 .. code-block:: bash
 
    python3 -c "import HASEonGPU; print(HASEonGPU.__version__)"
+   python3 -c "from HASEonGPU import materialLibrary; print(tuple(materialLibrary))"
 
 For the recommended user workflow, continue with
 :doc:`Python Interface Guide <pythonInterface>`.  Use
+:doc:`Material library <python_interface/material_library>` when defining or
+converting material data. Use
 :doc:`Binary Interface <binaryInterface>` only when running ``calcPhiASE``
 directly, and :doc:`CMake Build Options <compilation>` when you need manual
 CMake configuration.

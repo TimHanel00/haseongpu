@@ -79,7 +79,7 @@ class MaterialLibrary(Mapping):
         Parameters
         ----------
         path
-            File produced by :meth:`toHdf5` or ``hase-material-convert``.
+            File produced by :meth:`toHdf5`.
         """
         from .hdf5 import read_material_library
 
