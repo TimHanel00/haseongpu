@@ -20,9 +20,7 @@ namespace hase::kernels
 {
     template<typename T>
     concept ComposeDerivativeBufferHandle = requires(T buffers) {
-        buffers.betaCells;
-        buffers.phiAse;
-        buffers.activeMask;
+        buffers.betaVolume;
         buffers.dndtPump;
         buffers.dndtAse;
         buffers.derivative;
@@ -30,37 +28,34 @@ namespace hase::kernels
 
     struct ComposeDerivative
     {
-        double sigmaAbsorption = 0.0;
-        double sigmaEmission = 0.0;
         double tau = 1.0;
         bool pumpEnabled = true;
 
         ALPAKA_FN_ACC void operator()(
             auto const& acc,
             hase::core::DeviceMeshView const mesh,
-            auto betaCells,
-            auto phiAse,
-            auto activeMask,
+            auto betaVolume,
             auto dndtPump,
             auto dndtAse,
             auto derivative) const
         {
-            for(auto [sample] : alpaka::onAcc::makeIdxMap(
+            for(auto [cell] : alpaka::onAcc::makeIdxMap(
                     acc,
                     alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfSamples}))
+                    alpaka::IdxRange{mesh.numberOfCells}))
             {
-                unsigned const point = sample % mesh.numberOfPoints;
-                double const beta = betaCells[sample];
-                double const pumpTerm = pumpEnabled ? dndtPump[sample] : 0.0;
-                double const gainPerDensity = beta * (sigmaEmission + sigmaAbsorption) - sigmaAbsorption;
-                double const aseTerm
-                    = activeMask[point] != 0u ? gainPerDensity * static_cast<double>(phiAse[sample]) : 0.0;
+                if(mesh.getCellType(cell) == mesh.claddingNumber)
+                {
+                    dndtPump[cell] = 0.0;
+                    dndtAse[cell] = 0.0;
+                    derivative[cell] = 0.0;
+                    continue;
+                }
 
+                double const pumpTerm = pumpEnabled ? dndtPump[cell] : 0.0;
                 if(!pumpEnabled)
-                    dndtPump[sample] = 0.0;
-                dndtAse[sample] = aseTerm;
-                derivative[sample] = pumpTerm - aseTerm - beta / tau;
+                    dndtPump[cell] = 0.0;
+                derivative[cell] = pumpTerm - dndtAse[cell] - betaVolume[cell] / tau;
             }
         }
     };
@@ -69,8 +64,6 @@ namespace hase::kernels
         auto& devBundle,
         hase::concepts::Queue auto const& queue,
         auto const& mesh,
-        double sigmaAbsorption,
-        double sigmaEmission,
         double tau,
         bool pumpEnabled,
         ComposeDerivativeBufferHandle auto& buffers)
@@ -78,15 +71,13 @@ namespace hase::kernels
         auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
             devBundle.device,
             devBundle.executor,
-            alpaka::Vec{mesh.numberOfSamples});
+            alpaka::Vec{mesh.numberOfCells});
         queue.enqueue(
             frameSpec,
             alpaka::KernelBundle{
-                ComposeDerivative{sigmaAbsorption, sigmaEmission, tau, pumpEnabled},
+                ComposeDerivative{tau, pumpEnabled},
                 mesh,
-                buffers.betaCells,
-                buffers.phiAse,
-                buffers.activeMask,
+                buffers.betaVolume,
                 buffers.dndtPump,
                 buffers.dndtAse,
                 buffers.derivative});

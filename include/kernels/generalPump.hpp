@@ -263,8 +263,7 @@ namespace hase::kernels
             typename T_CellView,
             typename T_ForbiddenFaceView,
             typename T_ExitFaceView,
-            typename T_CellPumpIntegralView,
-            typename T_SamplePumpIntegralView>
+            typename T_CellPumpIntegralView>
         ALPAKA_FN_ACC void operator()(
             T_Acc const& acc,
             hase::core::DeviceMeshView const mesh,
@@ -283,7 +282,6 @@ namespace hase::kernels
             T_ForbiddenFaceView forbiddenFace,
             T_ExitFaceView exitFace,
             T_CellPumpIntegralView cellPumpIntegral,
-            T_SamplePumpIntegralView samplePumpIntegral,
             unsigned const rayCount) const
         {
             for(auto [ray] :
@@ -322,18 +320,6 @@ namespace hase::kernels
                         double const integral = (rayPower - nextPower) * wavelength[ray]
                                                 / (planckConstant * speedOfLight * static_cast<double>(mesh.nTot));
                         alpaka::onAcc::atomicAdd(acc, &cellPumpIntegral[tet], integral);
-                        if(mesh.samplePointsAreMeshPoints)
-                        {
-                            auto const midpoint = origin + direction * (0.5 * intersection.length);
-                            auto const barycentric
-                                = hase::kernels::forward::barycentricCoordinates(mesh, tet, midpoint);
-                            for(unsigned vertex = 0u; vertex < mesh.numberOfCellVertices; ++vertex)
-                                alpaka::onAcc::atomicAdd(
-                                    acc,
-                                    &samplePumpIntegral
-                                        [mesh.cellPointIndices[tet * mesh.numberOfCellVertices + vertex]],
-                                    integral * barycentric[vertex]);
-                        }
                     }
                     rayPower = nextPower;
                     origin = hase::kernels::forward::advance(origin, direction, intersection.length);
@@ -370,15 +356,13 @@ namespace hase::kernels
         typename T_Device,
         typename T_Executor,
         typename T_BetaBuffer,
-        typename T_CellBuffer,
-        typename T_SampleBuffer>
+        typename T_CellBuffer>
     PumpRayBatch tracePumpBatch(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
         auto const& queue,
         hase::core::DeviceMeshView const mesh,
         T_BetaBuffer& betaVolume,
         T_CellBuffer& cellPumpIntegral,
-        T_SampleBuffer& samplePumpIntegral,
         PumpRayBatch batch)
     {
         unsigned const count = static_cast<unsigned>(batch.size());
@@ -419,7 +403,6 @@ namespace hase::kernels
                 forbiddenFace,
                 exitFace,
                 cellPumpIntegral,
-                samplePumpIntegral,
                 count});
         alpaka::onHost::wait(queue);
         auto copyBack = [&](auto const& deviceBuffer, auto& values)
@@ -571,24 +554,21 @@ namespace hase::kernels
         return result;
     }
 
-    struct NormalizePumpRate
+    struct NormalizeCellPumpRate
     {
         ALPAKA_FN_ACC void operator()(
             auto const& acc,
             hase::core::DeviceMeshView const mesh,
             auto cellIntegral,
-            auto lumpedVolume,
-            auto sampleRate) const
+            auto cellRate) const
         {
-            for(auto [sample] : alpaka::onAcc::makeIdxMap(
+            for(auto [cell] : alpaka::onAcc::makeIdxMap(
                     acc,
                     alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfSamples}))
+                    alpaka::IdxRange{mesh.numberOfCells}))
             {
-                if(mesh.samplePointsAreMeshPoints)
-                    sampleRate[sample] = lumpedVolume[sample] > 0.0 ? sampleRate[sample] / lumpedVolume[sample] : 0.0;
-                else
-                    sampleRate[sample] = cellIntegral[sample] / mesh.getCellVolume(sample);
+                double const volume = mesh.getCellVolume(cell);
+                cellRate[cell] = volume > 0.0 ? cellIntegral[cell] / volume : 0.0;
             }
         }
     };
@@ -598,8 +578,7 @@ namespace hase::kernels
         typename T_Executor,
         typename T_BetaBuffer,
         typename T_CellBuffer,
-        typename T_LumpedBuffer,
-        typename T_SampleBuffer>
+        typename T_RateBuffer>
     void enqueueGeneralPump(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
         auto const& queue,
@@ -608,11 +587,10 @@ namespace hase::kernels
         hase::core::PumpParameters const& pump,
         T_BetaBuffer& betaVolume,
         T_CellBuffer& cellPumpIntegral,
-        T_LumpedBuffer& lumpedVolume,
-        T_SampleBuffer& sampleRate)
+        T_RateBuffer& cellRate)
     {
         alpaka::onHost::fill(queue, cellPumpIntegral, 0.0, alpaka::Vec{static_cast<std::size_t>(mesh.numberOfCells)});
-        alpaka::onHost::fill(queue, sampleRate, 0.0, alpaka::Vec{static_cast<std::size_t>(mesh.numberOfSamples)});
+        alpaka::onHost::fill(queue, cellRate, 0.0, alpaka::Vec{static_cast<std::size_t>(mesh.numberOfCells)});
         alpaka::onHost::wait(queue);
         for(std::size_t sourceIndex = 0u; sourceIndex < pump.sources.size(); ++sourceIndex)
         {
@@ -622,7 +600,7 @@ namespace hase::kernels
                 source,
                 pump.rayCount,
                 pump.rngSeed + static_cast<std::uint32_t>(sourceIndex));
-            rays = tracePumpBatch(devBundle, queue, mesh, betaVolume, cellPumpIntegral, sampleRate, std::move(rays));
+            rays = tracePumpBatch(devBundle, queue, mesh, betaVolume, cellPumpIntegral, std::move(rays));
             for(auto const& relay : source.relays)
             {
                 rays = applyPumpRelay(hostMesh, rays, relay);
@@ -632,17 +610,16 @@ namespace hase::kernels
                     mesh,
                     betaVolume,
                     cellPumpIntegral,
-                    sampleRate,
                     std::move(rays));
             }
         }
-        auto sampleFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+        auto cellFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
             devBundle.device,
             devBundle.executor,
-            alpaka::Vec{mesh.numberOfSamples});
+            alpaka::Vec{mesh.numberOfCells});
         queue.enqueue(
-            sampleFrameSpec,
-            alpaka::KernelBundle{NormalizePumpRate{}, mesh, cellPumpIntegral, lumpedVolume, sampleRate});
+            cellFrameSpec,
+            alpaka::KernelBundle{NormalizeCellPumpRate{}, mesh, cellPumpIntegral, cellRate});
         alpaka::onHost::wait(queue);
     }
 } // namespace hase::kernels

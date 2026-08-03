@@ -38,7 +38,6 @@ namespace
             {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0},
             {0.25, 0.25, 0.25},
             {0.0},
-            {0.0, 0.0, 0.0, 0.0},
             {10u},
             {1.0f, 1.0f, 1.0f, 1.0f},
             {0.0f, 0.0f},
@@ -186,7 +185,6 @@ TEMPLATE_LIST_TEST_CASE(
     auto deviceMesh = mesh.toDevice(device);
     auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
     auto cellIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
-    auto sampleIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>(4u, 0.0));
 
     hase::kernels::PumpRayBatch ray;
     ray.originX = {0.2};
@@ -209,7 +207,6 @@ TEMPLATE_LIST_TEST_CASE(
         deviceMesh.toView(),
         betaVolume,
         cellIntegral,
-        sampleIntegral,
         std::move(ray));
 
     constexpr double pathLength = 0.6;
@@ -220,13 +217,8 @@ TEMPLATE_LIST_TEST_CASE(
     CHECK(traced.exitFace[0] == 0);
 
     auto const cellValues = copyDoubleBuffer(queue, cellIntegral);
-    auto const sampleValues = copyDoubleBuffer(queue, sampleIntegral);
     REQUIRE(cellValues.size() == 1u);
     CHECK(cellValues[0] == Catch::Approx(expectedIntegral).epsilon(2.0e-6));
-    CHECK(
-        std::accumulate(sampleValues.begin(), sampleValues.end(), 0.0)
-        == Catch::Approx(cellValues[0]).epsilon(2.0e-6));
-    CHECK(std::ranges::all_of(sampleValues, [](double const value) { return value >= 0.0; }));
 }
 
 TEST_CASE("general pump super-Gaussian profile and angular sampling use physical coordinates", "[pump][source]")
@@ -256,10 +248,7 @@ TEST_CASE("general pump super-Gaussian profile and angular sampling use physical
     }
 }
 
-TEMPLATE_LIST_TEST_CASE(
-    "general pump orchestration conserves cell-to-sample deposition",
-    "[pump][backend]",
-    TestBackends)
+TEMPLATE_LIST_TEST_CASE("general pump orchestration produces conservative cell rates", "[pump][backend]", TestBackends)
 {
     auto const backend = TestType::makeDict();
     auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
@@ -277,9 +266,7 @@ TEMPLATE_LIST_TEST_CASE(
     auto deviceMesh = mesh.toDevice(device);
     auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
     auto cellIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
-    double const lumpedShare = static_cast<double>(mesh.cellVolumes[0]) / 4.0;
-    auto lumpedVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>(4u, lumpedShare));
-    auto sampleRate = hase::alpakaUtils::toDevice(queue, std::vector<double>(4u, 0.0));
+    auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
 
     auto source = uniformSource(10u);
     source.wavelengths = {940e-9};
@@ -299,15 +286,14 @@ TEMPLATE_LIST_TEST_CASE(
         pump,
         betaVolume,
         cellIntegral,
-        lumpedVolume,
-        sampleRate);
+        cellRate);
 
     auto const cells = copyDoubleBuffer(queue, cellIntegral);
-    auto const samples = copyDoubleBuffer(queue, sampleRate);
+    auto const rates = copyDoubleBuffer(queue, cellRate);
     REQUIRE(cells.size() == 1u);
-    REQUIRE(samples.size() == 4u);
+    REQUIRE(rates.size() == 1u);
     CHECK(cells[0] > 0.0);
-    CHECK(std::ranges::all_of(samples, [](double const value) { return std::isfinite(value) && value >= 0.0; }));
-    double const integratedSamples = std::accumulate(samples.begin(), samples.end(), 0.0) * lumpedShare;
-    CHECK(integratedSamples == Catch::Approx(cells[0]).epsilon(2.0e-6));
+    CHECK(std::isfinite(rates[0]));
+    CHECK(rates[0] >= 0.0);
+    CHECK(rates[0] * static_cast<double>(mesh.cellVolumes[0]) == Catch::Approx(cells[0]).epsilon(2.0e-6));
 }
