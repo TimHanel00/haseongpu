@@ -173,27 +173,34 @@ def testPtTet4GeometryConvertsBackToLegacyWedgeOrder(
     assert "betaVolume" in cell_data
 
 
-def testLaserPumpCladdingPassesRawAseSpectrumToBackend():
-    spectra = laserPumpCladding.laserPumpCladdingSpectralProperties()
-    regression_spectra = laserPumpCladding.laserPumpCladdingSpectralProperties(191)
-    material_dir = repoRoot / "example" / "input"
+def testLaserPumpCladdingMaterialKeepsRawSpectrumAtItsNativeResolution():
+    spectra = laserPumpCladding.laser_pump_cladding_material(191).crossSections
+    material_dir = repoRoot / "material_library" / "data" / "legacy_yb_yag"
     raw_wavelengths_absorption = np.loadtxt(material_dir / "lambda_a.txt")
     raw_absorption = np.loadtxt(material_dir / "sigma_a.txt")
     raw_wavelengths_emission = np.loadtxt(material_dir / "lambda_e.txt")
     raw_emission = np.loadtxt(material_dir / "sigma_e.txt")
 
     assert raw_wavelengths_absorption.size == 191
-    assert spectra.resolution == 1000
-    assert regression_spectra.resolution == 191
-    np.testing.assert_array_equal(spectra.wavelengthsAbsorption, raw_wavelengths_absorption)
-    np.testing.assert_array_equal(spectra.crossSectionAbsorption, raw_absorption)
-    np.testing.assert_array_equal(spectra.wavelengthsEmission, raw_wavelengths_emission)
-    np.testing.assert_array_equal(spectra.crossSectionEmission, raw_emission)
+    np.testing.assert_array_equal(spectra.wavelengths.toValue(laserPumpCladding.units.nm), raw_wavelengths_absorption)
+    np.testing.assert_array_equal(spectra.wavelengths.toValue(laserPumpCladding.units.nm), raw_wavelengths_emission)
+    np.testing.assert_array_equal(spectra.absorption.toValue(laserPumpCladding.units.cm**2), raw_absorption)
+    np.testing.assert_array_equal(spectra.emission.toValue(laserPumpCladding.units.cm**2), raw_emission)
 
 
-def testLaserPumpCladdingTet4MediumAssignsCylinderSurfaceOptics():
-    medium = laserPumpCladding.laserPumpCladdingMedium()
-    topology = medium.topology
+def testLaserPumpCladdingMaterialResamplesSpectrumBeforeTransport():
+    material = laserPumpCladding.laser_pump_cladding_material(1000)
+
+    assert material.crossSections.wavelengths.size == 1000
+    assert material.crossSections.metadata["spectral_resampling"] == {
+        "method": "linear",
+        "source_sample_count": 191,
+        "sample_count": 1000,
+    }
+
+
+def testLaserPumpCladdingTet4MeshAssignsCylinderSurfaceDomains():
+    topology = laserPumpCladding.laser_pump_cladding_mesh()
     boundaries = np.asarray(topology.faceBoundaries, dtype=np.int32)
     points = np.asarray(topology.points, dtype=np.float64)
     face_nodes = np.asarray(topology.facePointIndices, dtype=np.uint32)
@@ -216,23 +223,14 @@ def testLaserPumpCladdingTet4MediumAssignsCylinderSurfaceOptics():
     np.testing.assert_allclose(face_z[boundaries == bottom_id], np.min(points[:, 2]), rtol=0.0, atol=1.0e-12)
     np.testing.assert_allclose(face_z[boundaries == top_id], np.max(points[:, 2]), rtol=0.0, atol=1.0e-12)
 
-    surface_reflectivity = np.asarray(medium.get("surfaceReflectivity").value, dtype=np.float32)
-    surface_inside = np.asarray(medium.get("surfaceRefractiveIndexInside").value, dtype=np.float32)
-    surface_outside = np.asarray(medium.get("surfaceRefractiveIndexOutside").value, dtype=np.float32)
-
-    assert surface_reflectivity.shape == (cladding_id + 1,)
-    np.testing.assert_array_equal(surface_reflectivity[[bottom_id, top_id, cladding_id]], np.asarray([0.0, 0.0, 0.0], dtype=np.float32))
-    np.testing.assert_array_equal(surface_inside[[bottom_id, top_id, cladding_id]], np.asarray([1.83, 1.83, 1.0], dtype=np.float32))
-    np.testing.assert_array_equal(surface_outside[[bottom_id, top_id, cladding_id]], np.asarray([1.0, 1.0, 1.0], dtype=np.float32))
 
 
-def testLaserPumpCladdingTet4MediumPreservesLegacyTenLayerPumpLayout():
-    medium = laserPumpCladding.laserPumpCladdingMedium()
-    topology = medium.topology
+def testLaserPumpCladdingTet4MeshPreservesTenLayerPumpLayout():
+    topology = laserPumpCladding.laser_pump_cladding_mesh()
     points = np.asarray(topology.points, dtype=np.float64)
     z_planes = np.unique(points[:, 2])
 
-    assert topology.cellDomainNames == {1: "gain_medium"}
+    assert topology.cellDomainNames == {1: "crystal_volume"}
     np.testing.assert_array_equal(topology.cellDomains, np.ones(topology.numberOfCells, dtype=np.int32))
     assert z_planes.size == laserPumpCladding.NUMBER_OF_Z_LAYERS
     np.testing.assert_allclose(
@@ -245,7 +243,6 @@ def testLaserPumpCladdingTet4MediumPreservesLegacyTenLayerPumpLayout():
     assert topology.structuredNumberOfLevels == laserPumpCladding.NUMBER_OF_Z_LAYERS
     assert topology.numberOfSamplePoints == topology.numberOfPoints
     assert topology.numberOfSamplePoints == topology.structuredNumberOfPoints * topology.structuredNumberOfLevels
-    assert medium.get("betaCells").expectedShape == (topology.numberOfSamplePoints,)
 
     points_by_level = points.reshape(
         (topology.structuredNumberOfLevels, topology.structuredNumberOfPoints, 3)
@@ -272,23 +269,23 @@ def testLaserPumpCladdingRunExampleReflectionToggleChangesPhiAse(
 ):
     def run(use_reflections):
         output_dir = tmp_path / f"reflections_{int(use_reflections)}"
-        laserPumpCladding.runExample(
+        laserPumpCladding.run_example(
             backend=alpakaRuntimeBackend,
-            openpmdBackend=openPmdRuntimeBackend,
-            timeSlices=2,
+            openPmdBackend=openPmdRuntimeBackend,
+            timeSteps=2,
             pumpSteps=1,
             vtkOutputDir=output_dir,
-            enableASE=True,
+            enableAse=True,
             prePump=True,
             rngSeed=1234,
             useReflections=use_reflections,
-        minRays=20_000,
-        maxRays=20_000,
+            minRays=20_000,
+            maxRays=20_000,
             adaptiveSteps=1,
             relativeStandardErrorThreshold=0.1,
-            reflectionMaxIterations=17,
-            reflectionTolerance=0.0,
-            surfaceReservoirSize=32,
+            reflection_max_iterations=17,
+            reflection_tolerance=0.0,
+            surface_reservoir_size=32,
         )
         points, cells, _cell_types, _point_data, cell_data, _fields = _parseVtk(
             output_dir / "laserPumpCladding_002.vtk"
@@ -312,13 +309,13 @@ def laserPumpCladdingBackendResults(
     results = {}
     for alpakaBackend in AlpakaBackends.all():
         tet4_dir = tmp_path_factory.mktemp(f"laser_pump_{openPmdRuntimeBackend}_{alpakaBackend}")
-        state = laserPumpCladding.runExample(
+        state = laserPumpCladding.run_example(
             backend=alpakaBackend,
-            openpmdBackend=openPmdRuntimeBackend,
-            timeSlices=metadata["parameters"]["timeSlices"],
+            openPmdBackend=openPmdRuntimeBackend,
+            timeSteps=metadata["parameters"]["timeSlices"],
             pumpSteps=metadata["parameters"]["pumpSteps"],
             vtkOutputDir=tet4_dir,
-            enableASE=True,
+            enableAse=True,
             prePump=metadata["parameters"]["prePump"],
             rngSeed=metadata["random"]["rngSeed"],
             useReflections=metadata["parameters"]["useReflections"],
@@ -328,7 +325,7 @@ def laserPumpCladdingBackendResults(
             adaptiveSteps=metadata["parameters"]["adaptiveSteps"],
         )
 
-        relative_standard_error = np.asarray(state.volume_relative_standard_error, dtype=np.float64)
+        relative_standard_error = np.asarray(state.volumeRelativeStandardError, dtype=np.float64)
         defined_relative_standard_error = relative_standard_error[np.isfinite(relative_standard_error)]
         observed_integrals = []
         for step in metadata["observable"]["stepNumbers"]:
@@ -393,13 +390,12 @@ def testLaserPumpCladdingPhiAseIntegralsAgreeAcrossAlpakaBackends(laserPumpCladd
         )
 
 
-def testLaserPumpCladdingMediumUsesPrimitiveReflectivityShape():
-    medium = laserPumpCladding.laserPumpCladdingMedium()
-    cell_count = medium.topology.numberOfCells
+def testLaserPumpCladdingUsesPublicMaterialProperties():
+    material = laserPumpCladding.laser_pump_cladding_material()
 
-    assert medium.get("reflectivities").expectedShape == (cell_count, 2)
-    reflectivities = medium.get("reflectivities").value.reshape((cell_count, 2), order="F")
-    assert reflectivities.shape == (cell_count, 2)
+    assert material.activeIonDensity.toValue(laserPumpCladding.units.m**-3) == pytest.approx(2 * 1.388e26)
+    assert material.refractiveIndex == 1.83
+    assert material.fluorescenceLifetime.toValue(laserPumpCladding.units.s) == pytest.approx(9.41e-4)
 
 
 @pytest.fixture
@@ -410,7 +406,7 @@ def fakeCompiledSnapshots(monkeypatch):
         simulation,
         *,
         steps,
-        pumpSteps=None,
+        pump_steps=None,
         transport=None,
         command_prefix=None,
         workspace_dir=None,
@@ -419,22 +415,22 @@ def fakeCompiledSnapshots(monkeypatch):
             {
                 "simulation": simulation,
                 "steps": steps,
-                "pumpSteps": pumpSteps,
+                "pump_steps": pump_steps,
                 "transport": transport,
                 "command_prefix": command_prefix,
                 "workspace_dir": workspace_dir,
-                "phiASE": simulation.phiASE,
+                "ase_solver": simulation.aseSolver,
             }
         )
-        point_shape = simulation.gainMedium.get("betaCells").expectedShape
-        volume_shape = simulation.gainMedium.get("betaVolume").expectedShape
+        point_shape = (simulation.mesh.numberOfPoints,)
+        volume_shape = (simulation.mesh.numberOfCells,)
         states = []
         for step in range(1, steps + 1):
-            pump_active = pumpSteps is None or step <= pumpSteps
+            pump_active = pump_steps is None or step <= pump_steps
             states.append(
                 SimpleNamespace(
                     step=step,
-                    time=step * simulation.timeStep,
+                    time=step * float(simulation.timeStepSize.toValue(laserPumpCladding.units.s)),
                     betaCells=np.full(point_shape, 0.05 * step, dtype=np.float64),
                     betaVolume=np.full(volume_shape, 0.025 * step, dtype=np.float64),
                     phiAse=np.ones(point_shape, dtype=np.float64),
@@ -449,19 +445,19 @@ def fakeCompiledSnapshots(monkeypatch):
             )
         return states
 
-    monkeypatch.setattr(transport, "runSimulation", fake_run_simulation)
+    monkeypatch.setattr(transport, "run_simulation", fake_run_simulation)
     return calls
 
 
 def testLaserPumpCladdingExampleWritesVtkFromCompiledSnapshots(
-    monkeypatch,
     tmp_path,
-    smallGainMedium,
     fakeCompiledSnapshots,
 ):
-    monkeypatch.setattr(laserPumpCladding, "laserPumpCladdingMedium", lambda **kwargs: smallGainMedium)
-
-    state = laserPumpCladding.runExample(timeSlices=2, pumpSteps=1, vtkOutputDir=tmp_path)
+    state = laserPumpCladding.run_example(
+        timeSteps=2,
+        pumpSteps=1,
+        vtkOutputDir=tmp_path,
+    )
 
     first = tmp_path / "laserPumpCladding_001.vtk"
     second = tmp_path / "laserPumpCladding_002.vtk"
@@ -470,48 +466,43 @@ def testLaserPumpCladdingExampleWritesVtkFromCompiledSnapshots(
     assert state.step == 2
     scalars = _vtkScalarNames(second)
     assert {"betaCells", "phiASE", "dndtAse", "dndtPump", "cladAbs"}.issubset(scalars)
-    assert fakeCompiledSnapshots[-1]["phiASE"].relativeStandardErrorThreshold == 0.1
-    assert fakeCompiledSnapshots[-1]["pumpSteps"] == 1
+    assert fakeCompiledSnapshots[-1]["ase_solver"].relativeStandardErrorThreshold == 0.1
+    assert fakeCompiledSnapshots[-1]["pump_steps"] == 1
+    simulation = fakeCompiledSnapshots[-1]["simulation"]
+    assert simulation.resolvedProblem.materials[0].crossSections.wavelengths.size == 1000
+    assert "spectralResolution" not in transport._compiled_attribute_values(simulation)
 
 
 def testLaserPumpCladdingExampleWiresOpenPmdBackend(
-    monkeypatch,
     tmp_path,
-    smallGainMedium,
     fakeCompiledSnapshots,
 ):
-    monkeypatch.setattr(laserPumpCladding, "laserPumpCladdingMedium", lambda **kwargs: smallGainMedium)
-
-    state = laserPumpCladding.runExample(
-        timeSlices=2,
+    state = laserPumpCladding.run_example(
+        timeSteps=2,
         pumpSteps=1,
         vtkOutputDir=tmp_path,
-        openpmdBackend="hdf5",
+        openPmdBackend="hdf5",
     )
 
     assert state.step == 2
     assert fakeCompiledSnapshots[-1]["transport"] == "hdf5"
-    assert fakeCompiledSnapshots[-1]["phiASE"].openpmdBackend == "hdf5"
-    assert np.allclose(state.dndtPump, 0.0)
+    assert fakeCompiledSnapshots[-1]["ase_solver"].openPmdBackend == "hdf5"
+    assert np.allclose(state.dExcitationDtPump, 0.0)
 
 
 def testLaserPumpCladdingExampleCanDisableAse(
-    monkeypatch,
     tmp_path,
-    smallGainMedium,
     fakeCompiledSnapshots,
 ):
-    monkeypatch.setattr(laserPumpCladding, "laserPumpCladdingMedium", lambda **kwargs: smallGainMedium)
-
-    state = laserPumpCladding.runExample(
-        timeSlices=1,
+    state = laserPumpCladding.run_example(
+        timeSteps=1,
         pumpSteps=1,
         vtkOutputDir=tmp_path,
-        enableASE=False,
+        enableAse=False,
     )
 
     assert state.step == 1
-    assert fakeCompiledSnapshots[-1]["simulation"].enableASE is False
+    assert fakeCompiledSnapshots[-1]["simulation"].enableAse is False
 
 
 def testLaserPumpCladdingCliAcceptsDisableAse(monkeypatch, tmp_path):
@@ -519,16 +510,19 @@ def testLaserPumpCladdingCliAcceptsDisableAse(monkeypatch, tmp_path):
 
     def fake_run_example(*args, **kwargs):
         calls.append({"args": args, "kwargs": kwargs})
-        return SimpleNamespace(phi_ase=np.zeros((2, 3)), beta_cells=np.zeros((2, 3)))
+        return SimpleNamespace(
+            phiAse=np.zeros((2, 3)),
+            sampledExcitationFraction=np.zeros((2, 3)),
+        )
 
-    monkeypatch.setattr(laserPumpCladding, "runExample", fake_run_example)
+    monkeypatch.setattr(laserPumpCladding, "run_example", fake_run_example)
 
     laserPumpCladding.main(
         [
             "--disable-ase",
-            "--timeSteps",
+            "--time-steps",
             "1",
-            "--pumpSteps",
+            "--pump-steps",
             "1",
             "--vtk-output-dir",
             str(tmp_path),
@@ -537,7 +531,7 @@ def testLaserPumpCladdingCliAcceptsDisableAse(monkeypatch, tmp_path):
         ]
     )
 
-    assert calls[-1]["kwargs"]["enableASE"] is False
+    assert calls[-1]["kwargs"]["enableAse"] is False
     assert calls[-1]["kwargs"]["spectralResolution"] == 191
 
 
@@ -548,16 +542,19 @@ def testLaserPumpCladdingLauncherUsesSupportedCliOptions(monkeypatch, tmp_path):
 
     def fake_run_example(*args, **kwargs):
         calls.append({"args": args, "kwargs": kwargs})
-        return SimpleNamespace(phi_ase=np.zeros((2, 3)), beta_cells=np.zeros((2, 3)))
+        return SimpleNamespace(
+            phiAse=np.zeros((2, 3)),
+            sampledExcitationFraction=np.zeros((2, 3)),
+        )
 
-    monkeypatch.setattr(laserPumpCladding, "runExample", fake_run_example)
-    command = _laser_pump_launcher.launchCommand("hdf5", tmp_path)
+    monkeypatch.setattr(laserPumpCladding, "run_example", fake_run_example)
+    command = _laser_pump_launcher.launch_command("hdf5", tmp_path)
 
     laserPumpCladding.main(command[2:])
 
-    assert calls[-1]["kwargs"]["openpmdBackend"] == "hdf5"
+    assert calls[-1]["kwargs"]["openPmdBackend"] == "hdf5"
     assert calls[-1]["kwargs"]["rngSeed"] == 5489
-    assert calls[-1]["args"][0] == mpi_config
+    assert calls[-1]["kwargs"]["phiAseConfigPath"] == mpi_config
 
 
 @pytest.mark.parametrize("option", ("--min-sample-range", "--max-sample-range"))

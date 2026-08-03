@@ -1,12 +1,11 @@
 experiment:
-  minRays: 10000
-  maxRays: 1000000
-  relativeStandardErrorThreshold: 0.1
+  min_rays: 10000
+  max_rays: 1000000
+  relative_standard_error_threshold: 0.1
 
 compute:
   backend: Host_Cpu_CpuOmpBlocks
   openpmd_backend: auto
   parallel_mode: single
-  numDevices: 1
-  n_per_node: 1
-  write_vtk: false
+  num_devices: 1
+  ranks_per_node: 1

@@ -11,24 +11,24 @@ from tempfile import TemporaryDirectory
 
 import gmsh
 
-from _source_tree_import import ensure_hase_importable
+try:
+    from ._source_tree_import import ensure_hase_importable
+except ImportError:
+    from _source_tree_import import ensure_hase_importable
 
 ensure_hase_importable()
 
 from HASEonGPU import (  # noqa: E402
     AbsorbingSurface,
-    BoundaryLayout,
     CrossSectionTable,
-    ExteriorBoundary,
     InitialState,
-    MaterialDefinition,
-    MaterialInstance,
-    MaterialLayout,
+    Material,
     MonteCarloASESolver,
     MonteCarloPumpSolver,
     RungeKutta4,
     Simulation,
     UnstructuredMesh,
+    units,
 )
 
 
@@ -52,24 +52,31 @@ def write_minimal_gmsh_mesh(filename):
 
 def build_simulation(mesh):
     cross_sections = CrossSectionTable.monochromatic(
-        wavelength=1030e-9,
-        absorption=1.2e-25,
-        emission=2.48e-24,
+        wavelength=1030 * units.nm,
+        absorption=1.2e-21 * units.cm**2,
+        emission=2.48e-20 * units.cm**2,
     )
-    crystal = MaterialInstance(
-        MaterialDefinition("Yb:YAG", 1.82, 941e-6, cross_sections),
-        active_ion_density=2.76e26,
+    yag = Material("Yb:YAG").addState(
+        temperature=300 * units.K,
+        refractiveIndex=1.82,
+        fluorescenceLifetime=941 * units.us,
+        crossSections=cross_sections,
+        metadata={"source": "synthetic gmsh example"},
+    )
+    crystal = yag.at(
+        temperature=300 * units.K,
+        activeIonDensity=2.76e20 / units.cm**3,
     )
     simulation = Simulation(
         mesh=mesh,
-        ase_solver=MonteCarloASESolver(backend="Host_Cpu_CpuSerial"),
-        pump_solver=MonteCarloPumpSolver(ray_count=100_000),
-        time_integrator=RungeKutta4(),
-        time_step_size=1e-5,
-        initial_state=InitialState(0.0),
+        aseSolver=MonteCarloASESolver(backend="Host_Cpu_CpuSerial"),
+        pumpSolver=MonteCarloPumpSolver(rayCount=100_000),
+        timeIntegrator=RungeKutta4(),
+        timeStepSize=10 * units.us,
+        initialState=InitialState(0 * units.one),
     )
-    simulation.add_material(crystal, MaterialLayout("crystal"))
-    simulation.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("exterior"))
+    simulation.addMaterial(crystal, domains=mesh.volume("crystal"))
+    simulation.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
     return simulation
 
 
@@ -77,14 +84,14 @@ def main():
     with TemporaryDirectory() as tmpdir:
         filename = Path(tmpdir) / "minimal_crystal.msh"
         write_minimal_gmsh_mesh(filename)
-        mesh = UnstructuredMesh.from_file(filename)
+        mesh = UnstructuredMesh.fromFile(filename, coordinateUnit=units.cm)
         simulation = build_simulation(mesh)
-        problem = simulation.compile()
-        print(f"gmsh topology: {mesh.number_of_cells} tetrahedra")
-        print(f"volume domains: {mesh.volume_domain_names}")
-        print(f"surface domains: {mesh.surface_domain_names}")
-        print(f"material table: {[material.display_name for material in problem.materials]}")
-        print(f"backend-compatible: {problem.unsupported_features() == ()}")
+        problem = simulation.resolveProblem()
+        print(f"gmsh topology: {mesh.numberOfCells} tetrahedra")
+        print(f"volume domains: {mesh.volumeDomainNames}")
+        print(f"surface domains: {mesh.surfaceDomainNames}")
+        print(f"material table: {[material.displayName for material in problem.materials]}")
+        print(f"backend-compatible: {problem.unsupportedFeatures() == ()}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,6 +32,8 @@ from . import (
     unitDimension,
 )
 from ..structures import Result
+from ..problem import AbsorbingSurface, ConstantReflectivitySurface
+from hase_units import units
 
 
 CANONICAL_POINTS_SPEC = FieldSpec(
@@ -271,7 +273,7 @@ def _ensure_compiled_backend_available(spec, executable):
     if spec.name not in backends:
         available = ", ".join(backends)
         raise RuntimeError(
-            f"openPMD backend '{spec.name}' is selected by PhiASE.openpmdBackend/YAML "
+            f"openPMD backend '{spec.name}' is selected by MonteCarloASESolver.openpmd_backend "
             f"'openpmd_backend', but the runtime openPMD backend-probe library reports "
             f"available backends: {available}. Probe library: {probe_library}. Change "
             f"openpmd_backend in the YAML or fix the runtime openPMD provider environment. {HASE_CONFIGURE_HINT}"
@@ -310,7 +312,7 @@ def _resolve_backend(backend, executable):
         _ensure_compiled_backend_available(spec, executable)
     if requested not in python_backends:
         raise RuntimeError(
-            f"openPMD backend '{requested}' is selected by PhiASE.openpmdBackend/YAML "
+            f"openPMD backend '{requested}' is selected by MonteCarloASESolver.openpmd_backend "
             f"'openpmd_backend', but the active Python openPMD-api supports: "
             f"{', '.join(python_backends)}. {HASE_CONFIGURE_HINT}"
         )
@@ -394,76 +396,7 @@ def _write_artifact_manifest(path: Path, *, backend, input_path, output_path, in
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _fieldContext(gainMedium):
-    topology = gainMedium.topology
-    if hasattr(topology, "cellPointIndices") and hasattr(topology, "neighborCells"):
-        number_of_levels = int(getattr(topology, "structuredNumberOfLevels", 1))
-        number_of_points = int(getattr(topology, "structuredNumberOfPoints", topology.numberOfSamplePoints))
-        return SimpleNamespace(
-            numberOfMeshPoints=topology.numberOfPoints,
-            numberOfPoints=number_of_points,
-            numberOfTriangles=topology.numberOfCells,
-            numberOfCells=topology.numberOfCells,
-            numberOfLevels=number_of_levels,
-            thickness=float(getattr(topology, "structuredThickness", 0.0)),
-            numberOfSamplePoints=topology.numberOfSamplePoints,
-            numberOfSurfaceDomains=int(np.max(topology.faceBoundaries[topology.faceBoundaries > 0]) + 1) if np.any(topology.faceBoundaries > 0) else 0,
-        )
-    raise TypeError("PhiASE openPMD transport requires a Tet4 VolumeTopology")
-
-
-def _validatePhiAseTransportOptions(phiAse):
-    if bool(phiAse.writeVtk):
-        raise ValueError("PhiASE.writeVtk is not supported by the openPMD transport")
-    if getattr(phiAse, "devices", None):
-        raise ValueError("PhiASE.devices is not supported by the openPMD transport")
-
-
-def _attributeFields(phiAse, gainMedium, crossSections):
-    values = _attributeValues(phiAse, gainMedium, crossSections)
-    for spec in simulationAttributeSpecs:
-        if spec.name not in values:
-            if spec.name == "rngSeed":
-                continue
-            raise KeyError(spec.name)
-        yield _AttributeField(spec.attribute, spec.cast(values[spec.name]))
-
-
-def _attributeValues(phiAse, gainMedium, crossSections):
-    _validatePhiAseTransportOptions(phiAse)
-    context = _fieldContext(gainMedium)
-    number_of_samples = (
-        context.numberOfCells
-    )
-    values = {}
-    if hasattr(gainMedium.topology, "openPmdAttributes"):
-        values.update(gainMedium.topology.openPmdAttributes(context))
-    else:
-        values.update(
-            {
-                "numberOfPoints": context.numberOfPoints,
-                "numberOfTriangles": context.numberOfCells,
-                "numberOfLevels": 1,
-                "thickness": 0.0,
-            }
-        )
-    values.update(gainMedium.openPmdAttributes(context))
-    values.update(crossSections.openPmdAttributes())
-    values.update(phiAse.openPmdAttributes(numberOfSamples=number_of_samples))
-    return values
-
-def _arrayFields(gainMedium, crossSections, *, phiAse=None, include_static=True):
-    context = _fieldContext(gainMedium)
-    for field in _fieldsFromDomain(gainMedium.openPmdFields(context)):
-        if field.spec.name in {"pointBeta", "betaCells"}:
-            continue
-        if include_static or field.spec.name in DYNAMIC_FIELD_NAMES:
-            yield field
-    if include_static:
-        yield from _fieldsFromDomain(crossSections.openPmdFields(spectralContext))
-
-
-def _fieldsFromDomain(fields):
+def _fields_from_domain(fields):
     for field in fields:
         if isinstance(field, OpenPmdComponentField):
             spec = fieldSpec(field.name)
@@ -486,6 +419,128 @@ def _fieldsFromDomain(fields):
             continue
         name, values, context = field
         yield _ScalarArrayField(fieldSpec(name), values, context)
+
+
+def _compiled_context(simulation):
+    return _explicit_topology_context(simulation.mesh)
+
+
+def _compiled_surface_optics(simulation):
+    problem = simulation.resolvedProblem
+    material = problem.materials[0]
+    positive = np.asarray(simulation.mesh.surfaceDomainIds)
+    positive = positive[positive > 0]
+    size = int(np.max(positive, initial=-1)) + 1
+    reflectivity = np.zeros(size, dtype=np.float32)
+    inside = np.ones(size, dtype=np.float32)
+    outside = np.ones(size, dtype=np.float32)
+    for boundary_id, model in enumerate(problem.boundaries):
+        domain_ids = np.unique(
+            np.asarray(simulation.mesh.surfaceDomainIds)[problem.faceBoundaryId == boundary_id]
+        )
+        for identifier in domain_ids[domain_ids > 0]:
+            identifier = int(identifier)
+            if isinstance(model, AbsorbingSurface):
+                reflectivity[identifier] = 0.0
+                inside[identifier] = 1.0
+                outside[identifier] = 1.0
+            elif isinstance(model, ConstantReflectivitySurface):
+                reflectivity[identifier] = np.float32(model.reflectivity)
+                inside[identifier] = np.float32(material.refractiveIndex)
+                outside[identifier] = np.float32(model.exterior_refractive_index)
+            else:
+                raise NotImplementedError(f"unsupported exterior boundary model {type(model).__name__}")
+    return reflectivity, inside, outside
+
+
+def _compiled_attribute_values(simulation):
+    problem = simulation.resolvedProblem
+    material = problem.materials[0]
+    table = material.crossSections
+    context = _compiled_context(simulation)
+    sigma_a = np.asarray(table.absorption.toValue(units.cm**2), dtype=np.float64)
+    sigma_e = np.asarray(table.emission.toValue(units.cm**2), dtype=np.float64)
+    values = {
+        "numberOfPoints": context.numberOfPoints,
+        "numberOfTriangles": context.numberOfCells,
+        "numberOfLevels": context.numberOfLevels,
+        "thickness": context.thickness,
+        "nTot": float(material.activeIonDensity.toValue(units.cm**-3)),
+        "crystalTFluo": float(material.fluorescenceLifetime.toValue(units.s)),
+        "claddingNumber": np.iinfo(np.uint32).max,
+        "claddingAbsorption": 0.0,
+        "maxSigmaAbsorption": float(np.max(sigma_a, initial=0.0)),
+        "maxSigmaEmission": float(np.max(sigma_e, initial=0.0)),
+    }
+    values.update(simulation.aseSolver.transportAttributes(context.numberOfCells))
+    return values
+
+
+def _compiled_attribute_fields(simulation):
+    values = _compiled_attribute_values(simulation)
+    for spec in simulationAttributeSpecs:
+        if spec.name not in values:
+            if spec.name == "rngSeed":
+                continue
+            raise KeyError(spec.name)
+        yield _AttributeField(spec.attribute, spec.cast(values[spec.name]))
+
+
+def _compiled_array_fields(simulation):
+    problem = simulation.resolvedProblem
+    topology = simulation.mesh
+    material = problem.materials[0]
+    table = material.crossSections
+    context = _compiled_context(simulation)
+    excitation = np.asarray(problem.initialExcitationFraction, dtype=np.float64)
+    if topology.numberOfSamplePoints == excitation.size:
+        sampled = excitation
+    elif np.all(excitation == excitation[0]):
+        sampled = np.full(topology.numberOfSamplePoints, excitation[0], dtype=np.float64)
+    else:
+        raise NotImplementedError(
+            "the compiled backend requires uniform initial excitation when sampling points differ from cells"
+        )
+    reflectivity, inside, outside = _compiled_surface_optics(simulation)
+    fields = (
+        OpenPmdScalarField(
+            "betaCells",
+            sampled,
+            context,
+            spec=FieldSpec(
+                "betaCells",
+                "point_beta",
+                ("point", "level"),
+                np.float64,
+                lambda ctx: (ctx.numberOfPoints, ctx.numberOfLevels),
+                dynamic=True,
+            ),
+        ),
+        OpenPmdScalarField(
+            "betaVolume",
+            excitation,
+            context,
+            spec=FieldSpec(
+                "betaVolume", "beta_volume", ("cell",), np.float64,
+                lambda ctx: (ctx.numberOfCells,), dynamic=True,
+            ),
+        ),
+        OpenPmdScalarField("claddingCellType", np.zeros(context.numberOfCells, dtype=np.uint32), context),
+        OpenPmdScalarField(
+            "refractiveIndex",
+            np.asarray([material.refractiveIndex, 1.0, material.refractiveIndex, 1.0], dtype=np.float32),
+            context,
+        ),
+        OpenPmdScalarField("reflectivity", np.zeros(context.numberOfCells * 2, dtype=np.float32), context),
+        OpenPmdScalarField("surfaceReflectivity", reflectivity, context),
+        OpenPmdScalarField("surfaceRefractiveIndexInside", inside, context),
+        OpenPmdScalarField("surfaceRefractiveIndexOutside", outside, context),
+        OpenPmdScalarField("lambdaAbsorption", table.wavelengths.toValue(units.nm), spectralContext(table.wavelengths.magnitude)),
+        OpenPmdScalarField("lambdaEmission", table.wavelengths.toValue(units.nm), spectralContext(table.wavelengths.magnitude)),
+        OpenPmdScalarField("sigmaAbsorption", table.absorption.toValue(units.cm**2), spectralContext(table.absorption.magnitude)),
+        OpenPmdScalarField("sigmaEmission", table.emission.toValue(units.cm**2), spectralContext(table.emission.magnitude)),
+    )
+    yield from _fields_from_domain(fields)
 
 
 
@@ -517,7 +572,7 @@ def _series_config(path: Path, backend=None):
 
 
 def _io(executable=None):
-    _prefer_matching_openpmd_api(findCalcPhiAse() if executable is None else Path(executable))
+    _prefer_matching_openpmd_api(find_calc_phi_ase() if executable is None else Path(executable))
     try:
         import openpmd_api as io
     except ImportError as exc:
@@ -532,7 +587,7 @@ def _io(executable=None):
 
 
 def _ensure_backend_available(backend, executable=None):
-    executable = findCalcPhiAse() if executable is None else Path(executable)
+    executable = find_calc_phi_ase() if executable is None else Path(executable)
     return _resolve_backend(backend, executable)
 
 
@@ -690,7 +745,11 @@ def _record_metadata(record, spec: FieldSpec):
 
 def _resetFlatField(record, spec: FieldSpec, values, context):
     io = _io()
-    data = np.ascontiguousarray(backendFlatArray(values, spec, context, layoutOrder="backendFlat"))
+    data = np.array(
+        backendFlatArray(values, spec, context, layoutOrder="backendFlat"),
+        copy=True,
+        order="C",
+    )
     _reset_scalar_record(
         record,
         data,
@@ -748,19 +807,26 @@ def _explicit_point_components(topology):
 
 def _write_explicit_static_topology(iteration, topology):
     context = _explicit_topology_context(topology)
-    record = iteration.meshes["core_" + CANONICAL_POINTS_SPEC.recordName]
+    coordinate_unit = topology.coordinateUnit
+    points_spec = replace(
+        CANONICAL_POINTS_SPEC,
+        unit=coordinate_unit.symbol,
+        unitSI=coordinate_unit.unitSI,
+        unitDimension=coordinate_unit.unitDimension,
+    )
+    record = iteration.meshes["core_" + points_spec.recordName]
     for component_name, values in _explicit_point_components(topology).items():
         _resetComponent(
             record,
             component_name,
             np.ascontiguousarray(values),
             ["mesh_point"],
-            _unit_dimension(_io(), CANONICAL_POINTS_SPEC.unitDimension),
-            CANONICAL_POINTS_SPEC.unitSI,
+            _unit_dimension(_io(), points_spec.unitDimension),
+            points_spec.unitSI,
         )
-    _record_metadata(record, CANONICAL_POINTS_SPEC)
+    _record_metadata(record, points_spec)
     record.set_attribute("geometryParameters", "topology=explicit_tet4_volume")
-    record.set_attribute("hasePrimitiveShape", list(CANONICAL_POINTS_SPEC.expectedShape(context)))
+    record.set_attribute("hasePrimitiveShape", list(points_spec.expectedShape(context)))
 
     def backend_flat(values):
         return np.asarray(values).reshape(-1)
@@ -813,7 +879,7 @@ def _is_openpmd_calc_phi_ase(executable: Path):
     return executable.is_file() and _target_uses_openpmd_main(_build_dir_for_executable(executable))
 
 
-def findCalcPhiAse():
+def find_calc_phi_ase():
     env = os.environ.get("HASE_CALCPHIASE")
     if env:
         path = Path(env)
@@ -844,31 +910,20 @@ def _open_input_series(path, *, backend=None):
     return series
 
 
-def _write_input_iteration(series, iteration_index, phiAse, gainMedium, crossSections, *, include_static=True, runControl=None):
+def _write_compiled_input_iteration(series, iteration_index, simulation, *, run_control):
     iteration = series.snapshots()[int(iteration_index)]
     iteration.time = 0.0
-    iteration.dt = 1.0
+    iteration.dt = float(simulation.timeStepSize.toValue(units.s))
     iteration.time_unit_SI = 1.0
-
-    for field in _attributeFields(phiAse, gainMedium, crossSections):
+    for field in _compiled_attribute_fields(simulation):
         iteration.set_attribute(field.name, field.value)
-    if runControl:
-        for name, value in runControl.items():
-            if value is not None:
-                iteration.set_attribute(name, value)
-
-    if include_static:
-        iteration.set_attribute("haseStaticUpdate", True)
-        topology = gainMedium.topology
-        if not (hasattr(topology, "cellPointIndices") and hasattr(topology, "neighborCells")):
-            raise TypeError("PhiASE openPMD transport requires a Tet4 VolumeTopology")
-        _write_explicit_static_topology(iteration, topology)
-    else:
-        iteration.set_attribute("haseStaticUpdate", False)
-
-    for field in _arrayFields(gainMedium, crossSections, phiAse=phiAse, include_static=include_static):
-        _writeArrayField(iteration, field)
-
+    for name, value in run_control.items():
+        if value is not None:
+            iteration.set_attribute(name, value)
+    iteration.set_attribute("haseStaticUpdate", True)
+    _write_explicit_static_topology(iteration, simulation.mesh)
+    for field in _compiled_array_fields(simulation):
+        _write_array_field(iteration, field)
     iteration.close()
 
 
@@ -891,19 +946,15 @@ class OpenPmdInputSeries:
         self.close()
         return False
 
-    def write(self, phiAse, gainMedium, crossSections, *, iteration_index=None, include_static=None, runControl=None):
+    def write_simulation(self, simulation, *, iteration_index=0, run_control):
         if self._series is None:
             raise RuntimeError("OpenPmdInputSeries must be used as a context manager before writing")
-        index = self._next_iteration if iteration_index is None else int(iteration_index)
-        write_static = (index == 0) if include_static is None else bool(include_static)
-        _write_input_iteration(
+        index = int(iteration_index)
+        _write_compiled_input_iteration(
             self._series,
             index,
-            phiAse,
-            gainMedium,
-            crossSections,
-            include_static=write_static,
-            runControl=runControl,
+            simulation,
+            run_control=run_control,
         )
         self._series.flush()
         self._next_iteration = max(self._next_iteration, index + 1)
@@ -917,7 +968,7 @@ class OpenPmdInputSeries:
 
 
 
-def _writeArrayField(iteration, field):
+def _write_array_field(iteration, field):
     if isinstance(field, _ComponentArrayField):
         record = iteration.meshes[field.prefix + field.recordName]
         for component_name, values in field.components.items():
@@ -947,33 +998,6 @@ def _iteration_index(iteration, fallback=None):
         if hasattr(iteration, name):
             return int(getattr(iteration, name))
     return fallback
-
-
-def _read_result_iteration(series, iteration, *, fallback_index=None) -> tuple[int | None, Result]:
-    iteration_index = _iteration_index(iteration, fallback_index)
-    prefix = "core_result_"
-    values = {
-        spec.name: _loadScalar(series, iteration, prefix + spec.recordName, spec.dtypeObject)
-        for spec in resultFieldSpecs()
-    }
-    values.update(_result_status_values(iteration))
-    iteration.close()
-    return iteration_index, Result(**values)
-
-
-def read_result(path, *, expected_iteration_index=0) -> Result:
-    path = Path(path)
-    series = _io().Series(str(path), _access("read_linear"), _series_config(path))
-    for fallback_index, iteration in enumerate(series.read_iterations()):
-        iteration_index, result = _read_result_iteration(series, iteration, fallback_index=fallback_index)
-        series.close()
-        if iteration_index is not None and iteration_index != expected_iteration_index:
-            raise RuntimeError(
-                f"Expected result iteration {expected_iteration_index} in {path}, got {iteration_index}"
-            )
-        return result
-    series.close()
-    raise RuntimeError(f"No result iteration was available in {path}")
 
 
 def _read_optional_scalar(series, iteration, name, dtype, default_size=None):
@@ -1079,495 +1103,6 @@ def read_simulation_output(path):
     return states
 
 
-class OpenPmdPhiAseSession:
-    """Run PhiASE requests through openPMD and wait for matching result iterations."""
-
-    def __init__(self, *, transport=None, watchdog_interval=None, command_prefix=None, workspace_dir=None):
-        self.requested_backend = _normalize_backend(transport)
-        self.spec = None
-        self.watchdog_interval = _watchdog_interval(watchdog_interval)
-        self.command_prefix = [] if command_prefix is None else list(command_prefix)
-        self.workspace_dir = None if workspace_dir is None else Path(workspace_dir)
-        self._workspace = None
-        self._tmp_path = None
-        self._manifest_path = None
-        self._input_handle = None
-        self._output_handle = None
-        self._input_path = None
-        self._output_path = None
-        self._executable = None
-        self._proc = None
-        self._input_series = None
-        self._result_queue = None
-        self._send_queue = None
-        self._sender_errors = None
-        self._watchdog_events = None
-        self._watchdog_stop = None
-        self._reader = None
-        self._sender = None
-        self._watchdog = None
-        self._pending_results = {}
-        self._result_reader_done = False
-        self._next_iteration = 0
-        self._entered = False
-
-    def __enter__(self):
-        artifact_root = _artifact_root()
-        if artifact_root is None and self.workspace_dir is not None:
-            self.workspace_dir.mkdir(parents=True, exist_ok=True)
-        self._workspace = (
-            tempfile.TemporaryDirectory(prefix="hase-openpmd-", dir=self.workspace_dir)
-            if artifact_root is None
-            else contextlib.nullcontext(artifact_root)
-        )
-        tmp = self._workspace.__enter__()
-        self._tmp_path = Path(tmp)
-        self._tmp_path.mkdir(parents=True, exist_ok=True)
-        self._executable = findCalcPhiAse()
-        self.spec = _ensure_backend_available(self.requested_backend, self._executable)
-
-        artifact_id = _artifact_run_id() if artifact_root is not None else None
-        if self.spec.streaming:
-            stem = f"{artifact_id}-" if artifact_id else ""
-            self._input_path = self._tmp_path / f"{stem}input{self.spec.suffix}"
-            self._output_path = self._tmp_path / f"{stem}output{self.spec.suffix}"
-            self._manifest_path = None if artifact_root is None else self._tmp_path / f"{artifact_id}-manifest.txt"
-            self._input_handle = None if artifact_root is None else self._tmp_path / f"{artifact_id}-input.pmd"
-            self._output_handle = None if artifact_root is None else self._tmp_path / f"{artifact_id}-output.pmd"
-            self._write_handles_and_manifest(status="created")
-            self._start_streaming_backend()
-
-        self._entered = True
-        return self
-
-    def _calc_phi_ase_command(self, input_path, output_path):
-        return [
-            *self.command_prefix,
-            str(self._executable),
-            f"--input-path={input_path}",
-            f"--output-path={output_path}",
-        ]
-
-    def __exit__(self, exc_type, exc, traceback):
-        close_error = None
-        try:
-            self.close()
-        except BaseException as error:
-            close_error = error
-        finally:
-            self._entered = False
-            if self._workspace is not None:
-                self._workspace.__exit__(exc_type, exc, traceback)
-                self._workspace = None
-        if exc_type is None and close_error is not None:
-            raise close_error
-        return False
-
-    def run(self, phiAse, gainMedium, crossSections):
-        if not self._entered:
-            raise RuntimeError("OpenPmdPhiAseSession must be used as a context manager before running")
-        iteration_index = self._next_iteration
-        if self.spec.streaming:
-            result = self._run_streaming_iteration(iteration_index, phiAse, gainMedium, crossSections)
-        else:
-            result = self._run_file_iteration(iteration_index, phiAse, gainMedium, crossSections)
-        self._next_iteration += 1
-        return result
-
-    def close(self):
-        if self.spec.streaming:
-            self._close_streaming()
-            return
-        if self._proc is None:
-            return
-
-        return_code, stderr = self._finish_backend_process()
-        self._write_handles_and_manifest(status="completed" if return_code == 0 else "failed", return_code=return_code)
-        if return_code != 0:
-            detail = _backend_failure_detail(stderr=stderr)
-            raise RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
-
-    def _finish_backend_process(self):
-        return_code = self._proc.wait()
-        stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
-        self._proc = None
-        return return_code, stderr
-
-    def _join_streaming_thread(self, thread, description):
-        if thread is None:
-            return None
-        timeout = _streaming_thread_join_timeout()
-        thread.join(timeout=timeout)
-        if thread.is_alive():
-            return RuntimeError(f"openPMD {description} thread did not stop within {timeout:g} seconds")
-        return None
-
-    def _pop_sender_error(self):
-        if self._sender_errors is None:
-            return None
-        try:
-            return self._sender_errors.get_nowait()
-        except queue.Empty:
-            return None
-
-    def _pop_watchdog_error(self):
-        if self._watchdog_events is None:
-            return None
-        while True:
-            try:
-                ok, payload = self._watchdog_events.get_nowait()
-            except queue.Empty:
-                return None
-            if not ok:
-                return payload
-
-    def _close_streaming(self):
-        close_error = None
-        if self._send_queue is not None:
-            self._send_queue.put(None)
-
-        sender_error = self._join_streaming_thread(self._sender, "input sender")
-        self._send_queue = None
-        if sender_error is not None:
-            close_error = sender_error
-            if self._proc is not None and self._proc.poll() is None:
-                self._proc.kill()
-        elif self._sender is not None:
-            self._sender = None
-
-        return_code = None
-        stderr = ""
-        if self._proc is not None:
-            return_code, stderr = self._finish_backend_process()
-            self._write_handles_and_manifest(
-                status="completed" if return_code == 0 else "failed",
-                return_code=return_code,
-            )
-
-        reader_error = self._join_streaming_thread(self._reader, "result receiver")
-        if reader_error is not None and close_error is None:
-            close_error = reader_error
-        elif self._reader is not None:
-            self._reader = None
-
-        pending_sender_error = self._pop_sender_error()
-        if pending_sender_error is not None and close_error is None:
-            _, close_error = pending_sender_error
-
-        if return_code not in (None, 0) and close_error is None:
-            detail = _backend_failure_detail(stderr=stderr)
-            close_error = RuntimeError(f"calcPhiASE failed with return code {return_code}{detail}")
-
-        if self._watchdog_stop is not None:
-            self._watchdog_stop.set()
-        watchdog_error = self._join_streaming_thread(self._watchdog, "backend watchdog")
-        if watchdog_error is not None and close_error is None:
-            close_error = watchdog_error
-        self._watchdog = None
-        self._watchdog_stop = None
-
-        if close_error is not None:
-            raise close_error
-
-    def _paths_for_file_iteration(self, iteration_index):
-        artifact_root = _artifact_root()
-        artifact_id = _artifact_run_id() if artifact_root is not None else None
-        if artifact_id is None:
-            if iteration_index == 0:
-                return self._tmp_path / ("input" + self.spec.suffix), self._tmp_path / ("output" + self.spec.suffix), None
-            return (
-                self._tmp_path / f"input-{iteration_index}{self.spec.suffix}",
-                self._tmp_path / f"output-{iteration_index}{self.spec.suffix}",
-                None,
-            )
-        stem = f"{artifact_id}-{iteration_index}"
-        return (
-            self._tmp_path / f"{stem}-input{self.spec.suffix}",
-            self._tmp_path / f"{stem}-output{self.spec.suffix}",
-            self._tmp_path / f"{stem}-manifest.txt",
-        )
-
-    def _run_file_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
-        input_path, output_path, manifest_path = self._paths_for_file_iteration(iteration_index)
-        input_handle = None
-        output_handle = None
-        if manifest_path is not None:
-            input_handle = manifest_path.with_name(manifest_path.stem + "-input.pmd")
-            output_handle = manifest_path.with_name(manifest_path.stem + "-output.pmd")
-            _write_openpmd_handle(input_handle, input_path)
-            _write_openpmd_handle(output_handle, output_path)
-            _write_artifact_manifest(
-                manifest_path,
-                backend=self.spec.name,
-                input_path=input_path,
-                output_path=output_path,
-                input_handle=input_handle,
-                output_handle=output_handle,
-                status="created",
-            )
-
-        with OpenPmdInputSeries(input_path, backend=self.spec.name) as writer:
-            writer.write(phiAse, gainMedium, crossSections, iteration_index=iteration_index, include_static=True)
-        completed = subprocess.run(
-            self._calc_phi_ase_command(input_path, output_path),
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        _forward_backend_logging(stdout=completed.stdout, stderr=completed.stderr)
-        if manifest_path is not None:
-            _write_artifact_manifest(
-                manifest_path,
-                backend=self.spec.name,
-                input_path=input_path,
-                output_path=output_path,
-                input_handle=input_handle,
-                output_handle=output_handle,
-                status="completed" if completed.returncode == 0 else "failed",
-                return_code=completed.returncode,
-            )
-        if completed.returncode != 0:
-            detail = _backend_failure_detail(stdout=completed.stdout, stderr=completed.stderr)
-            raise RuntimeError(f"calcPhiASE failed with return code {completed.returncode}{detail}")
-        return read_result(output_path, expected_iteration_index=iteration_index)
-
-    def _write_handles_and_manifest(self, *, status, return_code=None):
-        if self._manifest_path is None:
-            return
-        _write_openpmd_handle(self._input_handle, self._input_path)
-        _write_openpmd_handle(self._output_handle, self._output_path)
-        _write_artifact_manifest(
-            self._manifest_path,
-            backend=self.spec.name,
-            input_path=self._input_path,
-            output_path=self._output_path,
-            input_handle=self._input_handle,
-            output_handle=self._output_handle,
-            status=status,
-            return_code=return_code,
-        )
-
-    def _start_streaming_backend(self):
-        self._result_reader_done = False
-        self._result_queue = queue.Queue()
-        self._send_queue = queue.Queue()
-        self._sender_errors = queue.Queue()
-        self._watchdog_events = queue.Queue()
-        self._watchdog_stop = threading.Event()
-        self._proc = subprocess.Popen(
-            self._calc_phi_ase_command(self._input_path, self._output_path),
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self._start_result_reader()
-        self._start_input_sender()
-        self._start_watchdog()
-
-    def _start_input_sender(self):
-        if self._sender is not None:
-            return
-        self._sender = threading.Thread(
-            target=self._send_streaming_inputs,
-            name="HASE openPMD input sender",
-            daemon=True,
-        )
-        self._sender.start()
-
-    def _start_result_reader(self):
-        if self._reader is not None:
-            return
-        self._reader = threading.Thread(
-            target=self._read_streaming_results,
-            name="HASE openPMD result receiver",
-            daemon=True,
-        )
-        self._reader.start()
-
-    def _start_watchdog(self):
-        if self._watchdog is not None or self.watchdog_interval is None:
-            return
-        self._watchdog = threading.Thread(
-            target=self._watch_streaming_backend,
-            name="HASE openPMD backend watchdog",
-            daemon=True,
-        )
-        self._watchdog.start()
-
-    def _watch_streaming_backend(self):
-        try:
-            while self._watchdog_stop is not None and not self._watchdog_stop.wait(self.watchdog_interval):
-                proc = self._proc
-                if proc is None:
-                    return
-                return_code = proc.poll()
-                if return_code is not None:
-                    self._watchdog_events.put((False, RuntimeError(f"calcPhiASE exited with return code {return_code}")))
-                    return
-                os.kill(proc.pid, 0)
-                self._watchdog_events.put((True, None))
-        except BaseException as exc:
-            if self._watchdog_events is not None:
-                self._watchdog_events.put((False, exc))
-
-    def _queue_streaming_result(self, item):
-        if self._result_queue is not None:
-            self._result_queue.put(item)
-
-    def _read_streaming_results(self):
-        try:
-            series = _io().Series(str(self._output_path), _access("read_linear"), _series_config(self._output_path))
-            try:
-                for fallback_index, iteration in enumerate(series.read_iterations()):
-                    result = _read_result_iteration(series, iteration, fallback_index=fallback_index)
-                    self._queue_streaming_result((True, result))
-            finally:
-                series.close()
-            self._queue_streaming_result((True, _STREAMING_RESULT_EOF))
-        except BaseException as exc:
-            self._queue_streaming_result((False, exc))
-
-    def _send_streaming_inputs(self):
-        series = None
-        try:
-            series = _open_input_series(self._input_path, backend=self.spec.name)
-            self._input_series = series
-            while True:
-                request = self._send_queue.get()
-                if request is None:
-                    return
-                iteration_index, phiAse, gainMedium, crossSections = request
-                _write_input_iteration(
-                    series,
-                    iteration_index,
-                    phiAse,
-                    gainMedium,
-                    crossSections,
-                    include_static=(iteration_index == 0),
-                )
-                series.flush()
-        except BaseException as exc:
-            self._sender_errors.put((None, exc))
-        finally:
-            if series is not None:
-                try:
-                    series.close()
-                except BaseException as exc:
-                    self._sender_errors.put((None, exc))
-            self._input_series = None
-
-    def _run_streaming_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
-        if self._send_queue is None:
-            raise RuntimeError("openPMD input sender thread is not running")
-        self._send_queue.put((iteration_index, phiAse, gainMedium, crossSections))
-        return self._wait_for_result(iteration_index)
-
-    def _raise_if_streaming_finished_without_result(self, expected_iteration_index):
-        pending = ""
-        if self._pending_results:
-            pending = f"; buffered iterations: {sorted(self._pending_results)}"
-        if self._result_reader_done:
-            raise RuntimeError(
-                f"Expected result iteration {expected_iteration_index} was not received "
-                f"before the result stream ended{pending}"
-            )
-        if self._reader is not None and not self._reader.is_alive():
-            raise RuntimeError(
-                f"Expected result iteration {expected_iteration_index} was not received "
-                f"before the result receiver thread stopped{pending}"
-            )
-        if self._proc is not None and self._proc.poll() == 0:
-            raise RuntimeError(
-                f"calcPhiASE completed before result iteration {expected_iteration_index} was received{pending}"
-            )
-
-    def _wait_for_result(self, expected_iteration_index):
-        if expected_iteration_index in self._pending_results:
-            return self._pending_results.pop(expected_iteration_index)
-
-        while True:
-            sender_error = self._pop_sender_error()
-            if sender_error is not None:
-                sender_iteration, exc = sender_error
-                suffix = "" if sender_iteration is None else f" for iteration {sender_iteration}"
-                raise RuntimeError(f"openPMD input sender failed{suffix}") from exc
-
-            watchdog_error = self._pop_watchdog_error()
-            if watchdog_error is not None:
-                stderr = ""
-                if self._proc is not None and self._proc.poll() is not None and self._proc.stderr is not None:
-                    stderr = self._proc.stderr.read()
-                detail = _backend_failure_detail(stderr=stderr)
-                raise RuntimeError(f"openPMD backend watchdog failed{detail}") from watchdog_error
-
-            if self._proc is not None and self._proc.poll() not in (None, 0):
-                stderr = "" if self._proc.stderr is None else self._proc.stderr.read()
-                detail = _backend_failure_detail(stderr=stderr)
-                raise RuntimeError(f"calcPhiASE failed with return code {self._proc.returncode}{detail}")
-
-            try:
-                ok, payload = self._result_queue.get(timeout=_STREAMING_RESULT_POLL_SECONDS)
-            except queue.Empty:
-                self._raise_if_streaming_finished_without_result(expected_iteration_index)
-                continue
-            if not ok:
-                raise payload
-            if payload is _STREAMING_RESULT_EOF:
-                self._result_reader_done = True
-                self._raise_if_streaming_finished_without_result(expected_iteration_index)
-                continue
-            iteration_index, result = payload
-            if iteration_index is None or iteration_index == expected_iteration_index:
-                return result
-            self._pending_results[iteration_index] = result
-
-
-def _runOpenPmdAndExecuteHaseBinary(
-    phiAse,
-    gainMedium,
-    crossSections,
-    *,
-    transport=None,
-    command_prefix=None,
-    workspace_dir=None,
-    watchdog_interval=None,
-    openpmdSession=None,
-):
-    if openpmdSession is not None:
-        return openpmdSession.run(phiAse, gainMedium, crossSections)
-
-    kwargs = {"transport": transport}
-    if command_prefix is not None:
-        kwargs["command_prefix"] = command_prefix
-    if workspace_dir is not None:
-        kwargs["workspace_dir"] = workspace_dir
-    if watchdog_interval is not None:
-        kwargs["watchdog_interval"] = watchdog_interval
-    with OpenPmdPhiAseSession(**kwargs) as session:
-        return session.run(phiAse, gainMedium, crossSections)
-
-def runPhiASE(
-    phiAse,
-    gainMedium,
-    crossSections,
-    *,
-    transport=None,
-    command_prefix=None,
-    workspace_dir=None,
-    watchdog_interval=None,
-    openpmdSession=None,
-):
-    return _runOpenPmdAndExecuteHaseBinary(
-        phiAse,
-        gainMedium,
-        crossSections,
-        transport=transport,
-        command_prefix=command_prefix,
-        workspace_dir=workspace_dir,
-        watchdog_interval=watchdog_interval,
-        openpmdSession=openpmdSession,
-    )
-
-
 _TIME_INTEGRATORS = {
     "explicit-euler",
     "heun",
@@ -1592,24 +1127,23 @@ def _time_integrator_name(solver):
     return name
 
 
-def _simulation_run_control(simulation, *, steps, pumpSteps):
-    pump = simulation.pump
-    if pumpSteps is None:
-        pumpSteps = pump.pumpSteps
-    pump_steps_value = (2**32 - 1) if pumpSteps is None else int(pumpSteps)
+def _simulation_run_control(simulation, *, steps, pump_steps):
+    if pump_steps is None:
+        pump_steps = simulation.pumpSolver.maxSteps
+    pump_steps_value = (2**32 - 1) if pump_steps is None else int(pump_steps)
     if pump_steps_value < 0:
         raise ValueError("pumpSteps must be non-negative")
-    solver = simulation.timeIntegrationSolver
+    solver = simulation.timeIntegrator
     control = {
-        "time_step": float(simulation.timeStep),
+        "time_step": float(simulation.timeStepSize.toValue(units.s)),
         "number_of_steps": int(steps),
-        "enable_ase": bool(getattr(simulation, "enableASE", True)),
-        "pre_pump": bool(getattr(simulation, "prePump", False)),
+        "enable_ase": bool(simulation.enableAse),
+        "pre_pump": bool(simulation.prePump),
         "pump_steps": pump_steps_value,
         "time_integrator": _time_integrator_name(solver),
         "pump_schema_version": 1,
-        "pump_ray_count": int(pump.rayCount),
-        "pump_rng_seed": int(pump.rngSeed),
+        "pump_ray_count": int(simulation.pumpSolver.rayCount),
+        "pump_rng_seed": int(simulation.pumpSolver.seed),
     }
     control.update(_general_pump_attributes(simulation))
     if hasattr(solver, "iterations"):
@@ -1619,11 +1153,6 @@ def _simulation_run_control(simulation, *, steps, pumpSteps):
     return control
 
 
-def _resolve_surface_domains(topology, domains):
-    domain_map = topology.surfaceDomainMap()
-    return [int(domain_map.resolve(domain)) if isinstance(domain, str) else int(domain) for domain in domains]
-
-
 def _append_offset(values, offsets, additions):
     values.extend(additions)
     offsets.append(len(values))
@@ -1631,8 +1160,7 @@ def _append_offset(values, offsets, additions):
 
 def _general_pump_attributes(simulation):
     """Flatten the general pump graph into openPMD iteration attributes."""
-    topology = simulation.gainMedium.topology
-    pump = simulation.pump
+    topology = simulation.mesh
     source_surfaces, source_surface_offsets = [], [0]
     spectrum_wavelengths, spectrum_weights, spectrum_sigma_a, spectrum_sigma_e = [], [], [], []
     spectrum_offsets = [0]
@@ -1646,45 +1174,46 @@ def _general_pump_attributes(simulation):
     relay_offset, relay_tilt, relay_magnification, relay_transmission = [], [], [], []
     relay_count = 0
 
-    for source in pump.sources:
+    for physical, injector, relays in simulation.pumpRegistrations:
         _append_offset(
             source_surfaces,
             source_surface_offsets,
-            _resolve_surface_domains(topology, source.surfaceDomains),
+            injector.surface.ids if hasattr(injector.surface, "ids") else np.unique(topology.surfaceDomainIds[injector.surface.mask()]),
         )
-        wavelengths = np.asarray(source.spectrum.wavelengths, dtype=np.float64)
+        wavelengths = np.asarray(physical.spectrum.wavelengths.toValue(units.m), dtype=np.float64)
         _append_offset(spectrum_wavelengths, spectrum_offsets, wavelengths.tolist())
-        spectrum_weights.extend(np.asarray(source.spectrum.weights, dtype=np.float64).tolist())
-        spectrum_sigma_a.extend(float(source.crossSections.absorptionAt(wavelength)) for wavelength in wavelengths)
-        spectrum_sigma_e.extend(float(source.crossSections.emissionAt(wavelength)) for wavelength in wavelengths)
+        spectrum_weights.extend(np.asarray(physical.spectrum.weights, dtype=np.float64).tolist())
+        table = simulation.resolvedProblem.materials[0].crossSections
+        spectrum_sigma_a.extend(float(table.absorptionAt(value * units.m).toValue(units.cm**2)) for value in wavelengths)
+        spectrum_sigma_e.extend(float(table.emissionAt(value * units.m).toValue(units.cm**2)) for value in wavelengths)
         _append_offset(
             angular_polar,
             angular_offsets,
-            np.asarray(source.angularDistribution.polarAngles, dtype=np.float64).tolist(),
+            np.asarray(physical.angularDistribution.polarAngles, dtype=np.float64).tolist(),
         )
-        angular_azimuthal.extend(np.asarray(source.angularDistribution.azimuthalAngles, dtype=np.float64).tolist())
-        angular_weights.extend(np.asarray(source.angularDistribution.weights, dtype=np.float64).tolist())
+        angular_azimuthal.extend(np.asarray(physical.angularDistribution.azimuthalAngles, dtype=np.float64).tolist())
+        angular_weights.extend(np.asarray(physical.angularDistribution.weights, dtype=np.float64).tolist())
 
-        profile = source.profile
+        profile = physical.profile
         is_super_gaussian = getattr(profile, "kind", "uniform") == "super-gaussian"
         profile_kind.append(1 if is_super_gaussian else 0)
-        profile_radius_u.append(float(profile.radiusU) if is_super_gaussian else 1.0)
-        profile_radius_v.append(float(profile.radiusV) if is_super_gaussian else 1.0)
+        profile_radius_u.append(float(profile.radiusU.toValue(topology.coordinateUnit)) if is_super_gaussian else 1.0)
+        profile_radius_v.append(float(profile.radiusV.toValue(topology.coordinateUnit)) if is_super_gaussian else 1.0)
         profile_exponent.append(float(profile.exponent) if is_super_gaussian else 2.0)
-        profile_center.extend(profile.center if is_super_gaussian else (0.0, 0.0, 0.0))
+        profile_center.extend(profile.center.toValue(topology.coordinateUnit) if is_super_gaussian else (0.0, 0.0, 0.0))
         profile_axis_u.extend(profile.axisU if is_super_gaussian else (1.0, 0.0, 0.0))
         profile_axis_v.extend(profile.axisV if is_super_gaussian else (0.0, 1.0, 0.0))
 
-        for relay in source.relays:
+        for relay in relays:
             _append_offset(
                 relay_exit_surfaces,
                 relay_exit_offsets,
-                _resolve_surface_domains(topology, relay.exitDomains),
+                np.unique(topology.surfaceDomainIds[relay.exitSurface.mask()]),
             )
             _append_offset(
                 relay_entry_surfaces,
                 relay_entry_offsets,
-                _resolve_surface_domains(topology, relay.entryDomains),
+                np.unique(topology.surfaceDomainIds[relay.entrySurface.mask()]),
             )
             relay_flip_u.append(int(relay.flipU))
             relay_flip_v.append(int(relay.flipV))
@@ -1697,7 +1226,7 @@ def _general_pump_attributes(simulation):
         source_relay_offsets.append(relay_count)
 
     attributes = {
-        "pump_source_total_power": [float(source.totalPower) for source in pump.sources],
+        "pump_source_total_power": [float(physical.totalPower.toValue(units.W)) for physical, _injector, _relays in simulation.pumpRegistrations],
         "pump_source_surface_offsets": source_surface_offsets,
         "pump_source_surfaces": source_surfaces,
         "pump_spectrum_offsets": spectrum_offsets,
@@ -1748,14 +1277,7 @@ def _general_pump_attributes(simulation):
 
 def _write_simulation_input(input_path, spec, simulation, run_control, *, close_after=None):
     with OpenPmdInputSeries(input_path, backend=spec.name) as writer:
-        writer.write(
-            simulation.phiASE,
-            simulation.gainMedium,
-            simulation.crossSections,
-            iteration_index=0,
-            include_static=True,
-            runControl=run_control,
-        )
+        writer.write_simulation(simulation, iteration_index=0, run_control=run_control)
         if close_after is not None:
             close_after.wait()
 
@@ -1846,15 +1368,15 @@ def _run_streaming_simulation(command, input_path, output_path, spec, simulation
     return payload
 
 
-def runSimulation(simulation, *, steps, pumpSteps=None, transport=None, command_prefix=None, workspace_dir=None):
+def run_simulation(simulation, *, steps, pump_steps=None, transport=None, command_prefix=None, workspace_dir=None):
     """Run the full time-stepped Simulation in the compiled C++/alpaka backend."""
     steps = int(steps)
     if steps <= 0:
         raise ValueError("steps must be positive")
     spec = _backend_spec(transport)
     _ensure_backend_available(spec.name)
-    executable = findCalcPhiAse()
-    run_control = _simulation_run_control(simulation, steps=steps, pumpSteps=pumpSteps)
+    executable = find_calc_phi_ase()
+    run_control = _simulation_run_control(simulation, steps=steps, pump_steps=pump_steps)
 
     artifact_root = _artifact_root()
     if artifact_root is None and workspace_dir is not None:
@@ -1889,19 +1411,3 @@ def runSimulation(simulation, *, steps, pumpSteps=None, transport=None, command_
             detail = _backend_failure_detail(stdout=completed.stdout, stderr=completed.stderr)
             raise RuntimeError(f"calcPhiASE failed with return code {completed.returncode}{detail}")
         return read_simulation_output(output_path)
-
-
-def openStream(*, transport=None, command_prefix=None, workspace_dir=None, watchdog_interval=None):
-    session = OpenPmdPhiAseSession(
-        transport=transport,
-        command_prefix=command_prefix,
-        workspace_dir=workspace_dir,
-        watchdog_interval=watchdog_interval,
-    )
-    return session.__enter__()
-
-
-def closeStream(openpmdSession):
-    if openpmdSession is None:
-        return None
-    return openpmdSession.__exit__(None, None, None)

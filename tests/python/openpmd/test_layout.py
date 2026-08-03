@@ -27,7 +27,12 @@ from pyInclude.openpmd import (
 
 
 def _context():
-    return SimpleNamespace(numberOfTriangles=2, numberOfLevels=4, numberOfPoints=5, spectral=3)
+    return SimpleNamespace(
+        numberOfTriangles=2,
+        numberOfLevels=4,
+        numberOfPoints=5,
+        spectralSampleCount=3,
+    )
 
 
 def test_primitiveShapeToBackendFlat():
@@ -60,14 +65,16 @@ def testAmbiguousFlatArrayIsRejectedUnlessMarkedBackendFlat():
 
 
 def test_extensionDocumentNames():
-    assert HASE_TRANSPORT_VERSION == "0.1"
-    assert haseTransportAttributes["haseTopologyConvention"] == "vtkWedgeExtrudedTriangularPrism"
+    assert HASE_TRANSPORT_VERSION == "0.2"
+    assert haseTransportAttributes["haseTopologyConvention"] == "tet4UnstructuredMesh"
     assert set(primitiveSchemas) == {"point", "triangle", "prism"}
     assert PointSchema.primitiveSchema().name == "point"
     assert TriangleSchema.primitiveSchema().name == "triangle"
     assert PrismSchema.primitiveSchema().name == "prism"
     assert simulationAttributeSpec("maxSigmaEmission").attribute == "max_sigma_emission"
     assert simulationAttributeSpec("rngSeed").attribute == "rng_seed"
+    with pytest.raises(KeyError):
+        simulationAttributeSpec("spectralResolution")
     result_attributes = {spec.name: spec for spec in resultAttributeSpecs}
     assert result_attributes["srmStatus"].attribute == "srm_status"
     assert result_attributes["srmDivergenceStreak"].attribute == "srm_divergence_streak"

@@ -126,13 +126,13 @@ def testCurrentTet4WithoutReflectionsMatchesLegacyWedgeIntegral(
     assert metadata["parameters"]["useReflections"] is False
 
     output_dir = tmp_path / "no_reflection_tet4"
-    state = laserPumpCladding.runExample(
+    state = laserPumpCladding.run_example(
         backend=alpakaRuntimeBackend,
-        openpmdBackend=openPmdRuntimeBackend,
-        timeSlices=metadata["parameters"]["timeSlices"],
+        openPmdBackend=openPmdRuntimeBackend,
+        timeSteps=metadata["parameters"]["timeSlices"],
         pumpSteps=metadata["parameters"]["pumpSteps"],
         vtkOutputDir=output_dir,
-        enableASE=True,
+        enableAse=True,
         prePump=metadata["parameters"]["prePump"],
         rngSeed=metadata["random"]["rngSeed"],
         useReflections=False,
@@ -147,7 +147,7 @@ def testCurrentTet4WithoutReflectionsMatchesLegacyWedgeIntegral(
     assert state.aseResult.srmMaxIterations == 0
     # A stale all-zero beta-volume CDF sends every source history to the final
     # Tet. Keep the source visits dispersed as beta evolves from its zero state.
-    assert np.max(state.volume_total_rays) < metadata["parameters"]["maxRaysPerSample"] // 20
+    assert np.max(state.volumeTotalRays) < metadata["parameters"]["maxRaysPerSample"] // 20
 
     observed_integrals = []
     for step in metadata["observable"]["stepNumbers"]:

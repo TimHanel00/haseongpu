@@ -8,13 +8,9 @@ import pytest
 
 from HASEonGPU import (
     AbsorbingSurface,
-    BoundaryLayout,
     CrossSectionTable,
-    ExteriorBoundary,
     InitialState,
-    MaterialDefinition,
-    MaterialInstance,
-    MaterialLayout,
+    Material,
     MonteCarloASESolver,
     MonteCarloPumpSolver,
     Pump,
@@ -24,6 +20,7 @@ from HASEonGPU import (
     SurfacePumpInjector,
     UnstructuredMesh,
     writeParaviewState,
+    units,
 )
 
 
@@ -33,44 +30,53 @@ TETRAHEDRON = np.asarray(
 
 
 def one_cell_simulation(**overrides):
-    mesh = UnstructuredMesh.from_tetrahedra(
+    mesh = UnstructuredMesh.fromTetrahedra(
         TETRAHEDRON,
         [[0, 1, 2, 3]],
-        surface_domains=[[1, 1, 1, 1]],
+        surfaceDomains=[[1, 1, 1, 1]],
+        coordinateUnit=units.m,
     )
-    cross_sections = CrossSectionTable.monochromatic(
-        wavelength=1030e-9,
-        absorption=1.0e-24,
-        emission=2.0e-24,
+    crossSections = CrossSectionTable.monochromatic(
+        wavelength=1030 * units.nm,
+        absorption=1.0e-20 * units.cm**2,
+        emission=2.0e-20 * units.cm**2,
     )
-    material = MaterialInstance(
-        MaterialDefinition("gain", 1.8, 1.0e-3, cross_sections),
-        active_ion_density=2.5e26,
+    material = Material("gain").addState(
+        temperature=300 * units.K,
+        refractiveIndex=1.8,
+        fluorescenceLifetime=1.0 * units.ms,
+        crossSections=crossSections,
+        metadata={"source": "synthetic mesh test"},
+    ).at(
+        temperature=300 * units.K,
+        activeIonDensity=2.5e26 / units.m**3,
     )
     arguments = {
         "mesh": mesh,
-        "ase_solver": MonteCarloASESolver(backend="Host_Cpu_CpuSerial"),
-        "pump_solver": MonteCarloPumpSolver(ray_count=16),
-        "time_integrator": RungeKutta4(),
-        "time_step_size": 1.0e-6,
-        "initial_state": InitialState(0.0),
+        "aseSolver": MonteCarloASESolver(),
+        "pumpSolver": MonteCarloPumpSolver(rayCount=16),
+        "timeIntegrator": RungeKutta4(),
+        "timeStepSize": 1.0 * units.us,
+        "initialState": InitialState(0.0 * units.one),
     }
     arguments.update(overrides)
     simulation = Simulation(**arguments)
-    simulation.add_material(material, MaterialLayout("all"))
-    simulation.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior"))
+    simulation.addMaterial(material, domains=mesh.volume(1))
+    simulation.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
     return simulation
 
 
 def test_mesh_topology_and_derived_arrays_are_immutable():
-    mesh = UnstructuredMesh.from_tetrahedra(TETRAHEDRON, [[0, 1, 2, 3]])
+    mesh = UnstructuredMesh.fromTetrahedra(
+        TETRAHEDRON, [[0, 1, 2, 3]], coordinateUnit=units.m
+    )
 
     for values in (
         mesh.points,
-        mesh.cell_connectivity,
-        mesh.volume_domain_ids,
-        mesh.surface_domain_ids,
-        mesh.neighbor_cells,
+        mesh.cellConnectivity,
+        mesh.volumeDomainIds,
+        mesh.surfaceDomainIds,
+        mesh.neighborCells,
         mesh.cellCenters,
     ):
         with pytest.raises(ValueError, match="read-only"):
@@ -93,10 +99,18 @@ def test_mesh_topology_and_derived_arrays_are_immutable():
 )
 def test_mesh_rejects_invalid_tetrahedra(points, cells, match):
     with pytest.raises((TypeError, ValueError), match=match):
-        UnstructuredMesh.from_tetrahedra(points, cells)
+        UnstructuredMesh.fromTetrahedra(points, cells, coordinateUnit=units.m)
 
 
-@pytest.mark.parametrize("field,value", [("time_step_size", np.nan), ("time_step_size", np.inf), ("max_time", np.nan), ("max_time", np.inf)])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("timeStepSize", np.nan * units.us),
+        ("timeStepSize", np.inf * units.us),
+        ("maxTime", np.nan * units.us),
+        ("maxTime", np.inf * units.us),
+    ],
+)
 def test_simulation_rejects_nonfinite_time_controls(field, value):
     with pytest.raises(ValueError, match="finite and positive"):
         one_cell_simulation(**{field: value})
@@ -108,23 +122,25 @@ def test_missing_pump_error_does_not_freeze_configuration():
     with pytest.raises(ValueError, match="requires at least one pump"):
         simulation.step()
 
-    assert simulation.add_pump(
-        Pump(total_power=1.0, spectrum=PumpSpectrum.monochromatic(940e-9)),
-        SurfacePumpInjector(1),
+    assert simulation.addPump(
+        Pump(totalPower=1.0 * units.W, spectrum=PumpSpectrum.monochromatic(940 * units.nm)),
+        SurfacePumpInjector(simulation.mesh.surface(1)),
     ) is simulation
 
 
 def test_paraview_export_accepts_public_read_only_tet4_state(tmp_path):
-    mesh = UnstructuredMesh.from_tetrahedra(TETRAHEDRON, [[0, 1, 2, 3]])
+    mesh = UnstructuredMesh.fromTetrahedra(
+        TETRAHEDRON, [[0, 1, 2, 3]], coordinateUnit=units.m
+    )
     state = SimpleNamespace(
         step=1,
-        time=1.0e-6,
-        topology=mesh,
-        betaCells=np.asarray([0.1]),
-        betaVolume=np.asarray([0.1]),
+        time=1.0 * units.us,
+        mesh=mesh,
+        sampledExcitationFraction=np.asarray([0.1]),
+        excitationFraction=np.asarray([0.1]),
         phiAse=np.asarray([4.0]),
-        dndtAse=np.asarray([-1.0]),
-        dndtPump=np.asarray([2.0]),
+        sampledDExcitationDtAse=np.asarray([-1.0]),
+        dExcitationDtPump=np.asarray([2.0]),
     )
 
     handle = writeParaviewState(state, tmp_path)

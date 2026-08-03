@@ -6,7 +6,6 @@
 
 import os
 import sys
-from types import SimpleNamespace
 from pathlib import Path
 import copy
 import importlib
@@ -22,19 +21,20 @@ legacyPhiAseConfigFile = Path(__file__).parent / "data" / "cfg" / "legacy_config
 requiredHaseApi = (
     "ASESolver",
     "AlpakaBackends",
-    "BoundaryLayout",
     "CrossSectionTable",
-    "ExteriorBoundary",
     "InitialState",
-    "MaterialDefinition",
-    "MaterialInstance",
-    "MaterialLayout",
+    "Material",
+    "MaterialCondition",
+    "MaterialLibrary",
+    "MeshSelection",
     "MonteCarloASESolver",
     "MonteCarloPumpSolver",
     "Pump",
     "PumpSolver",
     "Simulation",
     "UnstructuredMesh",
+    "Quantity",
+    "units",
 )
 
 
@@ -121,17 +121,7 @@ def _import_hase_api():
 
 _hase_api = _import_hase_api()
 AlpakaBackends = _hase_api.AlpakaBackends
-# Legacy test fixtures remain internal while public API tests exercise the v3 model.
-from pyInclude.geometry import GainMedium, Grid, MeshTopology
-from pyInclude.simulation import PhiASE
-MonteCarloPumpSolver = _hase_api.MonteCarloPumpSolver
-Pump = _hase_api.Pump
-PumpAngularDistribution = _hase_api.PumpAngularDistribution
-PumpSpectrum = _hase_api.PumpSpectrum
-SurfacePumpInjector = _hase_api.SurfacePumpInjector
-from pyInclude.laser import SpectralDecomposition, _LegacyPump
 
-import numpy as np
 import pytest
 
 
@@ -152,15 +142,21 @@ def openPmdRuntimeExecutable():
     return openpmd_runtime_executable()
 
 
-@pytest.fixture(scope="session")
-def alpakaRuntimeBackend():
+def _alpaka_runtime_backends():
     backends = AlpakaBackends.all()
     if not backends:
-        pytest.skip("no Alpaka backend is available in this build")
-    for backend in backends:
-        if "CpuOmpBlocks" in backend:
-            return backend
-    return backends[0]
+        return [
+            pytest.param(
+                None,
+                marks=pytest.mark.skip(reason="no Alpaka backend is available in this build"),
+            )
+        ]
+    return backends
+
+
+@pytest.fixture(scope="session", params=_alpaka_runtime_backends())
+def alpakaRuntimeBackend(request):
+    return request.param
 
 
 @pytest.fixture(scope="session")
@@ -201,45 +197,3 @@ def makePhiAseTestConfig(phiAseTestConfig):
         return config
 
     return make
-
-
-@pytest.fixture
-def crossSections():
-    return SpectralDecomposition.monochromatic(
-        wavelength=940e-9,
-        crossSectionAbsorption=0.01e-20,
-        crossSectionEmission=0.02e-20,
-    )
-
-
-@pytest.fixture
-def smallTopology():
-    return MeshTopology.fromGrid(Grid(xExtent=1, yExtent=1, zExtent=0.5, tileSizeZ=0.25))
-
-
-@pytest.fixture
-def smallGainMedium(smallTopology):
-    return GainMedium(topology=smallTopology).withPhysicalProperties(
-        betaCells=np.zeros((4, 3)),
-        claddingCellTypes=np.zeros(2, dtype=np.uint32),
-        refractiveIndices=[1.8, 1.0, 1.8, 1.0],
-        reflectivities=np.zeros((smallTopology.numberOfTriangles, 2)),
-        nTot=2.76e20,
-        crystalTFluo=9.5e-4,
-        claddingNumber=1,
-        claddingAbsorption=0.0,
-    )
-
-
-@pytest.fixture
-def pumpProperties(crossSections):
-    return SimpleNamespace(
-        physical=_LegacyPump(
-            total_power=1.0,
-            spectrum=PumpSpectrum.monochromatic(940e-9),
-            cross_sections=crossSections,
-            angular_distribution=PumpAngularDistribution.collimated(),
-        ),
-        injector=SurfacePumpInjector((1,)),
-        solver=MonteCarloPumpSolver(ray_count=256, seed=17),
-    )

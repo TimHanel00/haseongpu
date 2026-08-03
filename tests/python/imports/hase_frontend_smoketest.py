@@ -9,18 +9,15 @@ import numpy as np
 import HASEonGPU
 from HASEonGPU import (
     AbsorbingSurface,
-    BoundaryLayout,
     CrossSectionTable,
-    ExteriorBoundary,
     InitialState,
-    MaterialDefinition,
-    MaterialInstance,
-    MaterialLayout,
+    Material,
     MonteCarloASESolver,
     MonteCarloPumpSolver,
     RungeKutta4,
     Simulation,
     UnstructuredMesh,
+    units,
 )
 
 
@@ -28,39 +25,46 @@ module_path = Path(HASEonGPU.__file__).resolve()
 print("module:", module_path)
 assert "site-packages" in str(module_path) or "dist-packages" in str(module_path), module_path
 
-mesh = UnstructuredMesh.from_tetrahedra(
+mesh = UnstructuredMesh.fromTetrahedra(
     np.eye(4, 3),
     [[0, 1, 2, 3]],
+    coordinateUnit=units.m,
 )
-cross_sections = CrossSectionTable.monochromatic(
-    wavelength=1030e-9,
-    absorption=1.0e-24,
-    emission=2.0e-24,
+crossSections = CrossSectionTable.monochromatic(
+    wavelength=1030 * units.nm,
+    absorption=1.0e-20 * units.cm**2,
+    emission=2.0e-20 * units.cm**2,
 )
-material = MaterialInstance(
-    MaterialDefinition("gain", 1.8, 1.0e-3, cross_sections),
-    active_ion_density=2.5e26,
+material = Material("gain").addState(
+    temperature=300 * units.K,
+    refractiveIndex=1.8,
+    fluorescenceLifetime=1.0 * units.ms,
+    crossSections=crossSections,
+    metadata={"source": "installed frontend smoke"},
+).at(
+    temperature=300 * units.K,
+    activeIonDensity=2.5e26 / units.m**3,
 )
-ase_solver = MonteCarloASESolver(backend="Host_Cpu_CpuSerial")
+aseSolver = MonteCarloASESolver()
 simulation = Simulation(
     mesh=mesh,
-    ase_solver=ase_solver,
-    pump_solver=MonteCarloPumpSolver(ray_count=16),
-    time_integrator=RungeKutta4(),
-    time_step_size=1.0e-6,
-    initial_state=InitialState(0.0),
+    aseSolver=ase_solver,
+    pumpSolver=MonteCarloPumpSolver(rayCount=16),
+    timeIntegrator=RungeKutta4(),
+    timeStepSize=1.0 * units.us,
+    initialState=InitialState(0.0 * units.one),
 )
-simulation.add_material(material, MaterialLayout("all"))
-simulation.add_boundary(ExteriorBoundary(AbsorbingSurface()), BoundaryLayout("all_exterior"))
-compiled = simulation.compile()
+simulation.addMaterial(material, domains=mesh.volume(1))
+simulation.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
+compiled = simulation.resolveProblem()
 
-assert mesh.number_of_cells == 1
+assert mesh.numberOfCells == 1
 assert ase_solver.minRays == 100_000
 assert ase_solver.maxRays == 100_000
 assert compiled.materials == (material,)
-np.testing.assert_array_equal(compiled.cell_material_id, [0])
-np.testing.assert_array_equal(compiled.face_boundary_id, [[0, 0, 0, 0]])
-np.testing.assert_array_equal(compiled.initial_excitation_fraction, [0.0])
+np.testing.assert_array_equal(compiled.cellMaterialId, [0])
+np.testing.assert_array_equal(compiled.faceBoundaryId, [[0, 0, 0, 0]])
+np.testing.assert_array_equal(compiled.initialExcitationFraction, [0.0])
 for legacy_name in (
     "CrossSectionData",
     "DomainMap",
@@ -69,6 +73,8 @@ for legacy_name in (
     "Gmsh",
     "Grid",
     "LaserProperties",
+    "MaterialDefinition",
+    "MaterialInstance",
     "MeshTopology",
     "PhiASE",
     "SpectralDecomposition",

@@ -13,196 +13,266 @@ from typing import ClassVar
 
 import numpy as np
 
-from .materials import MaterialInstance
-
-
-def _as_tuple(value):
-    if isinstance(value, (str, int, np.integer)):
-        return (value,)
-    return tuple(value)
-
-
-@dataclass(frozen=True)
-class MaterialLayout:
-    domains: object
-
-    def __post_init__(self):
-        domains = _as_tuple(self.domains)
-        if not domains:
-            raise ValueError("MaterialLayout requires at least one volume domain")
-        object.__setattr__(self, "domains", domains)
-
-
-@dataclass(frozen=True)
-class BoundaryLayout:
-    domains: object
-
-    def __post_init__(self):
-        domains = _as_tuple(self.domains)
-        if not domains:
-            raise ValueError("BoundaryLayout requires at least one surface domain")
-        object.__setattr__(self, "domains", domains)
-
-
-@dataclass(frozen=True)
-class MaterialInterfaceLayout:
-    between: tuple[MaterialInstance, MaterialInstance]
-
-    def __post_init__(self):
-        between = tuple(self.between)
-        if len(between) != 2 or not all(isinstance(value, MaterialInstance) for value in between):
-            raise TypeError("MaterialInterfaceLayout.between must contain two MaterialInstance objects")
-        if between[0] is between[1]:
-            raise ValueError("a material interface requires two distinct material instances")
-        object.__setattr__(self, "between", between)
+from material_library import MaterialCondition
+from .mesh import MeshSelection
+from hase_units import DIMENSIONLESS, Quantity, requireQuantity, units
 
 
 class ExteriorBoundaryModel:
-    """Extension role for exterior optical boundary behavior."""
+    """Base role for optical behavior on an exterior mesh face.
+
+    Custom descriptors can derive from this class, but the current native
+    adapter accepts only the kinds listed by :class:`BackendCapabilities`.
+    """
 
     kind: ClassVar[str]
+    """Stable boundary-model discriminator used by backend capability checks."""
 
 
 @dataclass(frozen=True)
 class AbsorbingSurface(ExteriorBoundaryModel):
-    """Exterior ray-stop model supported by the current backend."""
+    """Terminate incident transport at an exterior boundary.
+
+    No reflected ray is launched and any remaining ray weight leaves the
+    simulated optical system.
+    """
 
     kind: ClassVar[str] = "absorbing"
+    """Boundary-model discriminator indicating complete ray termination."""
 
 
 @dataclass(frozen=True)
 class ConstantReflectivitySurface(ExteriorBoundaryModel):
-    """Exterior constant-reflectivity model supported by the current backend."""
+    """Reflect a constant fraction of incident weight at an exterior face.
+
+    Parameters
+    ----------
+    reflectivity
+        Dimensionless reflected fraction in ``[0, 1]``. It is independent of
+        incidence angle and polarization.
+    exteriorRefractiveIndex
+        Positive dimensionless index outside the mesh. Together with the
+        interior material index it determines total internal reflection.
+    """
 
     reflectivity: float = 0.0
-    exterior_refractive_index: float = 1.0
+    """Angle-independent fraction of incident ray weight that is reflected."""
+    exteriorRefractiveIndex: float = 1.0
+    """Dimensionless optical index immediately outside the mesh boundary."""
     kind: ClassVar[str] = "constant_reflectivity"
+    """Boundary-model discriminator for angle-independent reflectivity."""
 
     def __post_init__(self):
         if not np.isfinite(self.reflectivity) or not 0.0 <= self.reflectivity <= 1.0:
             raise ValueError("surface reflectivity must be finite and within [0, 1]")
-        if not np.isfinite(self.exterior_refractive_index) or self.exterior_refractive_index <= 0.0:
-            raise ValueError("surface exterior_refractive_index must be finite and positive")
-
-
-@dataclass(frozen=True)
-class ExteriorBoundary:
-    model: object
-    name: str | None = None
-
-    def __post_init__(self):
-        if not isinstance(self.model, ExteriorBoundaryModel):
-            raise TypeError("boundary model must implement the ExteriorBoundaryModel role")
-        if not isinstance(getattr(self.model, "kind", None), str) or not self.model.kind:
-            raise ValueError("exterior boundary models require a non-empty kind")
+        if not np.isfinite(self.exteriorRefractiveIndex) or self.exteriorRefractiveIndex <= 0.0:
+            raise ValueError("surface exteriorRefractiveIndex must be finite and positive")
 
 
 class MaterialInterfaceModel:
-    """Extension role for transport behavior between unlike materials."""
+    """Base role for transport between adjacent material conditions."""
 
     kind: ClassVar[str]
+    """Stable interface-model discriminator used by capability checks."""
 
 
 @dataclass(frozen=True)
 class PerfectTransmission(MaterialInterfaceModel):
-    """Future internal interface model: cross without changing direction or weight."""
+    """Cross an internal interface without changing direction or weight.
+
+    This model resolves into frontend tables but is not yet executable by the
+    current native adapter.
+    """
 
     kind: ClassVar[str] = "perfect_transmission"
+    """Interface discriminator for unchanged direction and ray weight."""
 
 
 @dataclass(frozen=True)
 class FresnelInterface(MaterialInterfaceModel):
-    """Future interface model using the incident and destination material indices."""
+    """Use adjacent material indices for Fresnel interface transport.
+
+    This descriptor expresses frontend intent; current native transport does
+    not yet execute cross-material interfaces.
+    """
 
     kind: ClassVar[str] = "fresnel"
-
-
-@dataclass(frozen=True)
-class MaterialInterface:
-    model: object
-    name: str | None = None
-
-    def __post_init__(self):
-        if not isinstance(self.model, MaterialInterfaceModel):
-            raise TypeError("interface model must implement the MaterialInterfaceModel role")
-        if not isinstance(getattr(self.model, "kind", None), str) or not self.model.kind:
-            raise ValueError("material interface models require a non-empty kind")
+    """Interface discriminator for refractive-index-based Fresnel transport."""
 
 
 @dataclass(frozen=True)
 class InitialState:
-    """Cell-centred initial excited-state fraction."""
+    """Initial upper-state population fraction on Tet4 cells.
 
-    excitation_fraction: object = 0.0
+    Parameters
+    ----------
+    excitationFraction
+        Dimensionless :class:`Quantity` in ``[0, 1]``. Supply one scalar, an
+        array with shape ``(mesh.numberOfCells,)``, or a mapping from complete,
+        non-overlapping volume :class:`MeshSelection` objects to scalar
+        dimensionless quantities.
+
+    Examples
+    --------
+    ``InitialState(0.1 * units.one)`` initializes every cell uniformly.
+    """
+
+    excitationFraction: object = Quantity(0.0, units.one)
+    """Initial dimensionless upper-state population fraction on every cell."""
 
 
 @dataclass(frozen=True)
 class BackendCapabilities:
-    multiple_materials: bool = False
-    exterior_boundary_models: frozenset[str] = frozenset({"absorbing", "constant_reflectivity"})
-    internal_interface_models: frozenset[str] = frozenset()
-    material_orientation: bool = False
-    bulk_attenuation: bool = False
-    minimum_active_materials: int = 1
-    maximum_active_materials: int | None = 1
+    """Feature subset executable by a backend adapter.
+
+    Parameters
+    ----------
+    multipleMaterials
+        Whether more than one resolved material condition can be transported.
+    exteriorBoundaryModels
+        Supported :attr:`ExteriorBoundaryModel.kind` strings.
+    internalInterfaceModels
+        Supported :attr:`MaterialInterfaceModel.kind` strings.
+    materialOrientation
+        Whether non-null material optical axes are executable.
+    bulkAttenuation
+        Whether per-material passive attenuation is executable.
+    minimumActiveMaterials, maximumActiveMaterials
+        Inclusive supported range of materials with positive active-ion
+        density. ``maximumActiveMaterials=None`` means unbounded.
+    """
+    multipleMaterials: bool = False
+    """Whether the adapter can transport more than one material condition."""
+    exteriorBoundaryModels: frozenset[str] = frozenset({"absorbing", "constant_reflectivity"})
+    """Exterior boundary-model kind strings accepted by the adapter."""
+    internalInterfaceModels: frozenset[str] = frozenset()
+    """Internal material-interface kind strings accepted by the adapter."""
+    materialOrientation: bool = False
+    """Whether non-null material optical axes are executable."""
+    bulkAttenuation: bool = False
+    """Whether passive per-material bulk attenuation is executable."""
+    minimumActiveMaterials: int = 1
+    """Minimum number of positive-active-ion-density materials required."""
+    maximumActiveMaterials: int | None = 1
+    """Maximum active-material count, or ``None`` when unbounded."""
 
     def __post_init__(self):
-        if self.minimum_active_materials < 0:
-            raise ValueError("minimum_active_materials must be non-negative")
-        if self.maximum_active_materials is not None and (
-            self.maximum_active_materials < self.minimum_active_materials
+        if self.minimumActiveMaterials < 0:
+            raise ValueError("minimumActiveMaterials must be non-negative")
+        if self.maximumActiveMaterials is not None and (
+            self.maximumActiveMaterials < self.minimumActiveMaterials
         ):
-            raise ValueError("maximum_active_materials must not be below the minimum")
+            raise ValueError("maximumActiveMaterials must not be below the minimum")
 
 
-CURRENT_BACKEND_CAPABILITIES = BackendCapabilities()
+#: Feature declaration enforced by the currently shipped native adapter.
+currentBackendCapabilities = BackendCapabilities()
 
 
 @dataclass(frozen=True)
-class CompiledProblem:
-    mesh: object
-    materials: tuple[MaterialInstance, ...]
-    cell_material_id: np.ndarray
-    boundaries: tuple[ExteriorBoundary, ...]
-    face_boundary_id: np.ndarray
-    interfaces: tuple[MaterialInterface, ...]
-    face_interface_id: np.ndarray
-    initial_excitation_fraction: np.ndarray
+class ResolvedProblem:
+    """Validated backend-neutral tables produced by :meth:`Simulation.resolveProblem`.
 
-    def unsupported_features(self, capabilities=CURRENT_BACKEND_CAPABILITIES):
+    Parameters
+    ----------
+    mesh
+        Source :class:`UnstructuredMesh`.
+    materials
+        Dense tuple of distinct resolved material conditions.
+    cellMaterialId
+        Integer material-table id for every Tet4 cell.
+    boundaries
+        Dense tuple of distinct exterior boundary registrations.
+    faceBoundaryId
+        Boundary-table ids in ``(cell, local_face)`` layout.
+    interfaces
+        Dense tuple of internal interface registrations.
+    faceInterfaceId
+        Interface-table ids in ``(cell, local_face)`` layout.
+    initialExcitationFraction
+        Dimensionless floating-point initial fraction for every cell.
+
+    Notes
+    -----
+    Compilation validates physical coverage without launching native code.
+    Call :meth:`requireBackendSupport` separately to enforce one adapter's
+    current execution subset.
+    """
+    mesh: object
+    """Source mesh defining all cell and local-face indices."""
+    materials: tuple[MaterialCondition, ...]
+    """Distinct resolved material conditions in dense table order."""
+    cellMaterialId: np.ndarray
+    """Material-table id for every Tet4 cell."""
+    boundaries: tuple[ExteriorBoundaryModel, ...]
+    """Distinct exterior boundary descriptors in dense table order."""
+    faceBoundaryId: np.ndarray
+    """Boundary-table ids in ``(cell, localFace)`` layout; ``-1`` internally."""
+    interfaces: tuple[MaterialInterfaceModel, ...]
+    """Distinct internal interface descriptors in dense table order."""
+    faceInterfaceId: np.ndarray
+    """Interface-table ids in ``(cell, localFace)`` layout; ``-1`` otherwise."""
+    initialExcitationFraction: np.ndarray
+    """Dimensionless initial upper-state population fraction for every cell."""
+
+    def unsupportedFeatures(self, capabilities=currentBackendCapabilities):
+        """Return descriptions of resolved features absent from ``capabilities``.
+
+        Parameters
+        ----------
+        capabilities
+            Backend feature declaration to compare against.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Empty when all resolved features are executable.
+        """
         unsupported = []
-        if len(self.materials) > 1 and not capabilities.multiple_materials:
+        if len(self.materials) > 1 and not capabilities.multipleMaterials:
             unsupported.append(f"multiple materials ({len(self.materials)} configured)")
-        boundary_kinds = {boundary.model.kind for boundary in self.boundaries}
-        missing_boundary_kinds = sorted(boundary_kinds - set(capabilities.exterior_boundary_models))
+        boundary_kinds = {boundary.kind for boundary in self.boundaries}
+        missing_boundary_kinds = sorted(boundary_kinds - set(capabilities.exteriorBoundaryModels))
         if missing_boundary_kinds:
             unsupported.append("exterior boundary models: " + ", ".join(missing_boundary_kinds))
-        kinds = {interface.model.kind for interface in self.interfaces}
-        missing_kinds = sorted(kinds - set(capabilities.internal_interface_models))
+        kinds = {interface.kind for interface in self.interfaces}
+        missing_kinds = sorted(kinds - set(capabilities.internalInterfaceModels))
         if missing_kinds:
             unsupported.append("internal interface models: " + ", ".join(missing_kinds))
-        if any(material.optical_axis is not None for material in self.materials) and not capabilities.material_orientation:
+        if any(material.opticalAxis is not None for material in self.materials) and not capabilities.materialOrientation:
             unsupported.append("material optical orientation")
-        if any(material.definition.bulk_attenuation > 0.0 for material in self.materials) and not capabilities.bulk_attenuation:
+        if any(float(material.bulkAttenuation.siValue) > 0.0 for material in self.materials) and not capabilities.bulkAttenuation:
             unsupported.append("per-material bulk attenuation")
-        active_count = sum(material.is_active for material in self.materials)
-        if active_count < capabilities.minimum_active_materials or (
-            capabilities.maximum_active_materials is not None
-            and active_count > capabilities.maximum_active_materials
+        active_count = sum(material.isActive for material in self.materials)
+        if active_count < capabilities.minimumActiveMaterials or (
+            capabilities.maximumActiveMaterials is not None
+            and active_count > capabilities.maximumActiveMaterials
         ):
             maximum = (
                 "unbounded"
-                if capabilities.maximum_active_materials is None
-                else str(capabilities.maximum_active_materials)
+                if capabilities.maximumActiveMaterials is None
+                else str(capabilities.maximumActiveMaterials)
             )
             unsupported.append(
                 f"active material count {active_count} "
-                f"(supported range {capabilities.minimum_active_materials}..{maximum})"
+                f"(supported range {capabilities.minimumActiveMaterials}..{maximum})"
             )
         return tuple(unsupported)
 
-    def require_backend_support(self, capabilities=CURRENT_BACKEND_CAPABILITIES):
-        unsupported = self.unsupported_features(capabilities)
+    def requireBackendSupport(self, capabilities=currentBackendCapabilities):
+        """Return this problem or raise for unsupported resolved features.
+
+        Parameters
+        ----------
+        capabilities
+            Backend feature declaration to enforce.
+
+        Raises
+        ------
+        NotImplementedError
+            If :meth:`unsupportedFeatures` is non-empty.
+        """
+        unsupported = self.unsupportedFeatures(capabilities)
         if unsupported:
             raise NotImplementedError(
                 "the selected HASEonGPU backend does not yet support " + "; ".join(unsupported)
@@ -210,65 +280,52 @@ class CompiledProblem:
         return self
 
 
-def _resolve_named_domain(value, names, *, kind):
-    if isinstance(value, str):
-        matches = [int(tag) for tag, name in names.items() if name == value]
-        if not matches:
-            raise KeyError(f"unknown {kind} domain name '{value}'")
-        if len(matches) != 1:
-            raise ValueError(f"ambiguous {kind} domain name '{value}'")
-        return matches[0]
-    return int(value)
-
-
-def _material_mask(mesh, layout):
-    if any(value == "all" for value in layout.domains):
-        if len(layout.domains) != 1:
-            raise ValueError("the 'all' volume selector cannot be combined with other domains")
-        return np.ones(mesh.number_of_cells, dtype=bool)
-    domain_ids = [_resolve_named_domain(value, mesh.volume_domain_names, kind="volume") for value in layout.domains]
-    return np.isin(mesh.volume_domain_ids, domain_ids)
-
-
-def _boundary_mask(mesh, layout):
-    exterior = np.asarray(mesh.neighbor_cells) < 0
-    if any(value == "all_exterior" for value in layout.domains):
-        if len(layout.domains) != 1:
-            raise ValueError("the 'all_exterior' selector cannot be combined with other domains")
-        return exterior
-    domain_ids = [_resolve_named_domain(value, mesh.surface_domain_names, kind="surface") for value in layout.domains]
-    return exterior & np.isin(mesh.surface_domain_ids, domain_ids)
+def _selection_mask(mesh, selection, kind):
+    if not isinstance(selection, MeshSelection):
+        raise TypeError(f"domains must be a mesh.{kind}(...) selection")
+    if selection.mesh is not mesh:
+        raise ValueError("domain selection belongs to a different mesh")
+    if selection.kind != kind:
+        raise TypeError(f"expected a {kind} domain selection, got {selection.kind}")
+    return selection.mask()
 
 
 def _initial_state_array(mesh, state):
-    value = state.excitation_fraction
+    value = state.excitationFraction
     if isinstance(value, dict):
-        result = np.full(mesh.number_of_cells, np.nan, dtype=np.float64)
+        result = np.full(mesh.numberOfCells, np.nan, dtype=np.float64)
         for selector, selected_value in value.items():
-            layout = MaterialLayout(selector)
-            mask = _material_mask(mesh, layout)
+            mask = _selection_mask(mesh, selector, "volume")
             if not np.any(mask):
                 raise ValueError(f"initial-state selector {selector!r} selected no cells")
             if np.any(np.isfinite(result[mask])):
                 raise ValueError(f"initial-state selector {selector!r} overlaps an earlier selector")
-            result[mask] = float(selected_value)
+            selected_value = requireQuantity(
+                selected_value,
+                DIMENSIONLESS,
+                "initial excitationFraction",
+            )
+            result[mask] = float(selected_value.toValue(units.one))
         if np.any(~np.isfinite(result)):
             raise ValueError("domain-mapped initial state does not cover every cell")
-    elif np.isscalar(value):
-        result = np.full(mesh.number_of_cells, float(value), dtype=np.float64)
     else:
-        result = np.asarray(value, dtype=np.float64)
-        if result.shape != (mesh.number_of_cells,):
+        value = requireQuantity(value, DIMENSIONLESS, "initial excitationFraction")
+        raw = np.asarray(value.toValue(units.one), dtype=np.float64)
+        if raw.ndim == 0:
+            result = np.full(mesh.numberOfCells, float(raw), dtype=np.float64)
+        else:
+            result = raw
+        if result.shape != (mesh.numberOfCells,):
             raise ValueError(
-                f"initial excitation_fraction must have shape ({mesh.number_of_cells},), got {result.shape}"
+                f"initial excitationFraction must have shape ({mesh.numberOfCells},), got {result.shape}"
             )
         result = result.copy()
     if np.any(~np.isfinite(result)) or np.any((result < 0.0) | (result > 1.0)):
-        raise ValueError("initial excitation_fraction must contain finite values within [0, 1]")
+        raise ValueError("initial excitationFraction must contain finite values within [0, 1]")
     return result
 
 
-def compile_problem(mesh, material_registrations, boundary_registrations, interface_registrations, initial_state):
+def resolve_problem(mesh, material_registrations, boundary_registrations, interface_registrations, initial_state):
     from .mesh import UnstructuredMesh
 
     if not isinstance(mesh, UnstructuredMesh):
@@ -280,67 +337,72 @@ def compile_problem(mesh, material_registrations, boundary_registrations, interf
 
     materials = []
     material_ids = {}
-    cell_material_id = np.full(mesh.number_of_cells, -1, dtype=np.int32)
-    for material, layout in material_registrations:
-        if not isinstance(material, MaterialInstance) or not isinstance(layout, MaterialLayout):
-            raise TypeError("add_material expects MaterialInstance and MaterialLayout")
-        mask = _material_mask(mesh, layout)
+    cellMaterialId = np.full(mesh.numberOfCells, -1, dtype=np.int32)
+    for material, domains in material_registrations:
+        if not isinstance(material, MaterialCondition):
+            raise TypeError("addMaterial expects MaterialCondition")
+        mask = _selection_mask(mesh, domains, "volume")
         if not np.any(mask):
-            raise ValueError(f"material layout for '{material.display_name}' selected no cells")
-        if np.any(cell_material_id[mask] >= 0):
-            raise ValueError(f"material layout for '{material.display_name}' overlaps an earlier layout")
+            raise ValueError(f"material layout for '{material.displayName}' selected no cells")
+        if np.any(cellMaterialId[mask] >= 0):
+            raise ValueError(f"material layout for '{material.displayName}' overlaps an earlier layout")
         identifier = material_ids.get(material)
         if identifier is None:
             identifier = len(materials)
             material_ids[material] = identifier
             materials.append(material)
-        cell_material_id[mask] = identifier
-    if np.any(cell_material_id < 0):
-        missing = int(np.count_nonzero(cell_material_id < 0))
+        cellMaterialId[mask] = identifier
+    if np.any(cellMaterialId < 0):
+        missing = int(np.count_nonzero(cellMaterialId < 0))
         raise ValueError(f"material layouts leave {missing} cells uncovered")
 
-    exterior = np.asarray(mesh.neighbor_cells) < 0
-    face_boundary_id = np.full(mesh.neighbor_cells.shape, -1, dtype=np.int32)
+    exterior = np.asarray(mesh.neighborCells) < 0
+    faceBoundaryId = np.full(mesh.neighborCells.shape, -1, dtype=np.int32)
     boundaries = []
-    for boundary, layout in boundary_registrations:
-        if not isinstance(boundary, ExteriorBoundary) or not isinstance(layout, BoundaryLayout):
-            raise TypeError("add_boundary expects ExteriorBoundary and BoundaryLayout")
-        mask = _boundary_mask(mesh, layout)
+    for boundary, domains in boundary_registrations:
+        if not isinstance(boundary, ExteriorBoundaryModel):
+            raise TypeError("addBoundary expects an ExteriorBoundaryModel")
+        mask = _selection_mask(mesh, domains, "surface")
         if not np.any(mask):
             raise ValueError("boundary layout selected no exterior faces")
-        if np.any(face_boundary_id[mask] >= 0):
+        if np.any(faceBoundaryId[mask] >= 0):
             raise ValueError("boundary layout overlaps an earlier boundary layout")
-        face_boundary_id[mask] = len(boundaries)
+        faceBoundaryId[mask] = len(boundaries)
         boundaries.append(boundary)
-    missing_boundary = exterior & (face_boundary_id < 0)
+    missing_boundary = exterior & (faceBoundaryId < 0)
     if np.any(missing_boundary):
         raise ValueError(f"boundary layouts leave {int(np.count_nonzero(missing_boundary))} exterior faces uncovered")
-    face_boundary_id[~exterior] = -1
+    faceBoundaryId[~exterior] = -1
 
     interfaces = []
     interface_by_pair = {}
-    for interface, layout in interface_registrations:
-        if not isinstance(interface, MaterialInterface) or not isinstance(layout, MaterialInterfaceLayout):
-            raise TypeError("add_interface expects MaterialInterface and MaterialInterfaceLayout")
+    for interface, between in interface_registrations:
+        if not isinstance(interface, MaterialInterfaceModel):
+            raise TypeError("addInterface expects a MaterialInterfaceModel")
+        between = tuple(between)
+        if len(between) != 2 or not all(isinstance(value, MaterialCondition) for value in between):
+            raise TypeError("between must contain two MaterialCondition objects")
+        if between[0] is between[1]:
+            raise ValueError("a material interface requires two distinct material conditions")
         try:
-            pair = frozenset((material_ids[layout.between[0]], material_ids[layout.between[1]]))
+            pair = frozenset((material_ids[between[0]], material_ids[between[1]]))
         except KeyError as exc:
-            raise ValueError("material interface refers to an unregistered material instance") from exc
+            raise ValueError("material interface refers to an unregistered material condition") from exc
         if pair in interface_by_pair:
             raise ValueError("duplicate material interface registration")
         interface_by_pair[pair] = len(interfaces)
         interfaces.append(interface)
 
-    face_interface_id = np.full(mesh.neighbor_cells.shape, -1, dtype=np.int32)
+    faceInterfaceId = np.full(mesh.neighborCells.shape, -1, dtype=np.int32)
     interface_face_counts = np.zeros(len(interfaces), dtype=np.int64)
     missing_pairs = set()
-    for cell in range(mesh.number_of_cells):
-        for local_face, neighbor in enumerate(mesh.neighbor_cells[cell]):
+    for cell in range(mesh.numberOfCells):
+        for local_face, neighbor in enumerate(mesh.neighborCells[cell]):
             neighbor = int(neighbor)
             if neighbor < 0 or neighbor < cell:
                 continue
-            left = int(cell_material_id[cell])
-            right = int(cell_material_id[neighbor])
+            left = int(cellMaterialId[cell])
+            right = int(cellMaterialId[neighbor])
             if left == right:
                 continue
             pair = frozenset((left, right))
@@ -348,27 +410,27 @@ def compile_problem(mesh, material_registrations, boundary_registrations, interf
             if interface_id is None:
                 missing_pairs.add(tuple(sorted(pair)))
                 continue
-            face_interface_id[cell, local_face] = interface_id
+            faceInterfaceId[cell, local_face] = interface_id
             interface_face_counts[interface_id] += 2
-            neighbor_faces = np.flatnonzero(np.asarray(mesh.neighbor_cells[neighbor]) == cell)
+            neighbor_faces = np.flatnonzero(np.asarray(mesh.neighborCells[neighbor]) == cell)
             if neighbor_faces.size != 1:
                 raise ValueError("mesh adjacency is not reciprocal at a material interface")
-            face_interface_id[neighbor, int(neighbor_faces[0])] = interface_id
+            faceInterfaceId[neighbor, int(neighbor_faces[0])] = interface_id
     if missing_pairs:
-        names = [f"{materials[a].display_name}<->{materials[b].display_name}" for a, b in sorted(missing_pairs)]
+        names = [f"{materials[a].displayName}<->{materials[b].displayName}" for a, b in sorted(missing_pairs)]
         raise ValueError("missing material interface registration for " + ", ".join(names))
     unused_interfaces = np.flatnonzero(interface_face_counts == 0)
     if unused_interfaces.size:
-        names = [interfaces[int(identifier)].name or str(int(identifier)) for identifier in unused_interfaces]
+        names = [str(int(identifier)) for identifier in unused_interfaces]
         raise ValueError("material interface registrations select no adjacent faces: " + ", ".join(names))
 
-    return CompiledProblem(
+    return ResolvedProblem(
         mesh=mesh,
         materials=tuple(materials),
-        cell_material_id=cell_material_id,
+        cellMaterialId=cellMaterialId,
         boundaries=tuple(boundaries),
-        face_boundary_id=face_boundary_id,
+        faceBoundaryId=faceBoundaryId,
         interfaces=tuple(interfaces),
-        face_interface_id=face_interface_id,
-        initial_excitation_fraction=_initial_state_array(mesh, initial_state),
+        faceInterfaceId=faceInterfaceId,
+        initialExcitationFraction=_initial_state_array(mesh, initial_state),
     )

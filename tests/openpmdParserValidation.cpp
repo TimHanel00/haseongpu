@@ -24,7 +24,7 @@ namespace
 #    define HASE_OPENPMD_TEST_FILE_EXTENSION HASE_OPENPMD_FILE_EXTENSION
 #endif
 
-    constexpr char const* HASE_TRANSPORT_VERSION = "0.1";
+    constexpr char const* HASE_TRANSPORT_VERSION = "0.2";
     constexpr unsigned VTK_TETRA = 10u;
     constexpr unsigned TET4_VERTEX_COUNT = 4u;
     constexpr unsigned TET4_FACE_COUNT = 4u;
@@ -256,8 +256,7 @@ namespace
         std::function<void(io::Series&, io::Iteration&)> mutate = {},
         bool betaVolumeAsFloat = false,
         bool betaVolumeBadExtent = false,
-        bool legacyRayAttributeNames = false,
-        unsigned spectralResolution = 2u)
+        bool legacyRayAttributeNames = false)
     {
         auto path = testPath(name);
         io::Series series(path.string(), io::Access::CREATE_LINEAR, "{}");
@@ -295,7 +294,6 @@ namespace
         iteration.setAttribute("max_sample_range", 5u);
         iteration.setAttribute("rng_seed", 1234u);
         iteration.setAttribute("use_reflections", true);
-        iteration.setAttribute("spectral_resolution", spectralResolution);
         iteration.setAttribute("monochromatic", false);
         iteration.setAttribute("max_sigma_absorption", 0.02);
         iteration.setAttribute("max_sigma_emission", 0.04);
@@ -331,7 +329,7 @@ namespace
             {2u},
             false,
             false,
-            "m");
+            "nm");
         writeScalar<double>(
             series,
             iteration,
@@ -341,7 +339,7 @@ namespace
             {2u},
             false,
             false,
-            "m");
+            "nm");
         writeScalar<double>(
             series,
             iteration,
@@ -406,7 +404,6 @@ namespace
             iteration.setAttribute("max_sample_range", 5u);
             iteration.setAttribute("rng_seed", 1234u);
             iteration.setAttribute("use_reflections", true);
-            iteration.setAttribute("spectral_resolution", 2u);
             iteration.setAttribute("monochromatic", false);
             iteration.setAttribute("max_sigma_absorption", 0.02);
             iteration.setAttribute("max_sigma_emission", 0.04);
@@ -427,9 +424,9 @@ namespace
         writeScalar<float>(series, first, "core_refractive_index", {1.5f, 1.0f, 1.5f, 1.0f}, {"interface"}, {4u});
         writeScalar<float>(series, first, "core_reflectivity", {0.1f, 0.2f}, {"cell", "interface"}, {1u, 2u});
         writeScalar<
-            double>(series, first, "core_lambda_absorption", {900.0, 910.0}, {"wavelength"}, {2u}, false, false, "m");
+            double>(series, first, "core_lambda_absorption", {900.0, 910.0}, {"wavelength"}, {2u}, false, false, "nm");
         writeScalar<
-            double>(series, first, "core_lambda_emission", {1000.0, 1010.0}, {"wavelength"}, {2u}, false, false, "m");
+            double>(series, first, "core_lambda_emission", {1000.0, 1010.0}, {"wavelength"}, {2u}, false, false, "nm");
         writeScalar<
             double>(series, first, "core_sigma_absorption", {0.01, 0.02}, {"wavelength"}, {2u}, false, false, "cm^2");
         writeScalar<
@@ -489,7 +486,6 @@ namespace
         iteration.setAttribute("max_sample_range", 0u);
         iteration.setAttribute("rng_seed", 1234u);
         iteration.setAttribute("use_reflections", true);
-        iteration.setAttribute("spectral_resolution", 3u);
         iteration.setAttribute("monochromatic", false);
         iteration.setAttribute("max_sigma_absorption", 0.040);
         iteration.setAttribute("max_sigma_emission", 0.050);
@@ -529,22 +525,22 @@ namespace
             series,
             iteration,
             "core_lambda_absorption",
-            {900e-9, 910e-9, 930e-9},
+            {900.0, 910.0, 930.0},
             {"wavelength"},
             {3u},
             false,
             false,
-            "m");
+            "nm");
         writeScalar<double>(
             series,
             iteration,
             "core_lambda_emission",
-            {1000e-9, 1015e-9, 1040e-9},
+            {1000.0, 1015.0, 1040.0},
             {"wavelength"},
             {3u},
             false,
             false,
-            "m");
+            "nm");
         writeScalar<double>(
             series,
             iteration,
@@ -597,7 +593,7 @@ TEST_CASE("openPMD parser reads a transport-valid openPMD record", "[openpmd][pa
     REQUIRE(context.mesh.numberOfLevels == 1u);
     REQUIRE(context.mesh.cellPointIndices == std::vector<unsigned>{0u, 1u, 2u, 3u});
     REQUIRE(context.mesh.betaCells.size() == 4u);
-    REQUIRE(context.experiment.spectral == 2u);
+    REQUIRE(context.experiment.spectralSampleCount == 2u);
     REQUIRE(context.compute.maxRepetitions == 3u);
     REQUIRE(context.compute.writeVtk == false);
     REQUIRE(context.compute.devices.empty());
@@ -607,17 +603,17 @@ TEST_CASE("openPMD parser reads a transport-valid openPMD record", "[openpmd][pa
     REQUIRE(context.run.timeIntegration.method == "explicit-euler");
 }
 
-TEST_CASE("openPMD parser interpolates raw spectra to the requested resolution", "[openpmd][parser]")
+TEST_CASE("openPMD parser preserves frontend-resampled spectra", "[openpmd][parser]")
 {
-    auto const path = writeParserInput("interpolated_spectrum", {}, false, false, false, 3u);
-    hase::openpmd::Parser parser{path, testPath("interpolated-spectrum-output")};
+    auto const path = writeParserInput("frontend_resampled_spectrum");
+    hase::openpmd::Parser parser{path, testPath("frontend-resampled-spectrum-output")};
     auto context = parser.read();
 
-    REQUIRE(context.experiment.spectral == 3u);
-    requireNear(context.experiment.lambdaA, {900.0, 905.0, 910.0});
-    requireNear(context.experiment.lambdaE, {1000.0, 1005.0, 1010.0});
-    requireNear(context.experiment.sigmaA, {0.01, 0.015, 0.02});
-    requireNear(context.experiment.sigmaE, {0.03, 0.035, 0.04});
+    REQUIRE(context.experiment.spectralSampleCount == 2u);
+    requireNear(context.experiment.lambdaA, {900.0, 910.0});
+    requireNear(context.experiment.lambdaE, {1000.0, 1010.0});
+    requireNear(context.experiment.sigmaA, {0.01, 0.02});
+    requireNear(context.experiment.sigmaE, {0.03, 0.04});
 }
 
 TEST_CASE("openPMD parser accepts legacy per-sample ray attributes", "[openpmd][parser]")
@@ -960,21 +956,6 @@ TEST_CASE("openPMD parser rejects non-dynamic changes after iteration 0", "[open
         REQUIRE(error.find("non-dynamic attribute changed after iteration 0") != std::string::npos);
     }
 
-    SECTION("changed spectral attribute")
-    {
-        auto const input = writeCanonicalStaticDynamicInput(
-            "dynamic_contract_spectral_attr",
-            [](io::Series& series, io::Iteration& iteration)
-            {
-                (void) series;
-                iteration.setAttribute("spectral_resolution", 3u);
-            });
-        auto const error = expectDynamicError(input);
-        REQUIRE(
-            error.find("openPMD validation error for 'dynamic iteration/spectral_resolution'") != std::string::npos);
-        REQUIRE(error.find("non-dynamic attribute changed after iteration 0") != std::string::npos);
-    }
-
     SECTION("changed compute attribute")
     {
         auto const input = writeCanonicalStaticDynamicInput(
@@ -1031,9 +1012,9 @@ TEST_CASE("openPMD parser round-trips a Python writer contract input", "[openpmd
     REQUIRE(context.mesh.claddingCellTypes == std::vector<unsigned>{0u, 2u, 1u});
     REQUIRE(context.mesh.refractiveIndices == std::vector<float>{1.80f, 1.20f, 1.65f, 1.05f});
     REQUIRE(context.mesh.reflectivities == std::vector<float>{0.01f, 0.03f, 0.05f, 0.02f, 0.04f, 0.06f});
-    REQUIRE(context.experiment.spectral == 3u);
-    REQUIRE(context.experiment.lambdaA == std::vector<double>{900e-9, 910e-9, 930e-9});
-    REQUIRE(context.experiment.lambdaE == std::vector<double>{1000e-9, 1015e-9, 1040e-9});
+    REQUIRE(context.experiment.spectralSampleCount == 3u);
+    REQUIRE(context.experiment.lambdaA == std::vector<double>{900.0, 910.0, 930.0});
+    REQUIRE(context.experiment.lambdaE == std::vector<double>{1000.0, 1015.0, 1040.0});
     REQUIRE(context.experiment.sigmaA == std::vector<double>{0.010, 0.025, 0.040});
     REQUIRE(context.experiment.sigmaE == std::vector<double>{0.050, 0.035, 0.020});
     REQUIRE(context.compute.maxRepetitions == 1u);

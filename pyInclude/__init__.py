@@ -23,27 +23,34 @@ from .openpmd import (
     PrimitiveFieldSpec,
     PrismSchema,
     TriangleSchema,
-    backendFlat,
     unitDimension,
 )
-from .mesh import UnstructuredMesh
-from .materials import CrossSectionTable, MaterialDefinition, MaterialInstance
+from .mesh import MeshSelection, UnstructuredMesh
+from material_library import (
+    CrossSectionTable,
+    LegacyMaterialTextWarning,
+    Material,
+    MaterialCondition,
+    MaterialLibrary,
+    MaterialState,
+    TemperatureInterpolationWarning,
+    loadBuiltinMaterials,
+)
+#: Preloaded built-in :class:`MaterialLibrary`; select entries by mapping key,
+#: for example ``materialLibrary["YbYAG"]``.
+materialLibrary = loadBuiltinMaterials()
+from hase_units import Quantity, Unit, units
 from .solvers import ASESolver, PumpSolver
 from .problem import (
     AbsorbingSurface,
     BackendCapabilities,
-    BoundaryLayout,
-    CompiledProblem,
+    ResolvedProblem,
     ConstantReflectivitySurface,
-    CURRENT_BACKEND_CAPABILITIES,
-    ExteriorBoundary,
+    currentBackendCapabilities,
     ExteriorBoundaryModel,
     FresnelInterface,
     InitialState,
-    MaterialInterface,
     MaterialInterfaceModel,
-    MaterialInterfaceLayout,
-    MaterialLayout,
     PerfectTransmission,
 )
 from .laser import (
@@ -56,7 +63,7 @@ from .laser import (
     SuperGaussianPumpProfile,
     SurfacePumpInjector,
     UniformPumpProfile,
-    integrate_pump_profile,
+    integratePumpProfile,
 )
 from .simulation import MonteCarloASESolver, Simulation, TimeStepState
 from .timeIntegration import (
@@ -71,6 +78,7 @@ from .timeIntegration import (
 )
 
 from .openpmd.paraview import writeParaviewState
+from .vtk_state import writeVtkState
 
 
 __all__ = [
@@ -80,14 +88,12 @@ __all__ = [
     "BackendCapabilities",
     "BaseGroup",
     "BaseSchema",
-    "BoundaryLayout",
-    "CURRENT_BACKEND_CAPABILITIES",
-    "CompiledProblem",
+    "currentBackendCapabilities",
+    "ResolvedProblem",
     "ConstantReflectivitySurface",
     "CrossSectionTable",
     "ExplicitEuler",
     "ExponentialEuler",
-    "ExteriorBoundary",
     "ExteriorBoundaryModel",
     "FresnelInterface",
     "FrozenPhiAseRungeKutta4",
@@ -96,12 +102,13 @@ __all__ = [
     "Heun",
     "ImplicitEuler",
     "InitialState",
-    "MaterialDefinition",
-    "MaterialInstance",
-    "MaterialInterface",
-    "MaterialInterfaceLayout",
+    "LegacyMaterialTextWarning",
+    "Material",
+    "MaterialCondition",
+    "MaterialLibrary",
+    "MaterialState",
     "MaterialInterfaceModel",
-    "MaterialLayout",
+    "MeshSelection",
     "Midpoint",
     "MonteCarloASESolver",
     "MonteCarloPumpSolver",
@@ -115,17 +122,22 @@ __all__ = [
     "PumpAngularDistribution",
     "PumpSolver",
     "PumpSpectrum",
+    "Quantity",
     "RungeKutta4",
     "Simulation",
     "SuperGaussianPumpProfile",
     "SurfacePumpInjector",
     "TimeIntegrationSolver",
     "TimeStepState",
+    "TemperatureInterpolationWarning",
     "TriangleSchema",
     "UniformPumpProfile",
     "UnstructuredMesh",
-    "backendFlat",
-    "integrate_pump_profile",
+    "Unit",
+    "integratePumpProfile",
+    "materialLibrary",
     "unitDimension",
     "writeParaviewState",
+    "writeVtkState",
+    "units",
 ]

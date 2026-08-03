@@ -395,20 +395,19 @@ def run_reinstall(*, break_system_packages=False, use_ccache=False):
 
 
 def yaml_config(selection: WizardSelection):
-    """Render a PhiASE-compatible YAML run-control snippet."""
+    """Render a Monte Carlo ASE YAML run-control snippet."""
     lines = [
         "experiment:",
-        "  minRays: 100000",
-        "  maxRays: 100000",
-        "  relativeStandardErrorThreshold: 0.1",
+        "  min_rays: 100000",
+        "  max_rays: 100000",
+        "  relative_standard_error_threshold: 0.1",
         "",
         "compute:",
         f"  backend: {selection.compute_backend}",
         f"  openpmd_backend: {selection.openpmd_backend}",
         f"  parallel_mode: {selection.parallel_mode}",
-        f"  numDevices: {int(selection.num_devices)}",
-        f"  n_per_node: {int(selection.n_per_node)}",
-        "  write_vtk: false",
+        f"  num_devices: {int(selection.num_devices)}",
+        f"  ranks_per_node: {int(selection.n_per_node)}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -890,7 +889,7 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--output",
         default=str(DEFAULT_PHI_ASE_CONFIG_PATH),
-        help="PhiASE YAML path to write, or '-' for stdout only. Defaults to config/hase-phiase.yaml.",
+        help="ASE YAML path to write, or '-' for stdout only. Defaults to config/hase-phiase.yaml.",
     )
     parser.add_argument("--yes", action="store_true", help="Use defaults and do not prompt.")
     parser.add_argument("--install", action="store_true", help="Run pip install after writing configuration.")
@@ -954,7 +953,7 @@ def main(argv=None):
         for backend in alpaka_backends:
             print(f"  - {backend}")
 
-    print("\nGenerated PhiASE YAML:")
+    print("\nGenerated ASE YAML:")
     print(config_text, end="")
 
     if args.output != "-":
