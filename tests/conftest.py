@@ -103,6 +103,9 @@ def _import_hase_api():
     try:
         module = importlib.import_module("HASEonGPU")
         if _has_required_api(module):
+            # Keep the installed frontend selected above, but make source-only
+            # test support such as example/ importable during collection.
+            sys.path.append(str(repoRoot))
             return module
     except ModuleNotFoundError as err:
         if err.name != "HASEonGPU":
