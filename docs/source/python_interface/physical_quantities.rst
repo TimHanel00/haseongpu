@@ -149,7 +149,7 @@ reflected fraction:
 .. code-block:: python
 
    boundary = ConstantReflectivitySurface(reflectivity=0.04,
-                                           exterior_refractive_index=1.0)
+                                           exteriorRefractiveIndex=1.0)
 
 ``bulkAttenuation`` is a non-negative inverse length for passive loss. It can
 be expressed by the frontend, although the current native adapter rejects this

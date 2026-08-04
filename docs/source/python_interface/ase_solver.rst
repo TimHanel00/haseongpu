@@ -33,7 +33,7 @@ Inspect the cell-wise uncertainty after a completed step:
 .. code-block:: python
 
    state = simulation.step().getLastState()
-   print(state.volumeRelativeStandardError.max())
+   print(state.relativeStandardError.max())
 
 Reflection controls are ``useReflections``, ``reflectionMaxIterations``,
 ``reflectionTolerance``, and ``surfaceReservoirSize``.
@@ -78,8 +78,9 @@ YAML run control
 
 ``MonteCarloASESolver.fromYaml(path, **overrides)`` reads the existing
 ``experiment`` and ``compute`` sections while keeping mesh, materials, pumps,
-and initial state in Python. Python overrides use lower camel case, while the
-established YAML wire format deliberately remains snake case:
+and initial state in Python. Python overrides canonically use lower camel case;
+the equivalent established snake-case YAML names are also accepted for
+compatibility. The YAML wire format deliberately remains snake case:
 
 .. code-block:: yaml
 

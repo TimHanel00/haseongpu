@@ -80,8 +80,7 @@ namespace hase::kernels
                     alpaka::onAcc::worker::threadsInGrid,
                     alpaka::IdxRange{mesh.numberOfCells}))
             {
-                out[cell] = base[cell]
-                            + (timeStep / 6.0) * (k1[cell] + 2.0 * k2[cell] + 2.0 * k3[cell] + k4[cell]);
+                out[cell] = base[cell] + (timeStep / 6.0) * (k1[cell] + 2.0 * k2[cell] + 2.0 * k3[cell] + k4[cell]);
             }
         }
     };

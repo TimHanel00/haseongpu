@@ -74,9 +74,9 @@ points become ``POINT_DATA``; arrays matching the number of cells become
 
 .. code-block:: python
 
-   writeVtkState("output/ase-{step}.vtk", state, field="volumePhiAse")
+   writeVtkState("output/ase-{step}.vtk", state, field="phiAse")
    writeVtkState("output/state-{step}.vtk", state,
-                   field=("excitationFraction", "volumeRelativeStandardError"))
+                   field=("excitationFraction", "relativeStandardError"))
 
 Filenames may contain ``{step}``, ``{time}``, and ``{field}`` placeholders.
 Use ``fields={"gain": gain_array}`` to write explicitly named custom arrays.

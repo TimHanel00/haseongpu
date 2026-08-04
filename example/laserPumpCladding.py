@@ -46,6 +46,7 @@ from HASEonGPU import (  # noqa: E402
     SuperGaussianPumpProfile,
     SurfacePumpInjector,
     UnstructuredMesh,
+    autonomousFinal,
     writeParaviewState,
     writeVtkState,
     materialLibrary,
@@ -54,12 +55,15 @@ from HASEonGPU import (  # noqa: E402
 
 
 def print_state(state):
-    print(
-        f"step={state.step:03d} "
-        f"time={float(state.time.toValue(units.s)):.3e}s "
-        f"mean_beta={state.sampledExcitationFraction.mean():.6e} "
-        f"mean_phi={state.phiAse.mean():.6e}"
-    )
+    fields = [
+        f"step={state.step:03d}",
+        f"time={float(state.time.toValue(units.s)):.3e}s",
+    ]
+    if state.excitationFraction is not None:
+        fields.append(f"mean_beta={state.excitationFraction.mean():.6e}")
+    if state.phiAse is not None:
+        fields.append(f"mean_phi={state.phiAse.mean():.6e}")
+    print(" ".join(fields))
 
 
 def _local_gain(state, material):
@@ -67,7 +71,7 @@ def _local_gain(state, material):
     peak = int(np.argmax(cross_sections.emission.magnitude))
     sigma_absorption = np.asarray(cross_sections.absorption.magnitude)[peak]
     sigma_emission = np.asarray(cross_sections.emission.magnitude)[peak]
-    beta = state.sampledExcitationFraction
+    beta = state.excitationFraction
     gain = (
         beta * (sigma_absorption + sigma_emission) - sigma_absorption
     ) * cross_sections.absorption.unit * material.activeIonDensity
@@ -86,18 +90,13 @@ def write_vtk_fields(
         raise ValueError("VTK export requires material for gain")
 
     fields = {
-        "betaCells": state.sampledExcitationFraction,
         "betaVolume": state.excitationFraction,
         "phiASE": state.phiAse,
-        "dndtAse": state.sampledDExcitationDtAse,
+        "dndtAse": state.dExcitationDtAse,
         "dndtPump": state.dExcitationDtPump,
         "cladAbs": state.phiAse * float(cladding_absorption.toValue(units.cm**-1)),
         "localGain": _local_gain(state, material),
     }
-    if state.volumePhiAse is not None:
-        fields["volumePhiASE"] = state.volumePhiAse
-    if state.volumeDExcitationDtAse is not None:
-        fields["volumeDndtAse"] = state.volumeDExcitationDtAse
     path = Path(vtkOutputDir) / f"laserPumpCladding_{state.step:03d}.vtk"
     return writeVtkState(path, state, fields=fields)
 
@@ -106,6 +105,17 @@ BOTTOM_ASE_SURFACE_ID = 1
 TOP_ASE_SURFACE_ID = 2
 CLADDING_SURFACE_ID = 3
 NUMBER_OF_Z_LAYERS = 10
+
+
+def laserPumpCladdingOutputSteps(numberOfSteps, pumpSteps):
+    """Return the pump-boundary and final completed-step indices."""
+    numberOfSteps = int(numberOfSteps)
+    pumpSteps = int(pumpSteps)
+    if numberOfSteps <= 0:
+        raise ValueError("numberOfSteps must be positive")
+    if pumpSteps <= 0 or pumpSteps > numberOfSteps:
+        return autonomousFinal(numberOfSteps)
+    return tuple(dict.fromkeys((pumpSteps, numberOfSteps)))
 
 
 def _assign_surface_domains(topology):
@@ -179,6 +189,13 @@ def run_example(
     pumpRayCount=50000,
     pumpRngSeed=5489,
     reportTimings=False,
+    quiet=False,
+    reportInterval=1,
+    outputSteps=None,
+    outputFields=None,
+    executionMode="autonomous",
+    controlFields=None,
+    controlCallback=None,
     **aseOverrides,
 ):
     mesh = laser_pump_cladding_mesh()
@@ -226,6 +243,14 @@ def run_example(
         enableAse=enableAse,
         prePump=prePump,
         reportTimings=reportTimings,
+        executionMode=executionMode,
+        outputSteps=(
+            laserPumpCladdingOutputSteps(timeSteps, pumpSteps)
+            if executionMode == "autonomous" and outputSteps is None
+            else outputSteps
+        ),
+        outputFields=outputFields,
+        controlFields=controlFields,
     )
     simulation.addMaterial(material, domains=mesh.volume("crystal_volume"))
     simulation.addBoundary(
@@ -241,15 +266,23 @@ def run_example(
         injectionMethod=SurfacePumpInjector(surface=pump_aperture),
         relays=(PlanarPumpRelay.retroreflect(mesh.surface("ase_top")),),
     )
-    simulation.onStep(print_state)
-    simulation.onStep(
-        write_vtk_fields,
-        vtkOutputDir,
-        absorption,
-        material,
-    )
+    if not quiet:
+        simulation.onStep(
+            lambda state: print_state(state)
+            if state.step % reportInterval == 0 or state.step == timeSteps
+            else None
+        )
+    if vtkOutputDir is not None:
+        simulation.onStep(
+            write_vtk_fields,
+            vtkOutputDir,
+            absorption,
+            material,
+        )
     if openPmdOutputDir is not None:
         simulation.onStep(writeParaviewState, openPmdOutputDir, absorption)
+    if controlCallback is not None:
+        simulation.onControl(controlCallback)
     simulation.step(timeSteps, pumpSteps=pumpSteps)
     return simulation.getLastState()
 
@@ -276,6 +309,11 @@ def main(argv=None):
         help="Monte Carlo ASE run-control YAML. Defaults to config/hase-phiase.yaml.",
     )
     parser.add_argument("--vtk-output-dir", type=Path, default=SCRIPT_DIR)
+    parser.add_argument(
+        "--no-vtk",
+        action="store_true",
+        help="Disable per-snapshot VTK export.",
+    )
     parser.add_argument("--openpmd-output-dir", type=Path, default=None)
     parser.add_argument(
         "--disable-ase",
@@ -309,6 +347,13 @@ def main(argv=None):
         action="store_true",
         help="Print frontend timing split for compiled transport, snapshots, and callbacks.",
     )
+    parser.add_argument("--quiet", action="store_true", help="Suppress progress and final-state summaries.")
+    parser.add_argument(
+        "--report-interval",
+        type=int,
+        default=1,
+        help="Print progress every N completed steps. Default: 1.",
+    )
     args = parser.parse_args(argv)
 
     aseOverrides = {}
@@ -322,19 +367,24 @@ def main(argv=None):
         backend=args.backend,
         timeSteps=args.time_steps,
         pumpSteps=args.pump_steps,
-        vtkOutputDir=args.vtk_output_dir,
+        vtkOutputDir=None if args.no_vtk else args.vtk_output_dir,
         openPmdOutputDir=args.openpmd_output_dir,
         openPmdBackend=args.openpmd_backend,
         enableAse=not args.disable_ase,
         prePump=not args.disable_pre_pump,
         spectralResolution=args.spectral_resolution,
         reportTimings=args.timings,
+        quiet=args.quiet,
+        reportInterval=args.report_interval,
         pumpRayCount=args.pump_ray_count,
         pumpRngSeed=args.pump_rng_seed,
         **aseOverrides,
     )
-    print(f"phiAse shape: {state.phiAse.shape}")
-    print(f"betaCells shape: {state.sampledExcitationFraction.shape}")
+    if not args.quiet:
+        if state.phiAse is not None:
+            print(f"phiAse shape: {state.phiAse.shape}")
+        if state.excitationFraction is not None:
+            print(f"excitationFraction shape: {state.excitationFraction.shape}")
 
 
 if __name__ == "__main__":

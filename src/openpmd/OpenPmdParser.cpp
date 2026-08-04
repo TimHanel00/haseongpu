@@ -179,6 +179,30 @@ namespace
         return result;
     }
 
+    std::vector<std::string> stringVectorAttribute(io::Attributable const& obj, std::string const& name)
+    {
+        auto const value = obj.getAttribute(name);
+        if(auto encoded = value.getOptional<std::string>())
+        {
+            std::vector<std::string> result;
+            std::size_t begin = 0u;
+            while(begin <= encoded->size())
+            {
+                auto const end = encoded->find(',', begin);
+                auto const item = encoded->substr(begin, end == std::string::npos ? end : end - begin);
+                if(!item.empty())
+                    result.push_back(item);
+                if(end == std::string::npos)
+                    break;
+                begin = end + 1u;
+            }
+            return result;
+        }
+        auto result = value.get<std::vector<std::string>>();
+        std::erase(result, std::string{});
+        return result;
+    }
+
     std::vector<unsigned> optionalUnsignedVectorAttribute(io::Attributable const& obj, std::string const& name)
     {
         if(!obj.containsAttribute(name))
@@ -1269,16 +1293,18 @@ namespace hase::openpmd
         run.enableAse = attributeOr<bool>(iteration, field::enableAse, true);
         run.prePump = attributeOr<bool>(iteration, field::prePump, false);
         run.pumpSteps = attributeOr<unsigned>(iteration, field::pumpSteps, std::numeric_limits<unsigned>::max());
-        run.executionMode = attributeOr<std::string>(
-            iteration,
-            field::executionMode,
-            core::SimulationExecutionMode::AUTONOMOUS);
+        run.executionMode
+            = attributeOr<std::string>(iteration, field::executionMode, core::SimulationExecutionMode::AUTONOMOUS);
         if(iteration.containsAttribute(field::outputSteps))
             run.outputSteps = unsignedVectorAttribute(iteration, field::outputSteps);
         if(iteration.containsAttribute(field::outputFields))
-            run.outputFields = attribute<std::vector<std::string>>(iteration, field::outputFields);
+        {
+            run.outputFields = stringVectorAttribute(iteration, field::outputFields);
+        }
         if(iteration.containsAttribute(field::controlFields))
-            run.controlFields = attribute<std::vector<std::string>>(iteration, field::controlFields);
+        {
+            run.controlFields = stringVectorAttribute(iteration, field::controlFields);
+        }
         run.timeIntegration.method
             = attributeOr<std::string>(iteration, field::timeIntegrator, core::TimeIntegrator::EXPLICIT_EULER);
         run.timeIntegration.implicitIterations = attributeOr<unsigned>(iteration, field::implicitIterations, 8u);
@@ -1923,9 +1949,7 @@ namespace hase::openpmd
                             "synchronized-debug control",
                             "static topology updates are not supported after initialization");
                     validateDynamicOnlyIteration(controlIteration, simulation);
-                    if(std::ranges::find(
-                           simulation.run.controlFields,
-                           core::SimulationControlField::BETA_VOLUME)
+                    if(std::ranges::find(simulation.run.controlFields, core::SimulationControlField::BETA_VOLUME)
                        != simulation.run.controlFields.end())
                     {
                         updateDynamicIteration(inputSeries, controlIteration, simulation);

@@ -73,18 +73,14 @@ namespace hase::core
             , m_phiSquare(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
             , m_volumeRayVisits(
                   alpaka::onHost::alloc<unsigned>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
-            , m_droppedRays(
-                  alpaka::onHost::alloc<unsigned>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
+            , m_droppedRays(alpaka::onHost::alloc<unsigned>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
             , m_sigmaA(hase::alpakaUtils::toDevice(m_queue, experiment.sigmaA))
             , m_sigmaE(hase::alpakaUtils::toDevice(m_queue, experiment.sigmaE))
-            , m_volumePhiAse(
-                  alpaka::onHost::alloc<float>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
-            , m_standardError(
-                  alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
+            , m_volumePhiAse(alpaka::onHost::alloc<float>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
+            , m_standardError(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
             , m_relativeStandardError(
                   alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
-            , m_volumeDndtAse(
-                  alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
+            , m_volumeDndtAse(alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(volumeCount)))
             , m_betaVolumeTotal(alpaka::onHost::alloc<double>(m_devBundle.device, std::size_t{1}))
             , m_volumeCount(volumeCount)
             , m_spectralCount(static_cast<unsigned>(experiment.sigmaA.size()))
@@ -128,11 +124,7 @@ namespace hase::core
                     m_volumeRayVisits,
                     0u,
                     alpaka::Vec{static_cast<std::size_t>(m_volumeCount)});
-                alpaka::onHost::fill(
-                    m_queue,
-                    m_droppedRays,
-                    0u,
-                    alpaka::Vec{static_cast<std::size_t>(m_volumeCount)});
+                alpaka::onHost::fill(m_queue, m_droppedRays, 0u, alpaka::Vec{static_cast<std::size_t>(m_volumeCount)});
             }
 
             auto accumulation = hase::kernels::forward::ForwardAccumulationSpans{
@@ -140,10 +132,7 @@ namespace hase::core
                 m_phiSquare,
                 m_volumeRayVisits,
                 m_droppedRays};
-            auto spectrum = hase::kernels::forward::ForwardSpectrumSpans{
-                m_sigmaA,
-                m_sigmaE,
-                m_spectralCount};
+            auto spectrum = hase::kernels::forward::ForwardSpectrumSpans{m_sigmaA, m_sigmaE, m_spectralCount};
             auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
                 m_devBundle.device,
                 m_devBundle.executor,
@@ -282,9 +271,7 @@ namespace hase::core
         double rebuildBetaVolumePrefix(DeviceMeshContainer<T_Device>& meshContainer, auto const& betaVolume)
         {
             auto mesh = meshContainer.toView();
-            mesh.betaVolume = std::span<double const>(
-                betaVolume.data(),
-                betaVolume.getMdSpan().getExtents().x());
+            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getMdSpan().getExtents().x());
             hase::kernels::enqueueBuildBetaVolumePrefix(
                 m_devBundle,
                 m_queue,

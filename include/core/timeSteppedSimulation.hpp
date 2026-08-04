@@ -100,7 +100,8 @@ namespace hase::core
             if(run.executionMode == SimulationExecutionMode::AUTONOMOUS && !run.controlFields.empty())
                 throw std::runtime_error("simulation control_fields require synchronized-debug mode");
             if(run.executionMode == SimulationExecutionMode::SYNCHRONIZED_DEBUG && !run.outputSteps.empty())
-                throw std::runtime_error("synchronized-debug emits every completed step; output_steps must be omitted");
+                throw std::runtime_error(
+                    "synchronized-debug emits every completed step; output_steps must be omitted");
             auto const supportedControlFields = SimulationControlField::all();
             for(std::size_t index = 0u; index < run.controlFields.size(); ++index)
             {
@@ -143,11 +144,12 @@ namespace hase::core
             m_deviceContexts.reserve(m_meshes.size());
             for(auto const& mesh : m_meshes)
             {
-                m_deviceContexts.emplace_back(std::make_unique<ForwardPhiAseDeviceContext<T_Device, T_Executor>>(
-                    mesh.m_device,
-                    m_executor,
-                    experiment,
-                    hostMesh.numberOfCells));
+                m_deviceContexts.emplace_back(
+                    std::make_unique<ForwardPhiAseDeviceContext<T_Device, T_Executor>>(
+                        mesh.m_device,
+                        m_executor,
+                        experiment,
+                        hostMesh.numberOfCells));
             }
         }
 
@@ -258,9 +260,7 @@ namespace hase::core
                             convergenceRayCounts);
                     }
                     if(terminalLaunch
-                       || forwardResultMeetsRelativeStandardError(
-                           result,
-                           experiment.relativeStandardErrorThreshold))
+                       || forwardResultMeetsRelativeStandardError(result, experiment.relativeStandardErrorThreshold))
                         break;
                 }
             }
@@ -304,8 +304,8 @@ namespace hase::core
             }
             bool const deviceResidentPhi = usedDevices == 1u;
             double const fluorescenceRate = hostMesh.nTot / hostMesh.crystalTFluo;
-            for(unsigned volume = 0u; hostResultAvailable && volume < result.phiAse.size()
-                                     && volume < hostMesh.betaVolume.size();
+            for(unsigned volume = 0u;
+                hostResultAvailable && volume < result.phiAse.size() && volume < hostMesh.betaVolume.size();
                 ++volume)
             {
                 result.phiAse[volume] *= fluorescenceRate;
@@ -391,9 +391,7 @@ namespace hase::core
         [[nodiscard]] DeviceMeshView primaryMeshView(auto const& betaVolume) const
         {
             auto mesh = m_meshes.front().toView();
-            mesh.betaVolume = std::span<double const>(
-                betaVolume.data(),
-                betaVolume.getMdSpan().getExtents().x());
+            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getMdSpan().getExtents().x());
             return mesh;
         }
 
@@ -427,6 +425,7 @@ namespace hase::core
     {
         using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::blocking));
         using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
+
     public:
         CompiledSimulationRunner(
             std::vector<T_Device> devices,
@@ -454,7 +453,8 @@ namespace hase::core
             , m_k2(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
             , m_k3(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
             , m_k4(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
-            , m_cellPumpIntegral(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
+            , m_cellPumpIntegral(
+                  alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
         {
             if(hostMesh.betaVolume.size() != hostMesh.numberOfCells)
                 throw std::runtime_error("simulation beta_volume must contain exactly one value per cell");
@@ -471,8 +471,7 @@ namespace hase::core
                 advanceOneStep(pumpEnabled, aseEnabled);
                 std::swap(m_beta, m_betaNext);
                 unsigned const completedStep = step + 1u;
-                bool const synchronizedDebug
-                    = m_run.executionMode == SimulationExecutionMode::SYNCHRONIZED_DEBUG;
+                bool const synchronizedDebug = m_run.executionMode == SimulationExecutionMode::SYNCHRONIZED_DEBUG;
                 if(synchronizedDebug || shouldOutput(completedStep))
                 {
                     callback(makeSnapshot(completedStep));
@@ -509,12 +508,8 @@ namespace hase::core
 
                 if(aseEnabled)
                 {
-                    m_phiAseDeviceResident = m_forwardAseContext.evaluate(
-                        m_experiment,
-                        m_compute,
-                        m_hostMesh,
-                        beta,
-                        m_lastAseResult);
+                    m_phiAseDeviceResident
+                        = m_forwardAseContext.evaluate(m_experiment, m_compute, m_hostMesh, beta, m_lastAseResult);
                     if(!m_phiAseDeviceResident)
                     {
                         detail::copyVectorToBuffer(m_queue, m_lastAseResult.dndtAse, m_dndtAse);
@@ -544,8 +539,7 @@ namespace hase::core
                     m_dndtPump);
             }
 
-            auto& activeDndtAse
-                = m_phiAseDeviceResident ? m_forwardAseContext.primaryVolumeDndtAse() : m_dndtAse;
+            auto& activeDndtAse = m_phiAseDeviceResident ? m_forwardAseContext.primaryVolumeDndtAse() : m_dndtAse;
             DerivativeBuffers derivativeBuffers{beta, m_dndtPump, activeDndtAse, m_derivative};
             hase::kernels::enqueueComposeDerivative(
                 m_devBundle,
@@ -680,8 +674,7 @@ namespace hase::core
             {
                 return true;
             }
-            if(m_nextOutputStep >= m_run.outputSteps.size()
-               || m_run.outputSteps[m_nextOutputStep] != completedStep)
+            if(m_nextOutputStep >= m_run.outputSteps.size() || m_run.outputSteps[m_nextOutputStep] != completedStep)
             {
                 return false;
             }
@@ -710,8 +703,7 @@ namespace hase::core
                 betaVolume = detail::copyToVector(m_queue, m_beta);
             bool const includePhiAse = includes(SimulationOutputField::PHI_ASE);
             bool const includeStandardError = includes(SimulationOutputField::STANDARD_ERROR);
-            bool const includeRelativeStandardError
-                = includes(SimulationOutputField::RELATIVE_STANDARD_ERROR);
+            bool const includeRelativeStandardError = includes(SimulationOutputField::RELATIVE_STANDARD_ERROR);
             bool const includeTotalRays = includes(SimulationOutputField::TOTAL_RAYS);
             if(m_phiAseDeviceResident)
             {

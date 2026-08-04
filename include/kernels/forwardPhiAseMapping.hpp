@@ -26,10 +26,8 @@ namespace hase::kernels
             auto betaVolumePrefix,
             auto betaVolumeTotal) const
         {
-            for(auto [worker] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{1u}))
+            for(auto [worker] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{1u}))
             {
                 double total = 0.0;
                 for(unsigned cell = 0u; cell < mesh.numberOfCells; ++cell)
@@ -110,18 +108,11 @@ namespace hase::kernels
         auto& betaVolumePrefix,
         auto& betaVolumeTotal)
     {
-        auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-            devBundle.device,
-            devBundle.executor,
-            alpaka::Vec{1u});
+        auto frameSpec
+            = hase::alpakaUtils::getFrameSpec<uint32_t>(devBundle.device, devBundle.executor, alpaka::Vec{1u});
         queue.enqueue(
             frameSpec,
-            alpaka::KernelBundle{
-                BuildBetaVolumePrefix{},
-                mesh,
-                betaVolume,
-                betaVolumePrefix,
-                betaVolumeTotal});
+            alpaka::KernelBundle{BuildBetaVolumePrefix{}, mesh, betaVolume, betaVolumePrefix, betaVolumeTotal});
     }
 
     void enqueueFinalizeForwardCellPhiAse(
@@ -148,12 +139,7 @@ namespace hase::kernels
         queue.enqueue(
             cellFrameSpec,
             alpaka::KernelBundle{
-                FinalizeForwardVolumePhiAse{
-                    rayCount,
-                    betaVolumeTotal,
-                    fluorescenceRate,
-                    sigmaA,
-                    sigmaE},
+                FinalizeForwardVolumePhiAse{rayCount, betaVolumeTotal, fluorescenceRate, sigmaA, sigmaE},
                 mesh,
                 scoreSum,
                 scoreSquareSum,

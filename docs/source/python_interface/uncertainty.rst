@@ -74,7 +74,7 @@ inspect the reported RSE when convergence matters:
 .. code-block:: python
 
    state = simulation.step().getLastState()
-   print(np.nanmax(state.volumeRelativeStandardError))
+   print(np.nanmax(state.relativeStandardError))
 
 Setting ``minRays == maxRays`` requests one fixed budget, so the threshold is
 reported but cannot trigger another batch. ``forwardRayCount`` likewise
@@ -115,10 +115,10 @@ Result fields
 
 After a completed step, the main cell-wise diagnostics are:
 
-* ``state.volumePhiAse`` -- ASE flux estimate;
-* ``state.volumeStandardError`` -- absolute sampling standard error;
-* ``state.volumeRelativeStandardError`` -- dimensionless RSE;
-* ``state.volumeTotalRays`` -- ray visits deposited in each cell, not the
+* ``state.phiAse`` -- ASE flux estimate;
+* ``state.standardError`` -- absolute sampling standard error;
+* ``state.relativeStandardError`` -- dimensionless RSE;
+* ``state.totalRays`` -- ray visits deposited in each cell, not the
   global history count :math:`N` used in the RSE formula.
 
 A short convergence check can report both the worst defined RSE and cells that
@@ -126,5 +126,5 @@ did not obtain a finite relative estimate:
 
 .. code-block:: python
 
-   rse = state.volumeRelativeStandardError
+   rse = state.relativeStandardError
    print(np.nanmax(rse), np.count_nonzero(~np.isfinite(rse)))

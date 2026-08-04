@@ -352,11 +352,7 @@ namespace hase::kernels
         }
     };
 
-    template<
-        typename T_Device,
-        typename T_Executor,
-        typename T_BetaBuffer,
-        typename T_CellBuffer>
+    template<typename T_Device, typename T_Executor, typename T_BetaBuffer, typename T_CellBuffer>
     PumpRayBatch tracePumpBatch(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
         auto const& queue,
@@ -604,22 +600,14 @@ namespace hase::kernels
             for(auto const& relay : source.relays)
             {
                 rays = applyPumpRelay(hostMesh, rays, relay);
-                rays = tracePumpBatch(
-                    devBundle,
-                    queue,
-                    mesh,
-                    betaVolume,
-                    cellPumpIntegral,
-                    std::move(rays));
+                rays = tracePumpBatch(devBundle, queue, mesh, betaVolume, cellPumpIntegral, std::move(rays));
             }
         }
         auto cellFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{mesh.numberOfCells});
-        queue.enqueue(
-            cellFrameSpec,
-            alpaka::KernelBundle{NormalizeCellPumpRate{}, mesh, cellPumpIntegral, cellRate});
+        queue.enqueue(cellFrameSpec, alpaka::KernelBundle{NormalizeCellPumpRate{}, mesh, cellPumpIntegral, cellRate});
         alpaka::onHost::wait(queue);
     }
 } // namespace hase::kernels

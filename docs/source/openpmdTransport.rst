@@ -52,10 +52,23 @@ Simulation transport lifetime
 -----------------------------
 
 ``Simulation.step`` owns the complete openPMD lifetime. Python writes one
-initial input iteration and reads snapshots produced by the compiled C++ time
-loop. Caller-managed sessions are not part of the public API. For streaming
-backends, an internal receiver drains snapshots independently of Python
-``onStep`` callback speed.
+initial input iteration and the compiled C++ backend owns the complete time
+loop, persistent device context, queues, meshes, spectra, and evolving cell
+state. Caller-managed sessions and Python-controlled normal stepping are not
+part of the public API.
+
+Autonomous output is selected at initialization with ``outputSteps`` and
+``outputFields``. With SST, an internal receiver drains those snapshots while
+the backend continues; slow callbacks can eventually apply bounded transport
+backpressure but never participate in numerical stepping. File-backed runs
+read the selected snapshots after the backend exits. A final-only run is just
+``outputSteps=autonomousFinal(numberOfSteps)``.
+
+``synchronized-debug`` is the separate bidirectional contract. Every completed
+step is streamed to Python, callbacks may return a configured ``beta_volume``
+control field, and the backend waits for the matching control iteration before
+continuing. It intentionally requires SST and trades throughput for observable,
+deterministic step boundaries.
 
 Provider Compatibility
 ----------------------
@@ -167,30 +180,32 @@ For compiled ``Simulation`` runs, iteration attributes also include run-control
 metadata:
 
 * ``time_step`` and ``number_of_steps``
-* ``pumpSteps``
-* ``enableAse`` and ``prePump``
-* ``timeIntegrator`` (``explicit-euler``, ``heun``, ``midpoint``,
+* ``pump_steps``
+* ``enable_ase`` and ``pre_pump``
+* ``execution_mode``, ``output_steps``, ``output_fields``, and
+  ``control_fields``
+* ``time_integrator`` (``explicit-euler``, ``heun``, ``midpoint``,
   ``runge-kutta-4``, ``frozen-phi-ase-runge-kutta-4``,
   ``implicit-euler``, or ``exponential-euler``)
 * ``implicit_iterations`` and ``implicit_tolerance`` for implicit Euler
 * ``pump_schema_version`` (currently ``1``), ``pump_ray_count``, and ``pump_rng_seed``
 * flattened source, spectrum, angular, profile, and planar-relay arrays
 
-The C++ backend writes one output iteration per completed step. Snapshot
-iterations contain dynamic beta records plus ``core_result_phi_ase``,
+The C++ backend writes only the selected completed steps. Snapshot iterations
+contain selected cell records from ``core_beta_volume`` and ``core_result_phi_ase``,
 ``core_result_standard_error``, ``core_result_relative_standard_error``,
 ``core_result_total_rays``, ``core_result_dndt_ase``, and
-``core_result_dndt_pump``. The first snapshot also includes the static canonical
-mesh/material/spectral records.
+``core_result_dndt_pump``. Static canonical mesh/material/spectral records stay
+in the initialization input and are not duplicated in output snapshots.
 
 
 Iteration Updates
 -----------------
 
-The first Python-written iteration contains the full static context: topology,
+The first and normally only Python-written iteration contains the full static context: topology,
 material records, spectra, compute attributes, and the dynamic
-``core_beta_volume`` field. Later iterations normally contain only
-``core_beta_volume`` and reuse the cached static context from iteration 0.
+``core_beta_volume`` field. Only synchronized-debug adds later input iterations;
+those are dynamic-only controls and currently may contain ``core_beta_volume``.
 
 Changing topology, spectra, material constants, or compute settings requires a
 new input series whose first iteration carries a complete static update.  This

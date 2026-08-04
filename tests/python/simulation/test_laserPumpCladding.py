@@ -161,7 +161,7 @@ def testPtTet4GeometryConvertsBackToLegacyWedgeOrder(
         tmp_path / "pt_wedge.vtk",
         direction="tet4-to-wedge",
     )
-    points, cells, cell_types, point_data, cell_data, _fields = _parseVtk(wedge_path)
+    points, cells, cell_types, _point_data, cell_data, _fields = _parseVtk(wedge_path)
 
     np.testing.assert_allclose(points, laserPumpCladdingReference["points"], rtol=0.0, atol=0.0)
     np.testing.assert_array_equal(
@@ -169,7 +169,6 @@ def testPtTet4GeometryConvertsBackToLegacyWedgeOrder(
         np.sort(laserPumpCladdingReference["cells"], axis=1),
     )
     np.testing.assert_array_equal(np.asarray(cell_types, dtype=np.uint32), laserPumpCladdingReference["cellTypes"])
-    assert "betaCells" in point_data
     assert "betaVolume" in cell_data
 
 
@@ -241,8 +240,7 @@ def testLaserPumpCladdingTet4MeshPreservesTenLayerPumpLayout():
     )
 
     assert topology.structuredNumberOfLevels == laserPumpCladding.NUMBER_OF_Z_LAYERS
-    assert topology.numberOfSamplePoints == topology.numberOfPoints
-    assert topology.numberOfSamplePoints == topology.structuredNumberOfPoints * topology.structuredNumberOfLevels
+    assert topology.numberOfSamplePoints == topology.numberOfCells
 
     points_by_level = points.reshape(
         (topology.structuredNumberOfLevels, topology.structuredNumberOfPoints, 3)
@@ -325,7 +323,7 @@ def laserPumpCladdingBackendResults(
             adaptiveSteps=metadata["parameters"]["adaptiveSteps"],
         )
 
-        relative_standard_error = np.asarray(state.volumeRelativeStandardError, dtype=np.float64)
+        relative_standard_error = np.asarray(state.relativeStandardError, dtype=np.float64)
         defined_relative_standard_error = relative_standard_error[np.isfinite(relative_standard_error)]
         observed_integrals = []
         for step in metadata["observable"]["stepNumbers"]:
@@ -334,7 +332,7 @@ def laserPumpCladdingBackendResults(
                 tet4_path
             )
             observed_integrals.append(
-                _tet_cell_integral(tet4_points, tet4_cells, tet4_cell_data["volumePhiASE"])
+                _tet_cell_integral(tet4_points, tet4_cells, tet4_cell_data["phiASE"])
             )
         results[alpakaBackend] = {
             "integrals": np.asarray(observed_integrals, dtype=np.float64),
@@ -410,6 +408,7 @@ def fakeCompiledSnapshots(monkeypatch):
         transport=None,
         command_prefix=None,
         workspace_dir=None,
+        on_state=None,
     ):
         calls.append(
             {
@@ -422,27 +421,31 @@ def fakeCompiledSnapshots(monkeypatch):
                 "ase_solver": simulation.aseSolver,
             }
         )
-        point_shape = (simulation.mesh.numberOfPoints,)
         volume_shape = (simulation.mesh.numberOfCells,)
         states = []
         for step in range(1, steps + 1):
+            if simulation.outputSteps is not None and step not in simulation.outputSteps:
+                continue
             pump_active = pump_steps is None or step <= pump_steps
-            states.append(
-                SimpleNamespace(
+            state = SimpleNamespace(
                     step=step,
                     time=step * float(simulation.timeStepSize.toValue(laserPumpCladding.units.s)),
-                    betaCells=np.full(point_shape, 0.05 * step, dtype=np.float64),
                     betaVolume=np.full(volume_shape, 0.025 * step, dtype=np.float64),
-                    phiAse=np.ones(point_shape, dtype=np.float64),
-                    dndtAse=np.zeros(point_shape, dtype=np.float64),
+                    phiAse=np.ones(volume_shape, dtype=np.float64),
+                    standardError=np.full(volume_shape, 0.01, dtype=np.float64),
+                    relativeStandardError=np.full(volume_shape, 0.01, dtype=np.float64),
+                    totalRays=np.ones(volume_shape, dtype=np.uint32),
+                    dndtAse=np.zeros(volume_shape, dtype=np.float64),
                     dndtPump=(
-                        np.ones(point_shape, dtype=np.float64)
+                        np.ones(volume_shape, dtype=np.float64)
                         if pump_active
-                        else np.zeros(point_shape, dtype=np.float64)
+                        else np.zeros(volume_shape, dtype=np.float64)
                     ),
                     aseResult=object(),
                 )
-            )
+            states.append(state)
+            if on_state is not None:
+                on_state(state)
         return states
 
     monkeypatch.setattr(transport, "run_simulation", fake_run_simulation)
@@ -465,7 +468,7 @@ def testLaserPumpCladdingExampleWritesVtkFromCompiledSnapshots(
     assert second.is_file()
     assert state.step == 2
     scalars = _vtkScalarNames(second)
-    assert {"betaCells", "phiASE", "dndtAse", "dndtPump", "cladAbs"}.issubset(scalars)
+    assert {"betaVolume", "phiASE", "dndtAse", "dndtPump", "cladAbs"}.issubset(scalars)
     assert fakeCompiledSnapshots[-1]["ase_solver"].relativeStandardErrorThreshold == 0.1
     assert fakeCompiledSnapshots[-1]["pump_steps"] == 1
     simulation = fakeCompiledSnapshots[-1]["simulation"]
@@ -512,7 +515,7 @@ def testLaserPumpCladdingCliAcceptsDisableAse(monkeypatch, tmp_path):
         calls.append({"args": args, "kwargs": kwargs})
         return SimpleNamespace(
             phiAse=np.zeros((2, 3)),
-            sampledExcitationFraction=np.zeros((2, 3)),
+            excitationFraction=np.zeros((2, 3)),
         )
 
     monkeypatch.setattr(laserPumpCladding, "run_example", fake_run_example)
@@ -544,7 +547,7 @@ def testLaserPumpCladdingLauncherUsesSupportedCliOptions(monkeypatch, tmp_path):
         calls.append({"args": args, "kwargs": kwargs})
         return SimpleNamespace(
             phiAse=np.zeros((2, 3)),
-            sampledExcitationFraction=np.zeros((2, 3)),
+            excitationFraction=np.zeros((2, 3)),
         )
 
     monkeypatch.setattr(laserPumpCladding, "run_example", fake_run_example)

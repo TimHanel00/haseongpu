@@ -97,14 +97,7 @@ namespace hase::core
 
         [[nodiscard]] static std::vector<std::string> all()
         {
-            return {
-                BETA_VOLUME,
-                PHI_ASE,
-                STANDARD_ERROR,
-                RELATIVE_STANDARD_ERROR,
-                TOTAL_RAYS,
-                DNDT_ASE,
-                DNDT_PUMP};
+            return {BETA_VOLUME, PHI_ASE, STANDARD_ERROR, RELATIVE_STANDARD_ERROR, TOTAL_RAYS, DNDT_ASE, DNDT_PUMP};
         }
     };
 

@@ -65,7 +65,7 @@ from .laser import (
     UniformPumpProfile,
     integratePumpProfile,
 )
-from .simulation import MonteCarloASESolver, Simulation, TimeStepState
+from .simulation import MonteCarloASESolver, Simulation, TimeStepState, autonomousFinal
 from .timeIntegration import (
     ExplicitEuler,
     ExponentialEuler,
@@ -134,6 +134,7 @@ __all__ = [
     "UniformPumpProfile",
     "UnstructuredMesh",
     "Unit",
+    "autonomousFinal",
     "integratePumpProfile",
     "materialLibrary",
     "unitDimension",

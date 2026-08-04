@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,25 @@ from hase_units import TIME, Quantity, requireQuantity, units
 
 
 HASE_CONFIGURE_HINT = "Run `hase-configure` to generate a matching backend/openPMD setup."
+
+SIMULATION_OUTPUT_FIELDS = (
+    "beta_volume",
+    "phi_ase",
+    "standard_error",
+    "relative_standard_error",
+    "total_rays",
+    "dndt_ase",
+    "dndt_pump",
+)
+SIMULATION_CONTROL_FIELDS = ("beta_volume",)
+
+
+def autonomousFinal(numberOfSteps):
+    """Return the final completed-step index as an autonomous output schedule."""
+    numberOfSteps = int(numberOfSteps)
+    if numberOfSteps <= 0:
+        raise ValueError("numberOfSteps must be positive")
+    return (numberOfSteps,)
 
 
 def _preferredDefaultBackend():
@@ -61,33 +81,24 @@ class TimeStepState:
         One-based completed outer-step index in the current simulation.
     time
         Physical simulation time quantity.
-    sampledExcitationFraction
-        Dimensionless excitation on backend sample points.
     excitationFraction
         Dimensionless cell-centred excitation, shape ``(numberOfCells,)``.
     phiAse
-        ASE photon flux on backend sample points, or ``None`` when unavailable.
-    sampledDExcitationDtAse
-        ASE contribution to excitation-rate change on sample points, in
-        inverse seconds.
+        Cell-centred ASE photon flux, or ``None`` when not selected.
+    standardError
+        Cell-centred Monte Carlo absolute standard error.
+    relativeStandardError
+        Cell-centred relative standard error.
+    totalRays
+        Cell-centred deposited ray-visit counts.
+    dExcitationDtAse
+        Cell-centred ASE contribution to excitation-rate change.
     dExcitationDtPump
-        Pump contribution to excitation-rate change, in inverse seconds.
+        Cell-centred pump contribution to excitation-rate change.
     aseResult
         Low-level transport result retained for advanced diagnostics.
     mesh
         :class:`UnstructuredMesh` associated with every cell/point array.
-    volumePhiAse
-        Optional cell-centred ASE photon flux.
-    volumeDExcitationDtAse
-        Optional cell-centred ASE excitation-rate contribution.
-    volumeStandardError
-        Optional absolute Monte Carlo standard error in photon-flux units.
-    volumeRelativeStandardError
-        Optional dimensionless cell-wise relative standard error.
-    volumeTotalRays
-        Optional cell-wise deposited ray-visit counts; this is not the global
-        launched history count.
-
     Notes
     -----
     Treat snapshot arrays as read-only analysis data. Mutating them is not a
@@ -97,44 +108,33 @@ class TimeStepState:
     """One-based count of completed outer time steps."""
     time: Quantity
     """Physical simulation time at this snapshot."""
-    sampledExcitationFraction: np.ndarray
-    """Dimensionless upper-state fraction at backend sample points."""
-    excitationFraction: np.ndarray
+    excitationFraction: np.ndarray | None
     """Dimensionless cell-centred upper-state fraction."""
     phiAse: np.ndarray | None
-    """ASE photon flux at backend sample points, when available."""
-    sampledDExcitationDtAse: np.ndarray
-    """ASE-induced excitation-rate change at sample points, in ``s^-1``."""
-    dExcitationDtPump: np.ndarray
+    """Cell-centred ASE photon flux, when selected."""
+    standardError: np.ndarray | None
+    """Cell-centred absolute Monte Carlo standard error."""
+    relativeStandardError: np.ndarray | None
+    """Cell-centred relative Monte Carlo standard error."""
+    totalRays: np.ndarray | None
+    """Cell-centred deposited ray-visit count."""
+    dExcitationDtAse: np.ndarray | None
+    """Cell-centred ASE excitation-rate change in ``s^-1``."""
+    dExcitationDtPump: np.ndarray | None
     """Pump-induced cell excitation-rate change, in ``s^-1``."""
     aseResult: object | None
     """Low-level transport result for advanced estimator diagnostics."""
     mesh: object
     """Mesh defining the indexing and coordinates of all spatial arrays."""
-    volumePhiAse: np.ndarray | None = None
-    """Cell-centred ASE photon flux, when projected by the backend."""
-    volumeDExcitationDtAse: np.ndarray | None = None
-    """Cell-centred ASE excitation-rate change in ``s^-1``."""
-    volumeStandardError: np.ndarray | None = None
-    """Absolute one-standard-error estimate for :attr:`volumePhiAse`."""
-    volumeRelativeStandardError: np.ndarray | None = None
-    """Dimensionless ratio ``volumeStandardError / abs(volumePhiAse)``.
 
-    This is the cell-wise diagnostic compared with
-    :attr:`MonteCarloASESolver.relativeStandardErrorThreshold`; it estimates
-    sampling noise, not total physical or discretization error.
-    """
-    volumeTotalRays: np.ndarray | None = None
-    """Deposited ray-visit count per cell, not global launched histories."""
 
-    @property
-    def dExcitationDtAse(self):
-        """Best available ASE excitation-rate array, preferring cell values."""
-        return (
-            self.volumeDExcitationDtAse
-            if self.volumeDExcitationDtAse is not None
-            else self.sampledDExcitationDtAse
-        )
+def _readOnlyArray(value, dtype=None):
+    """Return a NumPy view suitable for a read-only snapshot field."""
+    if value is None:
+        return None
+    array = np.asarray(value, dtype=dtype)
+    array.setflags(write=False)
+    return array
 
 
 @dataclass
@@ -260,9 +260,9 @@ class MonteCarloASESolver(ASESolver):
             YAML path containing zero or more public dataclass field names in
             ``experiment`` and ``compute`` mappings.
         **overrides
-            Lower-camel-case Python constructor values applied after the file,
-            for example ``minRays=200_000``. YAML itself retains its established
-            snake-case wire keys.
+            Python constructor values applied after the file. Lower-camel-case
+            names such as ``minRays=200_000`` are canonical; the corresponding
+            established snake-case YAML names remain accepted for compatibility.
 
         Returns
         -------
@@ -308,10 +308,16 @@ class MonteCarloASESolver(ASESolver):
             if unknown:
                 raise ValueError(f"unknown ASE configuration key '{unknown[0]}'")
             values.update((yamlNames[name], value) for name, value in section.items())
-        unknown = sorted(set(overrides) - allowed)
+        normalizedOverrides = {}
+        for name, value in overrides.items():
+            publicName = yamlNames.get(name, name)
+            if publicName in normalizedOverrides:
+                raise TypeError(f"duplicate MonteCarloASESolver override '{publicName}'")
+            normalizedOverrides[publicName] = value
+        unknown = sorted(set(normalizedOverrides) - allowed)
         if unknown:
             raise TypeError(f"unknown MonteCarloASESolver override '{unknown[0]}'")
-        values.update(overrides)
+        values.update(normalizedOverrides)
         return cls(**values)
 
     def transportAttributes(self, numberOfSamples):
@@ -404,6 +410,17 @@ class Simulation:
         Whether pumping is applied before the first time integration update.
     reportTimings
         Request native timing diagnostics.
+    executionMode
+        ``"autonomous"`` for a backend-owned run or ``"synchronized-debug"``
+        for a snapshot/control exchange after every completed step.
+    outputSteps
+        Optional strictly increasing completed-step indices emitted by an
+        autonomous run. Omit to emit every completed step.
+    outputFields
+        Cell-centred fields selected once before backend initialization.
+    controlFields
+        Dynamic openPMD fields accepted in synchronized-debug mode. The first
+        implementation supports only ``"beta_volume"``.
 
     Notes
     -----
@@ -436,6 +453,14 @@ class Simulation:
     """Whether pump transport is applied before the first state update."""
     reportTimings: bool
     """Whether the native run emits detailed timing diagnostics."""
+    executionMode: str
+    """Backend-owned autonomous execution or synchronized debug exchange."""
+    outputSteps: tuple[int, ...] | None
+    """Selected one-based completed-step indices, or every step when omitted."""
+    outputFields: tuple[str, ...]
+    """Cell-centred fields copied into each selected output snapshot."""
+    controlFields: tuple[str, ...]
+    """Dynamic fields accepted from synchronized-debug callbacks."""
 
     def __init__(
         self,
@@ -451,6 +476,10 @@ class Simulation:
         enableAse=True,
         prePump=False,
         reportTimings=False,
+        executionMode="autonomous",
+        outputSteps=None,
+        outputFields=None,
+        controlFields=None,
     ):
         from .mesh import UnstructuredMesh
         from .problem import InitialState
@@ -473,6 +502,35 @@ class Simulation:
         maxTime = requireQuantity(maxTime, TIME, "maxTime", allowNone=True)
         if maxTime is not None and (not np.isfinite(maxTime.siValue) or float(maxTime.siValue) <= 0.0):
             raise ValueError("maxTime must be finite and positive")
+        if executionMode not in {"autonomous", "synchronized-debug"}:
+            raise ValueError("executionMode must be 'autonomous' or 'synchronized-debug'")
+        outputSteps = None if outputSteps is None else tuple(int(step) for step in outputSteps)
+        outputFields = tuple(
+            SIMULATION_OUTPUT_FIELDS if outputFields is None else (str(field) for field in outputFields)
+        )
+        controlFields = tuple(() if controlFields is None else (str(field) for field in controlFields))
+        if outputSteps is not None and not outputSteps:
+            raise ValueError("outputSteps must be omitted or contain at least one completed-step index")
+        if outputSteps is not None and any(step <= 0 for step in outputSteps):
+            raise ValueError("outputSteps must contain positive completed-step indices")
+        if outputSteps is not None and tuple(sorted(set(outputSteps))) != outputSteps:
+            raise ValueError("outputSteps must be strictly increasing and unique")
+        if not outputFields:
+            raise ValueError("outputFields must contain at least one field")
+        unknownOutputs = sorted(set(outputFields) - set(SIMULATION_OUTPUT_FIELDS))
+        if unknownOutputs:
+            raise ValueError(f"unsupported outputFields: {unknownOutputs}")
+        if len(set(outputFields)) != len(outputFields):
+            raise ValueError("outputFields must be unique")
+        unknownControls = sorted(set(controlFields) - set(SIMULATION_CONTROL_FIELDS))
+        if unknownControls:
+            raise ValueError(f"unsupported controlFields: {unknownControls}")
+        if len(set(controlFields)) != len(controlFields):
+            raise ValueError("controlFields must be unique")
+        if executionMode == "autonomous" and controlFields:
+            raise ValueError("controlFields require executionMode='synchronized-debug'")
+        if executionMode == "synchronized-debug" and outputSteps is not None:
+            raise ValueError("synchronized-debug emits every completed step; outputSteps must be omitted")
         self.mesh = mesh
         self.aseSolver = aseSolver
         self.pumpSolver = pumpSolver
@@ -484,12 +542,17 @@ class Simulation:
         self.enableAse = bool(enableAse)
         self.prePump = bool(prePump)
         self.reportTimings = bool(reportTimings)
+        self.executionMode = executionMode
+        self.outputSteps = outputSteps
+        self.outputFields = outputFields
+        self.controlFields = controlFields
         self._material_registrations = []
         self._boundary_registrations = []
         self._interface_registrations = []
         self._pump_registrations = []
         self._init_callbacks = []
         self._step_callbacks = []
+        self._control_callbacks = []
         self._initialized = False
         self._compiled_problem = None
         self._current_step = 0
@@ -683,6 +746,54 @@ class Simulation:
         self._step_callbacks.append((callback, args, kwargs))
         return self
 
+    def onControl(self, callback, *args, **kwargs):
+        """Register a synchronized-debug control callback.
+
+        The callback receives the completed :class:`TimeStepState` and returns
+        a mapping from a configured ``controlFields`` name to its next
+        cell-centred values. Returning ``None`` sends no fields for that
+        exchange. Control callbacks run only between non-final debug steps.
+        """
+        self._require_mutable("control callbacks")
+        self._control_callbacks.append((callback, args, kwargs))
+        return self
+
+    def _materializeState(self, rawState, previousStep, previousTime):
+        state = TimeStepState(
+            step=previousStep + int(rawState.step),
+            time=Quantity(previousTime + float(rawState.time), units.s),
+            excitationFraction=_readOnlyArray(rawState.betaVolume, np.float64),
+            phiAse=_readOnlyArray(rawState.phiAse, np.float64),
+            standardError=_readOnlyArray(rawState.standardError, np.float64),
+            relativeStandardError=_readOnlyArray(rawState.relativeStandardError, np.float64),
+            totalRays=_readOnlyArray(rawState.totalRays),
+            dExcitationDtAse=_readOnlyArray(rawState.dndtAse, np.float64),
+            dExcitationDtPump=_readOnlyArray(rawState.dndtPump, np.float64),
+            aseResult=rawState.aseResult,
+            mesh=self.mesh,
+        )
+        self._last_state = state
+        self._current_step = state.step
+        self._current_time = state.time
+        for callback, args, kwargs in self._step_callbacks:
+            callback(state, *args, **kwargs)
+
+        controls = {}
+        for callback, args, kwargs in self._control_callbacks:
+            update = callback(state, *args, **kwargs)
+            if update is None:
+                continue
+            if not isinstance(update, Mapping):
+                raise TypeError("onControl callbacks must return a field mapping or None")
+            duplicate = set(controls).intersection(update)
+            if duplicate:
+                raise ValueError(f"multiple onControl callbacks returned {sorted(duplicate)}")
+            controls.update(update)
+        unknown = sorted(set(controls) - set(self.controlFields))
+        if unknown:
+            raise ValueError(f"onControl returned fields not configured in controlFields: {unknown}")
+        return controls
+
     def step(self, numberOfSteps=1, *, pumpSteps=None):
         """Advance a positive number of outer time steps.
 
@@ -703,6 +814,15 @@ class Simulation:
             raise ValueError("numberOfSteps must be positive")
         if pumpSteps is not None and int(pumpSteps) < 0:
             raise ValueError("pumpSteps must be non-negative")
+        if self._current_step != 0:
+            raise RuntimeError(
+                "a compiled Simulation is initialized and run once; pass the complete autonomous step count "
+                "to the first step() call"
+            )
+        if self.outputSteps is not None and self.outputSteps[-1] > int(numberOfSteps):
+            raise ValueError("outputSteps cannot exceed numberOfSteps")
+        if self.executionMode == "autonomous" and self._control_callbacks:
+            raise ValueError("onControl callbacks require executionMode='synchronized-debug'")
         self.validateBackend()
         if not self._pump_registrations:
             raise ValueError(
@@ -711,35 +831,29 @@ class Simulation:
         self._initialize()
         previous_step = self._current_step
         previous_time = float(self._current_time.toValue(units.s))
+        consumedStates = []
+
+        def consume(rawState):
+            controls = self._materializeState(rawState, previous_step, previous_time)
+            consumedStates.append(rawState)
+            return controls
+
         states = transport.run_simulation(
             self,
             steps=int(numberOfSteps),
             pump_steps=pumpSteps,
             transport=self.aseSolver.openPmdBackend,
+            on_state=consume,
             **self.aseSolver.launchOptions(),
         )
-        for raw_state in states:
-            state = TimeStepState(
-                step=previous_step + int(raw_state.step),
-                time=Quantity(previous_time + float(raw_state.time), units.s),
-                sampledExcitationFraction=np.asarray(raw_state.betaCells, dtype=np.float64).copy(),
-                excitationFraction=np.asarray(raw_state.betaVolume, dtype=np.float64).copy(),
-                phiAse=np.asarray(raw_state.phiAse, dtype=np.float64).copy(),
-                sampledDExcitationDtAse=np.asarray(raw_state.dndtAse, dtype=np.float64).copy(),
-                dExcitationDtPump=np.asarray(raw_state.dndtPump, dtype=np.float64).copy(),
-                aseResult=raw_state.aseResult,
-                mesh=self.mesh,
-                volumePhiAse=None if getattr(raw_state, "volumePhiAse", None) is None else np.asarray(raw_state.volumePhiAse).copy(),
-                volumeDExcitationDtAse=None if getattr(raw_state, "volumeDndtAse", None) is None else np.asarray(raw_state.volumeDndtAse).copy(),
-                volumeStandardError=None if getattr(raw_state, "volumeStandardError", None) is None else np.asarray(raw_state.volumeStandardError).copy(),
-                volumeRelativeStandardError=None if getattr(raw_state, "volumeRelativeStandardError", None) is None else np.asarray(raw_state.volumeRelativeStandardError).copy(),
-                volumeTotalRays=None if getattr(raw_state, "volumeTotalRays", None) is None else np.asarray(raw_state.volumeTotalRays).copy(),
-            )
-            self._last_state = state
-            self._current_step = state.step
-            self._current_time = state.time
-            for callback, args, kwargs in self._step_callbacks:
-                callback(state, *args, **kwargs)
+        if not consumedStates:
+            for rawState in states:
+                consume(rawState)
+        self._current_step = previous_step + int(numberOfSteps)
+        self._current_time = Quantity(
+            previous_time + int(numberOfSteps) * float(self.timeStepSize.toValue(units.s)),
+            units.s,
+        )
         return self
 
     def runUntil(self, maxTime=None):

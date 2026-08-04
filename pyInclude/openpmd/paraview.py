@@ -116,50 +116,42 @@ def writeParaviewState(
     iteration.time_unit_SI = 1.0
 
     topology = state.mesh
-    beta_cells = np.asarray(state.sampledExcitationFraction)
-    primitive_shape = beta_cells.shape
-    _reset_scalar_record(iteration, "beta_cells", beta_cells, primitive_shape, ["point", "level"])
+    if state.excitationFraction is not None:
+        beta_volume = np.asarray(state.excitationFraction)
+        _reset_scalar_record(iteration, "beta_volume", beta_volume, beta_volume.shape, ["cell"])
 
     if state.phiAse is not None:
         phi_ase = np.asarray(state.phiAse)
-        _reset_scalar_record(iteration, "phi_ase", phi_ase, phi_ase.shape, ["point", "level"])
+        _reset_scalar_record(iteration, "phi_ase", phi_ase, phi_ase.shape, ["cell"])
+        absorption = (
+            float(claddingAbsorption.toValue(units.cm**-1))
+            if hasattr(claddingAbsorption, "toValue")
+            else float(claddingAbsorption)
+        )
         _reset_scalar_record(
             iteration,
             "cladding_absorption",
-            phi_ase * np.float64(claddingAbsorption),
+            phi_ase * absorption,
             phi_ase.shape,
-            ["point", "level"],
+            ["cell"],
         )
-    if state.sampledDExcitationDtAse is not None:
-        dndt_ase = np.asarray(state.sampledDExcitationDtAse)
-        _reset_scalar_record(iteration, "dndt_ase", dndt_ase, dndt_ase.shape, ["point", "level"])
+    if state.dExcitationDtAse is not None:
+        dndt_ase = np.asarray(state.dExcitationDtAse)
+        _reset_scalar_record(iteration, "dndt_ase", dndt_ase, dndt_ase.shape, ["cell"])
     if state.dExcitationDtPump is not None:
         dndt_pump = np.asarray(state.dExcitationDtPump)
-        _reset_scalar_record(iteration, "dndt_pump", dndt_pump, dndt_pump.shape, ["point", "level"])
-    if state.excitationFraction is not None:
-        beta_volume = np.asarray(state.excitationFraction)
-        _reset_scalar_record(iteration, "beta_volume", beta_volume, beta_volume.shape, ["cell", "layer"])
+        _reset_scalar_record(iteration, "dndt_pump", dndt_pump, dndt_pump.shape, ["cell"])
 
     if topology is not None:
         _reset_scalar_record(iteration, "points", np.asarray(topology.points), topology.points.shape, ["point", "coordinate"])
-        if hasattr(topology, "cellConnectivity"):
-            connectivity = np.asarray(topology.cellConnectivity, dtype=np.uint32)
-            _reset_scalar_record(
-                iteration,
-                "cell_point_indices",
-                connectivity,
-                connectivity.shape,
-                ["cell", "local_vertex"],
-            )
-        else:
-            connectivity = np.asarray(topology.trianglePointIndices, dtype=np.uint32)
-            _reset_scalar_record(
-                iteration,
-                "triangle_point_indices",
-                connectivity,
-                connectivity.shape,
-                ["cell", "local_vertex"],
-            )
+        connectivity = np.asarray(topology.cellPointIndices, dtype=np.uint32)
+        _reset_scalar_record(
+            iteration,
+            "cell_point_indices",
+            connectivity,
+            connectivity.shape,
+            ["cell", "local_vertex"],
+        )
 
     iteration.close()
     series.close()

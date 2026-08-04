@@ -45,7 +45,10 @@ boundary, interface, and initial-state coverage without launching transport:
 
 ``validateBackend()`` additionally rejects a valid frontend model when the
 current adapter cannot execute one of its physical features. ``step(numberOfSteps=1,
-pumpSteps=None)`` then advances a fixed number of outer time steps.
+pumpSteps=None)`` then transfers the initialized problem once and lets the C++
+backend advance the complete requested run. A compiled ``Simulation`` is not a
+Python-controlled stepper: a second call would require another backend
+initialization and is therefore rejected.
 ``runUntil(maxTime=...)`` accepts another time quantity.
 
 After initialization, material, boundary, interface, pump, and initialization
@@ -61,7 +64,7 @@ Callbacks
 ---------
 
 ``onInit(callback, *args, **kwargs)`` runs once before adapter creation and
-receives the ``Simulation``. ``onStep`` runs after each completed native step
+receives the ``Simulation``. ``onStep`` runs for each selected native snapshot
 and receives a ``TimeStepState``:
 
 .. code-block:: python
@@ -70,6 +73,57 @@ and receives a ``TimeStepState``:
        print(state.step, state.time.toValue(units.us), state.excitationFraction.mean())
 
    simulation.onStep(report).step(3)
+
+Execution and output contracts
+------------------------------
+
+``executionMode="autonomous"`` is the normal performance contract. Python
+writes one initialization iteration, the C++ backend owns all time steps, and
+only the requested snapshots cross the openPMD boundary. Select one-based
+completed-step indices with ``outputSteps`` and fields with ``outputFields``:
+
+.. code-block:: python
+
+   simulation = Simulation(
+       # ...
+       executionMode="autonomous",
+       outputSteps=(40, 150),
+       outputFields=("beta_volume", "phi_ase", "relative_standard_error"),
+   )
+   simulation.step(150)
+
+Omitting ``outputSteps`` emits every completed step. ``autonomousFinal(150)``
+is a thin helper returning ``(150,)``; it does not select a different backend
+path. Supported output fields are:
+
+* ``beta_volume``
+* ``phi_ase``
+* ``standard_error``
+* ``relative_standard_error``
+* ``total_rays``
+* ``dndt_ase``
+* ``dndt_pump``
+
+``executionMode="synchronized-debug"`` emits every step and waits for Python
+before the next one. It requires a streaming openPMD backend. Register
+``onControl`` callbacks to return selected control fields:
+
+.. code-block:: python
+
+   simulation = Simulation(
+       # ...
+       executionMode="synchronized-debug",
+       controlFields=("beta_volume",),
+   )
+
+   def clamp_beta(state):
+       return {"beta_volume": np.minimum(state.excitationFraction, 0.8)}
+
+   simulation.onControl(clamp_beta).step(3)
+
+The initial synchronized-debug contract supports only ``beta_volume``. Static
+topology, material, spectra, and launch controls are never resent. This mode is
+for diagnostics and interactive control, not normal throughput runs.
 
 State fields and physical meaning
 ---------------------------------
@@ -80,24 +134,23 @@ for native state. The principal fields are:
 ``time``
    Physical time as a ``Quantity``.
 
-``sampledExcitationFraction`` and ``excitationFraction``
-   Dimensionless upper-state fractions on the backend's sample points and
-   Tet4 cells, respectively.
+``excitationFraction``
+   Dimensionless upper-state fraction on Tet4 cells.
 
-``phiAse`` and ``volumePhiAse``
-   ASE photon flux on sample points and Tet4 cells, physically
+``phiAse``
+   ASE photon flux on Tet4 cells, physically
    :math:`\mathrm{m}^{-2}\,\mathrm{s}^{-1}`. The value already includes the
    active-ion-density and fluorescence-lifetime scaling.
 
-``sampledDExcitationDtAse``, ``volumeDExcitationDtAse``, and ``dExcitationDtPump``
+``dExcitationDtAse`` and ``dExcitationDtPump``
    Rates of change of the dimensionless excitation fraction, in
    :math:`\mathrm{s}^{-1}`.
 
-``volumeStandardError`` and ``volumeRelativeStandardError``
+``standardError`` and ``relativeStandardError``
    Absolute ASE sampling uncertainty in photon-flux units and dimensionless
    relative uncertainty. See :doc:`uncertainty`.
 
-``volumeTotalRays``
+``totalRays``
    The number of deposited ray visits per Tet4, not the globally launched ray
    budget.
 
@@ -106,6 +159,6 @@ Read a completed snapshot with:
 .. code-block:: python
 
    state = simulation.getLastState()
-   print(state.volumePhiAse, state.volumeRelativeStandardError)
+   print(state.phiAse, state.relativeStandardError)
 
 ``getLastState()`` raises before the first completed step.

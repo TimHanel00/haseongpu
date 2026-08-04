@@ -100,7 +100,7 @@ incident ray weight and lets the remaining fraction leave the model:
    simulation.addBoundary(ConstantReflectivitySurface(0.04, 1.0), domains=mesh.surface("ends"))
 
 ``reflectivity`` is dimensionless and lies in ``[0, 1]``.
-``exterior_refractive_index`` is dimensionless and is used with the material
+``exteriorRefractiveIndex`` is dimensionless and is used with the material
 index for total internal reflection. The current ASE model does not calculate
 angle- or polarization-dependent Fresnel coefficients and does not launch a
 transmitted/refracted ray. ASE reflection also requires

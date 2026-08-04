@@ -48,7 +48,7 @@ material = Material("gain").addState(
 aseSolver = MonteCarloASESolver()
 simulation = Simulation(
     mesh=mesh,
-    aseSolver=ase_solver,
+    aseSolver=aseSolver,
     pumpSolver=MonteCarloPumpSolver(rayCount=16),
     timeIntegrator=RungeKutta4(),
     timeStepSize=1.0 * units.us,
@@ -59,8 +59,8 @@ simulation.addBoundary(AbsorbingSurface(), domains=mesh.exteriorFaces)
 compiled = simulation.resolveProblem()
 
 assert mesh.numberOfCells == 1
-assert ase_solver.minRays == 100_000
-assert ase_solver.maxRays == 100_000
+assert aseSolver.minRays == 100_000
+assert aseSolver.maxRays == 100_000
 assert compiled.materials == (material,)
 np.testing.assert_array_equal(compiled.cellMaterialId, [0])
 np.testing.assert_array_equal(compiled.faceBoundaryId, [[0, 0, 0, 0]])

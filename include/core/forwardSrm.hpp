@@ -38,12 +38,10 @@ namespace hase::core
     template<alpaka::onHost::concepts::Device T_Device>
     class ForwardSrmWorkspace
     {
-        using T_DoubleBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), unsigned{1}));
+        using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), unsigned{1}));
         using T_UnsignedBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), unsigned{1}));
-        using T_CharBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), unsigned{1}));
+        using T_CharBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), unsigned{1}));
 
     public:
         ForwardSrmWorkspace(T_Device& device, unsigned faceCount, unsigned reservoirSize, unsigned maxRayCount)
@@ -67,12 +65,14 @@ namespace hase::core
             , stratifiedRayCounts(alpaka::onHost::alloc<unsigned>(device, faceCount))
             , stratifiedRayOffsets(alpaka::onHost::alloc<unsigned>(device, faceCount))
             , stratifiedRayFaces(alpaka::onHost::alloc<unsigned>(device, maxRayCount))
-            , samplingCdfScanBuffer(alpaka::onHost::alloc<char>(
-                  device,
-                  alpaka::onHost::getScanBufferSize<double>(alpaka::Vec{faceCount})))
-            , stratifiedCountScanBuffer(alpaka::onHost::alloc<char>(
-                  device,
-                  alpaka::onHost::getScanBufferSize<unsigned>(alpaka::Vec{faceCount})))
+            , samplingCdfScanBuffer(
+                  alpaka::onHost::alloc<char>(
+                      device,
+                      alpaka::onHost::getScanBufferSize<double>(alpaka::Vec{faceCount})))
+            , stratifiedCountScanBuffer(
+                  alpaka::onHost::alloc<char>(
+                      device,
+                      alpaka::onHost::getScanBufferSize<unsigned>(alpaka::Vec{faceCount})))
             , faceCount(faceCount)
             , reservoirSize(reservoirSize)
             , maxRayCount(maxRayCount)
