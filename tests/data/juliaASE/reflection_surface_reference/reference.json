@@ -12,11 +12,11 @@
       "dirty": false
     },
     "driver": {
-      "path": "scripts/juliaase_reflection_fixture.jl",
-      "sha256": "531d8b1ce372076b2623e256239df196f64b6901bdb3a3c9173c2220b998f0cb",
+      "kind": "embeddedJuliaSource",
+      "sha256": "35f6a67b006446f0f244f6e5df75b9c692fda39486dd99b4e38b5585625f8961",
       "historicalCommit": "fa15f8e6d980bf2442635376b41ae51a6441d57c",
       "wrapperPath": "scripts/regenerate_juliaase_reflection_fixture.py",
-      "wrapperSha256": "45204c5b2468cad2e692cb62ceee43cb5854f01fe034d97723073d70b326ca92"
+      "wrapperSha256": "f0c29b1e79c6aae1ecca74750057847a21f76154b93e8f90126bbffe81073943"
     },
     "command": "JULIAASE_ROOT=/path/to/juliaASE JULIA_NUM_THREADS=1 JULIA_LOAD_PATH=@:@stdlib OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 scripts/regenerate_juliaase_reflection_fixture.py --ray-count 1000000",
     "parameters": {

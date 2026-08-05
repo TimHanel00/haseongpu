@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "description": "JULIA_gain_1D one-dimensional small-signal-gain reference used by the disabled-ASE laserPumpCladding pump regression.",
+  "referenceGeneration": {
+    "implementation": "JULIA_gain_1D",
+    "generatedAtUtc": "2026-08-04T12:48:21Z",
+    "repository": {
+      "url": "https://codebase.helmholtz.cloud/penelope-julia/julia_gain_1d.git",
+      "visibility": "private",
+      "accessContact": "Dr. Daniel Albach",
+      "commit": "7e01494a4984ab02dd14fec6f4b7f055e01f49b9",
+      "dirty": false
+    },
+    "driver": {
+      "kind": "embeddedJuliaSource",
+      "sha256": "b6fe1f91940a9a08efe91b31d9f33fa0a5092480394b7ed3943bb49f666fb599",
+      "wrapperPath": "scripts/regenerate_julia_gain_1d_fixture.py",
+      "wrapperSha256": "35855d8a013164c970d4995409c14671fb6063d3ac03eb9ba40507d682b76abf"
+    },
+    "command": "JULIA_GAIN_1D_ROOT=/path/to/julia_gain_1d JULIA_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 scripts/regenerate_julia_gain_1d_fixture.py",
+    "parameters": {
+      "materialFile": "Yb_YAGref.h5",
+      "dopingAtomicPercent": 2.0,
+      "crystalLengthCm": 0.7,
+      "pumpPowerWPerCm2": [
+        16000.0
+      ],
+      "pumpWavelengthNm": [
+        940.0
+      ],
+      "pumpCenterNm": [
+        940.0
+      ],
+      "pumpFwhmNm": [
+        6.0
+      ],
+      "pumpPasses": [
+        [
+          1,
+          -1
+        ]
+      ],
+      "pumpDurationSeconds": 0.001,
+      "pumpWindowSeconds": 0.002,
+      "ssgWavelengthNm": 1030.0,
+      "ssgPasses": 2,
+      "systemTransmission": 1.0,
+      "temperaturesK": [
+        300.0
+      ],
+      "consistentPumpRk4": true,
+      "timePoints": 101,
+      "crystalPoints": 10,
+      "extractionPulses": 0
+    },
+    "environment": {
+      "juliaVersion": "1.12.6",
+      "juliaExecutable": "/home/th/.julia/juliaup/julia-1.12.6+0.x64.linux.gnu/bin/julia",
+      "juliaExecutableSha256": "fd670aabc838e93f178cbcf7304c5e9c50aadcce3735e86d5e3218b1bb04e602",
+      "projectSha256": "b0f90d4dcee42923bc23b4880cdd48b0e3072841461d4b31436967a8fce01ce1",
+      "manifestFile": "tests/data/juliaGain1D-manifest.toml",
+      "manifestSha256": "af026be026bec685aff29219755d11c21ed18563f38e423d100d868a4e3fc014",
+      "materialFile": "materials/Yb_YAGref.h5",
+      "materialSha256": "01d5d143fa32e3cb8bea257e04b26e706355237dc99dcefa0298e6ba2aa800aa",
+      "operatingSystem": "Linux-6.17.0-1030-oem-x86_64-with-glibc2.39",
+      "architecture": "x86_64",
+      "juliaNumThreads": 1,
+      "ompNumThreads": 1,
+      "openblasNumThreads": 1,
+      "startupFile": "disabled"
+    }
+  },
+  "reference": {
+    "file": "tests/data/julia1D.csv",
+    "sha256": "1c5eee8e886d0ae687710023bf2f9fa9494c7eedc48c80778303607989ef9e64",
+    "columns": [
+      "step",
+      "time_s",
+      "SSG"
+    ],
+    "dataRows": 101,
+    "firstStep": 0,
+    "lastStep": 100,
+    "timeStepSeconds": 2e-05
+  },
+  "haseComparison": {
+    "example": "example/laserPumpCladding.py",
+    "aseEnabled": false,
+    "timeSteps": 100,
+    "pumpSteps": 50,
+    "pumpRayCount": 10000,
+    "spectralResolution": 191,
+    "referenceFirstComparedRow": 1,
+    "referenceLastComparedRow": 100,
+    "referenceStepZeroUse": "initial-condition sanity check only; HASE VTK snapshots start after the first completed step",
+    "referenceQuantity": "SSG",
+    "haseQuantity": "net_gain_factor",
+    "relativeTolerance": 0.1,
+    "absoluteTolerance": 1e-08
+  }
+}

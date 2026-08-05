@@ -20,9 +20,10 @@ checkout:
   `8e79c420e591978d179233554597cbaa896debd18baf119c4de325b71695f7d7`
 - Resolved manifest: `juliaase-manifest.toml`, SHA-256
   `6bc0d15a228289b5c6f6c2b50e7ed6e1b862729a2ac23657dccecfab8251347a`
-- Driver: `scripts/juliaase_reflection_fixture.jl`, SHA-256
-  `531d8b1ce372076b2623e256239df196f64b6901bdb3a3c9173c2220b998f0cb`
-- Regeneration wrapper: `scripts/regenerate_juliaase_reflection_fixture.py`
+- Embedded driver source in `scripts/regenerate_juliaase_reflection_fixture.py`,
+  SHA-256
+  `35f6a67b006446f0f244f6e5df75b9c692fda39486dd99b4e38b5585625f8961`
+- Python regeneration script: `scripts/regenerate_juliaase_reflection_fixture.py`
 
 The JuliaASE repository is **private**. External reviewers and newer
 maintainers who need the source checkout should contact **Daniel Albach** to
@@ -32,10 +33,11 @@ not replace access to the private JuliaASE source.
 `reference.json` records the exact commit, clean-checkout status, timestamp,
 tool versions, platform, checksums, command, parameters, driver result, and
 driver warnings under `referenceGeneration`. The wrapper rejects a different
-JuliaASE commit, a dirty checkout, the wrong driver or `Project.toml`, or a
-Julia executable other than the recorded 1.10.9 binary. It uses the committed
-manifest in an isolated temporary Julia project, so regeneration does not
-create or update a manifest inside the private checkout.
+JuliaASE commit, a dirty checkout, changed embedded driver source or
+`Project.toml`, or a Julia executable other than the recorded 1.10.9 binary.
+It uses the committed manifest in an isolated temporary Julia project, so
+regeneration does not create or update a manifest inside the private checkout.
+No Julia scripts are stored in this repository.
 
 ## JuliaASE execution parameters
 

@@ -42,14 +42,13 @@ def test_juliaase_reflection_fixture_records_reproducible_generator():
     assert generation["result"]["passes"] == 1
 
     manifest_path = REPO_ROOT / environment["manifestFile"]
-    driver_path = REPO_ROOT / driver["path"]
     wrapper_path = REPO_ROOT / driver["wrapperPath"]
+    assert driver["kind"] == "embeddedJuliaSource"
     assert (
         driver["sha256"]
-        == "531d8b1ce372076b2623e256239df196f64b6901bdb3a3c9173c2220b998f0cb"
+        == "35f6a67b006446f0f244f6e5df75b9c692fda39486dd99b4e38b5585625f8961"
     )
     assert sha256(manifest_path) == environment["manifestSha256"]
-    assert sha256(driver_path) == driver["sha256"]
     assert sha256(wrapper_path) == driver["wrapperSha256"]
 
     with manifest_path.open("rb") as stream:

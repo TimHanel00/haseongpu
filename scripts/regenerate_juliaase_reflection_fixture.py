@@ -19,8 +19,123 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO_ROOT / "tests" / "data" / "juliaASE" / "reflection_surface_reference"
 REFERENCE_PATH = FIXTURE_DIR / "reference.json"
-JULIA_DRIVER = REPO_ROOT / "scripts" / "juliaase_reflection_fixture.jl"
 JULIAASE_MANIFEST = FIXTURE_DIR / "juliaase-manifest.toml"
+
+JULIA_DRIVER_SOURCE = r'''
+using Random
+
+const juliaase_root = length(ARGS) == 1 ? ARGS[1] : error("usage: embedded JuliaASE driver JULIAASE_ROOT")
+const ray_count = parse(Int, get(ENV, "HASE_JULIAASE_FIXTURE_RAYS", "4096"))
+const max_reflection_passes = parse(Int, get(ENV, "HASE_JULIAASE_FIXTURE_MAX_PASSES", "4"))
+include(joinpath(juliaase_root, "src", "ForwardASE.jl"))
+
+const T = ForwardASE.Types
+const S = ForwardASE.SRM
+const G = ForwardASE.GPUTransfer
+const Sim = ForwardASE.Simulation
+const Tallies = ForwardASE.Tallies
+
+const points = Float64[
+    0.0 1.0 0.0 0.0
+    0.0 0.0 1.0 0.0
+    0.0 0.0 0.0 1.0
+]
+const connectivity = reshape(Int32[1, 2, 3, 4], 4, 1)
+const face_normals = cat(
+    reshape(Float32[inv(sqrt(3.0)), inv(sqrt(3.0)), inv(sqrt(3.0))], 3, 1),
+    reshape(Float32[-1.0, 0.0, 0.0], 3, 1),
+    reshape(Float32[0.0, -1.0, 0.0], 3, 1),
+    reshape(Float32[0.0, 0.0, -1.0], 3, 1);
+    dims = 2,
+)
+const mesh = T.TetMesh(
+    points,
+    Int8[T.TET4],
+    connectivity,
+    zeros(Int32, 6, 1),
+    Int32[1],
+    Float32[1.0 / 6.0],
+    reshape(Float32[0.25, 0.25, 0.25], 3, 1),
+    reshape(face_normals, 3, 4, 1),
+    reshape(Float32[sqrt(3.0) / 2.0, 0.5, 0.5, 0.5], 4, 1),
+    fill(Int32(-1), 4, 1),
+    reshape(Int32[T.BOUND_STOP, T.BOUND_STOP, T.BOUND_STOP, 11], 4, 1),
+    fill(NaN, 3, 3, 1),
+)
+
+const boundary_faces = T.BoundaryFaceList(
+    Int32[1, 1, 1, 1],
+    Int8[1, 2, 3, 4],
+    Int32[T.BOUND_STOP, T.BOUND_STOP, T.BOUND_STOP, 11],
+    face_normals,
+    Float32[sqrt(3.0) / 2.0, 0.5, 0.5, 0.5],
+    Float32[
+        1.0 / 3.0 0.0 1.0 / 3.0 1.0 / 3.0
+        1.0 / 3.0 1.0 / 3.0 0.0 1.0 / 3.0
+        1.0 / 3.0 1.0 / 3.0 1.0 / 3.0 0.0
+    ],
+    Int32[0, 0, 0, 1],
+)
+
+const coating = T.CoatingTable(
+    "hase-surface-reflectivity-0.65",
+    Float32[0.0, 90.0],
+    Float32[1030.0, 1030.1],
+    fill(0.65f0, 2, 2),
+    fill(0.65f0, 2, 2),
+    fill(0.35f0, 2, 2),
+    fill(0.35f0, 2, 2),
+)
+
+const beta = 0.18f0
+const sigma_absorption = 0.01f0
+const sigma_emission = 0.02f0
+const gain = beta * (sigma_absorption + sigma_emission) - sigma_absorption
+const source_rate_total = Float64(beta) / 6.0
+const state = G.init_simulation_state(
+    mesh,
+    boundary_faces,
+    S.init_srm(length(boundary_faces.tet_ind), 64),
+    T.TIER3,
+    Float32[gain],
+    zeros(Float32, 3, 1),
+    zeros(Float32, 1),
+    fill(beta, 4),
+    source_rate_total;
+    domain_n = Float32[1.5],
+    bfl_outside_n = Float32[1.0, 1.0, 1.0, 1.0],
+    coating_tables = T.CoatingTable[coating],
+    face_coating_ind = Int32[0, 0, 0, 1],
+    track_polarization = false,
+)
+
+const run = Sim.run_passes!(
+    state,
+    ray_count,
+    trues(1),
+    1.0,
+    1030.0f0,
+    MersenneTwister(12345);
+    epsilon = 1.0e-5,
+    max_passes = max_reflection_passes,
+    diverge_streak = 3,
+    nthreads = 1,
+    n_chunks = 1,
+)
+const phi_ase = Tallies.compute_phi_ase(state, ray_count)
+
+function json_array(values)
+    return "[" * join(string.(Float64.(values)), ",") * "]"
+end
+
+println("{\"status\":\"", run.status,
+        "\",\"passes\":", run.n_passes,
+        ",\"rayCount\":", ray_count,
+        ",\"phiAse\":", json_array(phi_ase),
+        ",\"initialReflectedWeight\":", Float64(sum(run.srm_W_cumulative)),
+        ",\"reflectedPassWeightFractions\":", json_array(run.W_fracs),
+        "}")
+'''.strip()
 
 JULIAASE_REPOSITORY = "https://codebase.helmholtz.cloud/penelope-julia/julia_ase.git"
 JULIAASE_COMMIT = "f6e19290ac06f7fd6f9492e6bb14a86973a50166"
@@ -31,7 +146,6 @@ JULIAASE_MANIFEST_SHA256 = (
     "6bc0d15a228289b5c6f6c2b50e7ed6e1b862729a2ac23657dccecfab8251347a"
 )
 HISTORICAL_DRIVER_COMMIT = "fa15f8e6d980bf2442635376b41ae51a6441d57c"
-JULIA_DRIVER_SHA256 = "531d8b1ce372076b2623e256239df196f64b6901bdb3a3c9173c2220b998f0cb"
 JULIA_VERSION = "1.10.9"
 JULIA_DISTRIBUTION_URL = (
     "https://julialang-s3.julialang.org/bin/linux/x64/1.10/"
@@ -93,15 +207,6 @@ def verify_juliaase_checkout(root: Path) -> None:
         raise SystemExit(
             f"JuliaASE Project.toml hash mismatch: expected {JULIAASE_PROJECT_SHA256}, "
             f"got {project_hash}"
-        )
-
-
-def verify_driver() -> None:
-    driver_hash = sha256(JULIA_DRIVER)
-    if driver_hash != JULIA_DRIVER_SHA256:
-        raise SystemExit(
-            f"JuliaASE driver hash mismatch: expected {JULIA_DRIVER_SHA256}, "
-            f"got {driver_hash}"
         )
 
 
@@ -182,7 +287,8 @@ def generate_reference(
             julia,
             "--startup-file=no",
             f"--project={project}",
-            str(JULIA_DRIVER),
+            "-e",
+            JULIA_DRIVER_SOURCE,
             str(root),
         ],
         check=True,
@@ -265,8 +371,8 @@ def generation_metadata(
             "dirty": bool(git_output(root, "status", "--porcelain")),
         },
         "driver": {
-            "path": str(JULIA_DRIVER.relative_to(REPO_ROOT)),
-            "sha256": sha256(JULIA_DRIVER),
+            "kind": "embeddedJuliaSource",
+            "sha256": hashlib.sha256(JULIA_DRIVER_SOURCE.encode("utf-8")).hexdigest(),
             "historicalCommit": HISTORICAL_DRIVER_COMMIT,
             "wrapperPath": str(Path(__file__).resolve().relative_to(REPO_ROOT)),
             "wrapperSha256": sha256(Path(__file__).resolve()),
@@ -345,9 +451,11 @@ def validate_stored_reference() -> None:
         repository["accessContact"], "Daniel Albach", "repository access contact"
     )
     require_equal(driver["historicalCommit"], HISTORICAL_DRIVER_COMMIT, "driver commit")
-    require_equal(driver["sha256"], JULIA_DRIVER_SHA256, "recorded driver hash")
+    require_equal(driver.get("kind"), "embeddedJuliaSource", "driver kind")
     require_equal(
-        sha256(REPO_ROOT / driver["path"]), JULIA_DRIVER_SHA256, "driver file hash"
+        driver["sha256"],
+        hashlib.sha256(JULIA_DRIVER_SOURCE.encode("utf-8")).hexdigest(),
+        "embedded driver hash",
     )
     require_equal(
         sha256(REPO_ROOT / driver["wrapperPath"]),
@@ -424,7 +532,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     root = juliaase_root()
-    verify_driver()
     verify_juliaase_checkout(root)
     julia, julia_version = find_julia()
     environment = exact_environment()
