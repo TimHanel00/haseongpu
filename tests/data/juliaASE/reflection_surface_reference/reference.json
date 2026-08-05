@@ -1,9 +1,9 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "description": "Single-Tet4 forward reflection surface regression reference generated from JuliaASE with physical-boundary transport. HASE CI reruns the same case without importing JuliaASE.",
   "referenceGeneration": {
     "implementation": "JuliaASE",
-    "generatedAtUtc": "2026-08-04T09:35:26Z",
+    "generatedAtUtc": "2026-08-05T11:13:18Z",
     "repository": {
       "url": "https://codebase.helmholtz.cloud/penelope-julia/julia_ase.git",
       "visibility": "private",
@@ -13,10 +13,10 @@
     },
     "driver": {
       "kind": "embeddedJuliaSource",
-      "sha256": "35f6a67b006446f0f244f6e5df75b9c692fda39486dd99b4e38b5585625f8961",
+      "sha256": "ecaddde49a66b9c59b26f79243b2842f2a27e5ed826b26ba784e3c4d8b8921d0",
       "historicalCommit": "fa15f8e6d980bf2442635376b41ae51a6441d57c",
       "wrapperPath": "scripts/regenerate_juliaase_reflection_fixture.py",
-      "wrapperSha256": "f0c29b1e79c6aae1ecca74750057847a21f76154b93e8f90126bbffe81073943"
+      "wrapperSha256": "409ab10569518ecfccae3c05adf30e8b0f06557c5927e44b5fad4db3f603a2e5"
     },
     "command": "JULIAASE_ROOT=/path/to/juliaASE JULIA_NUM_THREADS=1 JULIA_LOAD_PATH=@:@stdlib OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 scripts/regenerate_juliaase_reflection_fixture.py --ray-count 1000000",
     "parameters": {
@@ -95,8 +95,14 @@
       "startupFile": "disabled"
     },
     "result": {
-      "status": "converged",
-      "passes": 1,
+      "withoutReflections": {
+        "status": "max_passes",
+        "passes": 0
+      },
+      "withReflections": {
+        "status": "converged",
+        "passes": 1
+      },
       "driverStderr": "\u250c Warning: Mesh extent 1.0 m exceeds the kernel epsilon envelope (0.05 m): Float32 rounding (~6e-8\u00b7L) approaches the 1e-9 m self-intersection filter. Validate against an analytic reference at this scale (see Types.MESH_SCALE_WARN_MAX_M).\n\u2514 @ Main.ForwardASE.GPUTransfer $JULIAASE_ROOT/src/phase1_5/GPUTransfer.jl:124\n\u250c Warning: run_passes!: SRM capacity K=64 may undersample the reflected source \u2014 100.0% of reflected energy sits on saturated, angularly-broad faces (worst at pass 0). Near threshold this can bias the multi-pass result; raise K or run the K-sensitivity check (test/phase1_5/test_srm_ksensitivity.jl).\n\u2502   srm_undersample_pass = 0\n\u2514 @ Main.ForwardASE.Simulation $JULIAASE_ROOT/src/phase2/Simulation.jl:626\n"
     },
     "postprocessing": {
@@ -233,18 +239,6 @@
     ],
     "resolution": 1
   },
-  "phiAse": [
-    0.052214350551366806
-  ],
-  "dndtAse": [
-    -0.00024018601253628734
-  ],
-  "finalBetaVolume": [
-    0.1800120093006268
-  ],
-  "reflectedPassWeightFractions": [
-    0.0
-  ],
   "rayCount": 1000000,
   "reflectionMaxIterations": 4,
   "reflectionTolerance": 1e-05,
@@ -256,5 +250,34 @@
     "betaVolumeAtol": 1e-06
   },
   "referenceRayCount": 1000000,
-  "referenceInitialReflectedWeight": 185603.515625
+  "aseResults": {
+    "withoutReflections": {
+      "phiAse": [
+        0.03982546925544739
+      ],
+      "dndtAse": [
+        -0.00018319715857505802
+      ],
+      "finalBetaVolume": [
+        0.18000915985792876
+      ],
+      "referenceInitialReflectedWeight": 185603.515625,
+      "reflectedPassWeightFractions": []
+    },
+    "withReflections": {
+      "phiAse": [
+        0.052214350551366806
+      ],
+      "dndtAse": [
+        -0.00024018601253628734
+      ],
+      "finalBetaVolume": [
+        0.1800120093006268
+      ],
+      "referenceInitialReflectedWeight": 185603.515625,
+      "reflectedPassWeightFractions": [
+        0.0
+      ]
+    }
+  }
 }

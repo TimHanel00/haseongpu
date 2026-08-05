@@ -1,0 +1,172 @@
+{
+  "schema": "hase.juliaASE.laserPumpCladdingFiveStep.v1",
+  "description": "Five simulation steps of the JuliaASE full thin-disk example, configured as the corresponding physical HASE laserPumpCladding case with and without ASE reflections.",
+  "referenceGeneration": {
+    "implementation": "JuliaASE",
+    "generatedAtUtc": "2026-08-05T08:19:40Z",
+    "repository": {
+      "url": "https://codebase.helmholtz.cloud/penelope-julia/julia_ase.git",
+      "commit": "f6e19290ac06f7fd6f9492e6bb14a86973a50166",
+      "visibility": "private",
+      "accessContact": "Daniel Albach",
+      "dirty": false
+    },
+    "generator": {
+      "kind": "embeddedJuliaSource",
+      "sha256": "189e71155cbf8fff6b0fbdcbf09b909d94bc94d276b0f2c0d73988ae393d496e",
+      "wrapperPath": "scripts/regenerate_juliaase_laser_pump_cladding_fixture.py",
+      "wrapperSha256": "59ea022520c363d0a40d1b0cb86db1d1b22b401dc3d13fa1c86bbabe57ccef16",
+      "juliaaseExamplePath": "test/simulation_run/run_full_simulation.jl",
+      "juliaaseExampleSha256": "78396c070827ece084755d2198cee1f05ace43864f4c66011d64c90b0b3a66a7"
+    },
+    "julia": {
+      "version": "1.10.9",
+      "executableSha256": "1436babaecb80defc11086ab2587c8dbfda4705cbe6608aa21bc9ddccd15e60f"
+    },
+    "platform": "Linux-6.17.0-1030-oem-x86_64-with-glibc2.39",
+    "command": "JULIAASE_ROOT=/path/to/juliaASE JULIA_NUM_THREADS=1 JULIA_LOAD_PATH=@:@stdlib OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 scripts/regenerate_juliaase_laser_pump_cladding_fixture.py",
+    "environment": {
+      "juliaNumThreads": 1,
+      "juliaLoadPath": "@:@stdlib",
+      "ompNumThreads": 1,
+      "openblasNumThreads": 1,
+      "startupFile": "disabled"
+    },
+    "manifestPath": "tests/data/juliaASE/reflection_surface_reference/juliaase-manifest.toml",
+    "manifestSha256": "6bc0d15a228289b5c6f6c2b50e7ed6e1b862729a2ac23657dccecfab8251347a"
+  },
+  "parameters": {
+    "simulationSteps": 5,
+    "timeStepSeconds": 2e-05,
+    "prePump": true,
+    "pumpActiveSteps": 5,
+    "pumpConfiguredSteps": 50,
+    "aseRayCount": 30000,
+    "pumpRayCount": 50000,
+    "aseRngSeed": 5489,
+    "pumpRngSeed": 5489,
+    "spectralResolution": 191,
+    "refractiveIndex": 1.83,
+    "surfaceReservoirSize": 256,
+    "reflectionMaxIterations": 80,
+    "reflectionTolerance": 0.001,
+    "pumpProfile": "supergaussian",
+    "pumpProfileExponent": 40.0,
+    "pumpRadiusMeters": 0.015,
+    "pumpIntensityWattsPerSquareMeter": 160000000.0
+  },
+  "sourceData": {
+    "meshPath": "test/simulation_run/mesh/disk_debug.msh",
+    "meshSha256": "594d5ad477a660c4fab5a84fa6d72b3d08b483eec4510283bced51e64f830c92",
+    "materialPath": "materials/Yb_YAGref.h5",
+    "materialSha256": "16bb18cb803bbefb35bcf405d93b8f3eebf98094c9cc05a2faa0441ab687fa6a",
+    "haseCommit": "ba22ddc3692cf3ec8dcc10f90b95e81be154b9c7",
+    "haseFiles": {
+      "example/laserPumpCladding.py": "eb94162df14663bba23fc053758cc87038b29da88b7abfc4e0ff56614a5157b9",
+      "example/data/ptTet4.vtk": "c7ec39245a45188cc92c2cb10de15eea9c0b16c79102c0891c185127f3d83556",
+      "example/input/lambda_a.txt": "4e206b66764c8558eaee67bb57a81a6a1acce3ac592b5bb05eec6ef7a7e58251",
+      "example/input/sigma_a.txt": "85228a6a66291146b39d333803550f38c8b3cda1c31c3318e6133e8ab84343f5",
+      "example/input/lambda_e.txt": "4e206b66764c8558eaee67bb57a81a6a1acce3ac592b5bb05eec6ef7a7e58251",
+      "example/input/sigma_e.txt": "e6a5b5ec7bede97bf42dd01129482e3dfe9fae6a41ef2eb96cd7561e21d514e6"
+    }
+  },
+  "tolerances": {
+    "relative": 0.05,
+    "betaVolumeMeanAbsolute": 1e-08,
+    "phiAseVolumeIntegralAbsolute": 0.0
+  },
+  "aseResults": {
+    "withoutReflections": {
+      "mode": "withoutReflections",
+      "simulationSteps": [
+        {
+          "step": 1,
+          "time": 2e-05,
+          "betaVolumeMean": 0.0017701991422294967,
+          "phiAseVolumeIntegral": 0,
+          "aseStatus": "prePump",
+          "asePasses": 0
+        },
+        {
+          "step": 2,
+          "time": 4e-05,
+          "betaVolumeMean": 0.0035084552006675743,
+          "phiAseVolumeIntegral": 8.394138222434165e+19,
+          "aseStatus": "converged",
+          "asePasses": 1
+        },
+        {
+          "step": 3,
+          "time": 6.000000000000001e-05,
+          "betaVolumeMean": 0.0052157281314416356,
+          "phiAseVolumeIntegral": 1.6846607635541754e+20,
+          "aseStatus": "converged",
+          "asePasses": 1
+        },
+        {
+          "step": 4,
+          "time": 8e-05,
+          "betaVolumeMean": 0.006889169476600958,
+          "phiAseVolumeIntegral": 2.5091992657830753e+20,
+          "aseStatus": "converged",
+          "asePasses": 1
+        },
+        {
+          "step": 5,
+          "time": 0.0001,
+          "betaVolumeMean": 0.008532327016762528,
+          "phiAseVolumeIntegral": 3.368277555972429e+20,
+          "aseStatus": "converged",
+          "asePasses": 1
+        }
+      ],
+      "generatorStderr": "\u250c Warning: MaterialData 'YbYAGref': thermal eta_rad = 1.0 (placeholder \u2014 no nonradiative heat). Supply a measured trapping-free radiative quantum efficiency before using Q_nonradiative quantitatively.\n\u2514 @ Main.MaterialDB $JULIAASE_ROOT/src/phase1_5/MaterialDB.jl:109\n"
+    },
+    "withReflections": {
+      "mode": "withReflections",
+      "simulationSteps": [
+        {
+          "step": 1,
+          "time": 2e-05,
+          "betaVolumeMean": 0.0017701991422294967,
+          "phiAseVolumeIntegral": 0,
+          "aseStatus": "prePump",
+          "asePasses": 0
+        },
+        {
+          "step": 2,
+          "time": 4e-05,
+          "betaVolumeMean": 0.0035167945333014817,
+          "phiAseVolumeIntegral": 2.061814135028508e+20,
+          "aseStatus": "converged",
+          "asePasses": 9
+        },
+        {
+          "step": 3,
+          "time": 6.000000000000001e-05,
+          "betaVolumeMean": 0.005240132661204276,
+          "phiAseVolumeIntegral": 4.203173865345449e+20,
+          "aseStatus": "converged",
+          "asePasses": 9
+        },
+        {
+          "step": 4,
+          "time": 8e-05,
+          "betaVolumeMean": 0.006937849184778219,
+          "phiAseVolumeIntegral": 6.367515185500962e+20,
+          "aseStatus": "converged",
+          "asePasses": 9
+        },
+        {
+          "step": 5,
+          "time": 0.0001,
+          "betaVolumeMean": 0.008612297630877414,
+          "phiAseVolumeIntegral": 8.557516458599788e+20,
+          "aseStatus": "converged",
+          "asePasses": 9
+        }
+      ],
+      "generatorStderr": "\u250c Warning: MaterialData 'YbYAGref': thermal eta_rad = 1.0 (placeholder \u2014 no nonradiative heat). Supply a measured trapping-free radiative quantum efficiency before using Q_nonradiative quantitatively.\n\u2514 @ Main.MaterialDB $JULIAASE_ROOT/src/phase1_5/MaterialDB.jl:109\n"
+    }
+  }
+}

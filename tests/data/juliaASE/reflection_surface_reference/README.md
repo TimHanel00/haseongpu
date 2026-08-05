@@ -1,6 +1,7 @@
 # JuliaASE reflection surface reference
 
-This fixture is a single-Tet4 surface-reflection regression case. HASE CI
+This fixture is a single-Tet4 surface-reflection regression case. It stores
+both direct-only transport and transport with surface reflections. HASE CI
 consumes `reference.json` without importing or executing JuliaASE. HASE and
 JuliaASE use independent RNG implementations, so comparisons use the
 statistical tolerances stored in the fixture.
@@ -103,9 +104,12 @@ JuliaASE reflection fixture metadata is valid
 ## Stored values
 
 JuliaASE directly produced `phiAse`, `reflectedPassWeightFractions`,
-`referenceRayCount`, and `referenceInitialReflectedWeight`. The new run
-converged after one pass. The Python wrapper converted JuliaASE's rate sign to
-the HASE/openPMD convention and derived `dndtAse` as
+`referenceRayCount`, and `referenceInitialReflectedWeight` for both modes. The
+direct-only run deliberately requested zero reflection passes and therefore
+reported `max_passes` after pass 0; the reflected run converged after one
+reflection pass. Both modes start from a fresh state and the same RNG seed.
+The Python wrapper converted JuliaASE's rate sign to the HASE/openPMD
+convention and derived `dndtAse` as
 
 ```text
 (beta * (sigmaEmission + sigmaAbsorption) - sigmaAbsorption) * phiAse
@@ -116,14 +120,15 @@ It then calculated `finalBetaVolume` as
 and `finalBetaVolume` are fixture post-processing rather than JuliaASE
 transport inputs.
 
-The regenerated direct values are:
+The regenerated values are:
 
 ```text
-phiAse                         0.052214350551366806
-referenceInitialReflectedWeight 185603.515625
-reflectedPassWeightFractions   [0.0]
-status                         converged
-passes                         1
+mode                           without reflections    with reflections
+phiAse                         0.03982546925544739     0.052214350551366806
+referenceInitialReflectedWeight 185603.515625          185603.515625
+reflectedPassWeightFractions   []                     [0.0]
+status                         max_passes             converged
+passes                         0                      1
 ```
 
 ## Driver warnings

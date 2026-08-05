@@ -38,15 +38,21 @@ def test_juliaase_reflection_fixture_records_reproducible_generator():
         "commit": "f6e19290ac06f7fd6f9492e6bb14a86973a50166",
         "dirty": False,
     }
-    assert generation["result"]["status"] == "converged"
-    assert generation["result"]["passes"] == 1
+    assert generation["result"]["withoutReflections"] == {
+        "status": "max_passes",
+        "passes": 0,
+    }
+    assert generation["result"]["withReflections"] == {
+        "status": "converged",
+        "passes": 1,
+    }
 
     manifest_path = REPO_ROOT / environment["manifestFile"]
     wrapper_path = REPO_ROOT / driver["wrapperPath"]
     assert driver["kind"] == "embeddedJuliaSource"
     assert (
         driver["sha256"]
-        == "35f6a67b006446f0f244f6e5df75b9c692fda39486dd99b4e38b5585625f8961"
+        == "ecaddde49a66b9c59b26f79243b2842f2a27e5ed826b26ba784e3c4d8b8921d0"
     )
     assert sha256(manifest_path) == environment["manifestSha256"]
     assert sha256(wrapper_path) == driver["wrapperSha256"]
@@ -58,6 +64,11 @@ def test_juliaase_reflection_fixture_records_reproducible_generator():
 
 def test_juliaase_reflection_fixture_parameters_and_derived_values_are_consistent():
     reference = json.loads(REFERENCE_PATH.read_text(encoding="utf-8"))
+    assert reference["schemaVersion"] == 2
+    assert set(reference["aseResults"]) == {
+        "withoutReflections",
+        "withReflections",
+    }
     generation = reference["referenceGeneration"]
     parameters = generation["parameters"]
 
@@ -80,13 +91,17 @@ def test_juliaase_reflection_fixture_parameters_and_derived_values_are_consisten
     beta = reference["initialBetaVolume"][0]
     absorption = max(reference["crossSections"]["crossSectionAbsorption"])
     emission = max(reference["crossSections"]["crossSectionEmission"])
-    expected_dndt = (beta * (emission + absorption) - absorption) * reference["phiAse"][
-        0
-    ]
-    assert math.isclose(
-        reference["dndtAse"][0], expected_dndt, rel_tol=0.0, abs_tol=0.0
-    )
-    expected_final_beta = beta - reference["timeStep"] * expected_dndt
-    assert math.isclose(
-        reference["finalBetaVolume"][0], expected_final_beta, rel_tol=0.0, abs_tol=0.0
-    )
+    for result in reference["aseResults"].values():
+        expected_dndt = (
+            beta * (emission + absorption) - absorption
+        ) * result["phiAse"][0]
+        assert math.isclose(
+            result["dndtAse"][0], expected_dndt, rel_tol=0.0, abs_tol=0.0
+        )
+        expected_final_beta = beta - reference["timeStep"] * expected_dndt
+        assert math.isclose(
+            result["finalBetaVolume"][0],
+            expected_final_beta,
+            rel_tol=0.0,
+            abs_tol=0.0,
+        )

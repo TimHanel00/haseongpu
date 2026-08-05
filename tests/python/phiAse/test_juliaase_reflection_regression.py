@@ -93,11 +93,18 @@ def _crossSectionsFromReference(reference):
 
 
 @pytest.mark.integration
-def test_haseForwardReflectionMatchesCommittedJuliaaseSurfaceFixture(
+@pytest.mark.parametrize(
+    ("useReflections", "resultName"),
+    ((False, "withoutReflections"), (True, "withReflections")),
+    ids=("without-reflections", "with-reflections"),
+)
+def test_haseForwardMatchesCommittedJuliaaseSurfaceFixture(
     monkeypatch,
     openPmdRuntimeBackend,
     openPmdRuntimeExecutable,
     alpakaRuntimeBackend,
+    useReflections,
+    resultName,
 ):
     reference = json.loads(REFERENCE_PATH.read_text(encoding="utf-8"))
     monkeypatch.setenv("HASE_CALCPHIASE", str(openPmdRuntimeExecutable))
@@ -111,7 +118,7 @@ def test_haseForwardReflectionMatchesCommittedJuliaaseSurfaceFixture(
         relativeStandardErrorThreshold=1.0,
         repetitions=1,
         adaptiveSteps=1,
-        useReflections=True,
+        useReflections=useReflections,
         reflectionMaxIterations=int(reference["reflectionMaxIterations"]),
         reflectionTolerance=float(reference["reflectionTolerance"]),
         surfaceReservoirSize=int(reference["surfaceReservoirSize"]),
@@ -131,23 +138,31 @@ def test_haseForwardReflectionMatchesCommittedJuliaaseSurfaceFixture(
     actualFinalBeta = np.asarray(
         reference["initialBetaVolume"], dtype=np.float64
     ) - float(reference["timeStep"]) * actualDndtAse
+    expected = reference["aseResults"][resultName]
     tolerances = reference["tolerances"]
+
+    if useReflections:
+        assert result.srmStatus == "converged"
+        assert result.srmPasses == 1
+    else:
+        assert result.srmStatus == "disabled"
+        assert result.srmPasses == 0
 
     np.testing.assert_allclose(
         actualPhiAse,
-        np.asarray(reference["phiAse"], dtype=np.float64),
+        np.asarray(expected["phiAse"], dtype=np.float64),
         rtol=float(tolerances["phiAseRtol"]),
         atol=float(tolerances["phiAseAtol"]),
     )
     np.testing.assert_allclose(
         actualDndtAse,
-        np.asarray(reference["dndtAse"], dtype=np.float64),
+        np.asarray(expected["dndtAse"], dtype=np.float64),
         rtol=float(tolerances["phiAseRtol"]),
         atol=float(tolerances["phiAseAtol"]),
     )
     np.testing.assert_allclose(
         actualFinalBeta,
-        np.asarray(reference["finalBetaVolume"], dtype=np.float64),
+        np.asarray(expected["finalBetaVolume"], dtype=np.float64),
         rtol=float(tolerances["betaVolumeRtol"]),
         atol=float(tolerances["betaVolumeAtol"]),
     )

@@ -92,48 +92,57 @@ const sigma_absorption = 0.01f0
 const sigma_emission = 0.02f0
 const gain = beta * (sigma_absorption + sigma_emission) - sigma_absorption
 const source_rate_total = Float64(beta) / 6.0
-const state = G.init_simulation_state(
-    mesh,
-    boundary_faces,
-    S.init_srm(length(boundary_faces.tet_ind), 64),
-    T.TIER3,
-    Float32[gain],
-    zeros(Float32, 3, 1),
-    zeros(Float32, 1),
-    fill(beta, 4),
-    source_rate_total;
-    domain_n = Float32[1.5],
-    bfl_outside_n = Float32[1.0, 1.0, 1.0, 1.0],
-    coating_tables = T.CoatingTable[coating],
-    face_coating_ind = Int32[0, 0, 0, 1],
-    track_polarization = false,
-)
+function run_mode(max_passes)
+    state = G.init_simulation_state(
+        mesh,
+        boundary_faces,
+        S.init_srm(length(boundary_faces.tet_ind), 64),
+        T.TIER3,
+        Float32[gain],
+        zeros(Float32, 3, 1),
+        zeros(Float32, 1),
+        fill(beta, 4),
+        source_rate_total;
+        domain_n = Float32[1.5],
+        bfl_outside_n = Float32[1.0, 1.0, 1.0, 1.0],
+        coating_tables = T.CoatingTable[coating],
+        face_coating_ind = Int32[0, 0, 0, 1],
+        track_polarization = false,
+    )
+    run = Sim.run_passes!(
+        state,
+        ray_count,
+        trues(1),
+        1.0,
+        1030.0f0,
+        MersenneTwister(12345);
+        epsilon = 1.0e-5,
+        max_passes = max_passes,
+        diverge_streak = 3,
+        nthreads = 1,
+        n_chunks = 1,
+    )
+    return run, Tallies.compute_phi_ase(state, ray_count)
+end
 
-const run = Sim.run_passes!(
-    state,
-    ray_count,
-    trues(1),
-    1.0,
-    1030.0f0,
-    MersenneTwister(12345);
-    epsilon = 1.0e-5,
-    max_passes = max_reflection_passes,
-    diverge_streak = 3,
-    nthreads = 1,
-    n_chunks = 1,
-)
-const phi_ase = Tallies.compute_phi_ase(state, ray_count)
+const run_without, phi_ase_without = run_mode(0)
+const run_with, phi_ase_with = run_mode(max_reflection_passes)
 
 function json_array(values)
     return "[" * join(string.(Float64.(values)), ",") * "]"
 end
 
-println("{\"status\":\"", run.status,
-        "\",\"passes\":", run.n_passes,
-        ",\"rayCount\":", ray_count,
-        ",\"phiAse\":", json_array(phi_ase),
-        ",\"initialReflectedWeight\":", Float64(sum(run.srm_W_cumulative)),
-        ",\"reflectedPassWeightFractions\":", json_array(run.W_fracs),
+function json_result(run, phi_ase)
+    return "{\"status\":\"" * string(run.status) *
+           "\",\"passes\":" * string(run.n_passes) *
+           ",\"phiAse\":" * json_array(phi_ase) *
+           ",\"initialReflectedWeight\":" * string(Float64(sum(run.srm_W_cumulative))) *
+           ",\"reflectedPassWeightFractions\":" * json_array(run.W_fracs) * "}"
+end
+
+println("{\"rayCount\":", ray_count,
+        ",\"withoutReflections\":", json_result(run_without, phi_ase_without),
+        ",\"withReflections\":", json_result(run_with, phi_ase_with),
         "}")
 '''.strip()
 
@@ -303,8 +312,18 @@ def generate_reference(
         raise SystemExit(
             f"JuliaASE fixture driver produced invalid JSON:\n{completed.stdout}"
         ) from exc
-    if generated["status"] != "converged":
-        raise SystemExit(f"JuliaASE fixture did not converge: {generated['status']}")
+    if generated["withoutReflections"]["status"] != "max_passes":
+        raise SystemExit(
+            "JuliaASE direct-only fixture had unexpected status: "
+            f"{generated['withoutReflections']['status']}"
+        )
+    if generated["withoutReflections"]["passes"] != 0:
+        raise SystemExit("JuliaASE direct-only fixture executed a reflection pass")
+    if generated["withReflections"]["status"] != "converged":
+        raise SystemExit(
+            "JuliaASE reflection fixture did not converge: "
+            f"{generated['withReflections']['status']}"
+        )
     normalized_stderr = completed.stderr.replace(str(root), "$JULIAASE_ROOT").replace(
         str(REPO_ROOT), "$HASE_ROOT"
     )
@@ -404,8 +423,14 @@ def generation_metadata(
             "startupFile": "disabled",
         },
         "result": {
-            "status": generated["status"],
-            "passes": generated["passes"],
+            "withoutReflections": {
+                "status": generated["withoutReflections"]["status"],
+                "passes": generated["withoutReflections"]["passes"],
+            },
+            "withReflections": {
+                "status": generated["withReflections"]["status"],
+                "passes": generated["withReflections"]["passes"],
+            },
             "driverStderr": driver_stderr,
         },
         "postprocessing": {
@@ -439,6 +464,12 @@ def require_equal(actual, expected, label: str) -> None:
 
 def validate_stored_reference() -> None:
     reference = load_reference()
+    require_equal(reference["schemaVersion"], 2, "fixture schema version")
+    require_equal(
+        set(reference["aseResults"]),
+        {"withoutReflections", "withReflections"},
+        "ASE result modes",
+    )
     generation = reference["referenceGeneration"]
     repository = generation["repository"]
     driver = generation["driver"]
@@ -489,22 +520,33 @@ def validate_stored_reference() -> None:
         simulation_parameters(reference["referenceRayCount"]),
         "JuliaASE parameters",
     )
-    require_equal(generation["result"]["status"], "converged", "driver status")
-    require_equal(generation["result"]["passes"], 1, "driver pass count")
+    require_equal(
+        generation["result"]["withoutReflections"],
+        {"status": "max_passes", "passes": 0},
+        "direct-only driver result",
+    )
+    require_equal(
+        generation["result"]["withReflections"],
+        {"status": "converged", "passes": 1},
+        "reflection driver result",
+    )
 
     beta = np.asarray(reference["initialBetaVolume"], dtype=np.float64)
     absorption = float(max(reference["crossSections"]["crossSectionAbsorption"]))
     emission = float(max(reference["crossSections"]["crossSectionEmission"]))
-    expected_dndt = (beta * (emission + absorption) - absorption) * np.asarray(
-        reference["phiAse"], dtype=np.float64
-    )
-    require_equal(reference["dndtAse"], expected_dndt.tolist(), "derived dndtAse")
-    expected_final_beta = beta - float(reference["timeStep"]) * expected_dndt
-    require_equal(
-        reference["finalBetaVolume"],
-        expected_final_beta.tolist(),
-        "derived finalBetaVolume",
-    )
+    for mode, result in reference["aseResults"].items():
+        expected_dndt = (beta * (emission + absorption) - absorption) * np.asarray(
+            result["phiAse"], dtype=np.float64
+        )
+        require_equal(
+            result["dndtAse"], expected_dndt.tolist(), f"{mode} derived dndtAse"
+        )
+        expected_final_beta = beta - float(reference["timeStep"]) * expected_dndt
+        require_equal(
+            result["finalBetaVolume"],
+            expected_final_beta.tolist(),
+            f"{mode} derived finalBetaVolume",
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -543,24 +585,41 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     reference = load_reference()
+    reference["schemaVersion"] = 2
     reference["referenceGeneration"] = generation_metadata(
         root, julia, julia_version, args.ray_count, generated, driver_stderr
     )
-    reference["phiAse"] = generated["phiAse"]
-    reference["reflectedPassWeightFractions"] = generated[
-        "reflectedPassWeightFractions"
-    ]
     reference["referenceRayCount"] = generated["rayCount"]
-    reference["referenceInitialReflectedWeight"] = generated["initialReflectedWeight"]
 
     beta = np.asarray(reference["initialBetaVolume"], dtype=np.float64)
     absorption = float(max(reference["crossSections"]["crossSectionAbsorption"]))
     emission = float(max(reference["crossSections"]["crossSectionEmission"]))
-    dndt = (beta * (emission + absorption) - absorption) * np.asarray(
-        reference["phiAse"], dtype=np.float64
-    )
-    reference["dndtAse"] = dndt.tolist()
-    reference["finalBetaVolume"] = (beta - float(reference["timeStep"]) * dndt).tolist()
+    reference["aseResults"] = {}
+    for mode in ("withoutReflections", "withReflections"):
+        generated_result = generated[mode]
+        phi_ase = np.asarray(generated_result["phiAse"], dtype=np.float64)
+        dndt = (beta * (emission + absorption) - absorption) * phi_ase
+        reference["aseResults"][mode] = {
+            "phiAse": generated_result["phiAse"],
+            "dndtAse": dndt.tolist(),
+            "finalBetaVolume": (
+                beta - float(reference["timeStep"]) * dndt
+            ).tolist(),
+            "referenceInitialReflectedWeight": generated_result[
+                "initialReflectedWeight"
+            ],
+            "reflectedPassWeightFractions": generated_result[
+                "reflectedPassWeightFractions"
+            ],
+        }
+    for obsolete_key in (
+        "phiAse",
+        "dndtAse",
+        "finalBetaVolume",
+        "referenceInitialReflectedWeight",
+        "reflectedPassWeightFractions",
+    ):
+        reference.pop(obsolete_key, None)
     reference["referenceGeneration"]["postprocessing"]["timeStep"] = float(
         reference["timeStep"]
     )
