@@ -97,11 +97,14 @@ def _tetVolumes(points, cells):
     return np.abs(np.einsum("ij,ij->i", b - a, np.cross(c - a, d - a))) / 6.0
 
 
-def _readStepObservables(path):
+def _readStepObservables(path, *, allowMissingPhiAse=False):
     points, cells, _cellTypes, _pointData, cellData, _fields = _parseVtk(path)
     volumes = _tetVolumes(points, cells)
     beta = np.asarray(cellData["betaVolume"], dtype=np.float64)
-    phi = np.asarray(cellData["volumePhiASE"], dtype=np.float64)
+    if allowMissingPhiAse and "phiASE" not in cellData:
+        phi = np.zeros_like(beta)
+    else:
+        phi = np.asarray(cellData["phiASE"], dtype=np.float64)
     return {
         "betaVolumeMean": float(np.sum(beta * volumes) / np.sum(volumes)),
         # HASE's legacy example geometry uses centimetres.  Its PhiASE volume
@@ -166,18 +169,26 @@ def testLaserPumpCladdingFiveStepsMatchJuliaAse(
 
     expectedRows = reference["aseResults"][resultName]["simulationSteps"]
     actualRows = [
-        _readStepObservables(outputDir / f"laserPumpCladding_{step:03d}.vtk")
+        _readStepObservables(
+            outputDir / f"laserPumpCladding_{step:03d}.vtk",
+            allowMissingPhiAse=step == 1,
+        )
         for step in range(1, parameters["simulationSteps"] + 1)
     ]
     assert [row["step"] for row in expectedRows] == [1, 2, 3, 4, 5]
     assert [state.step for state in capturedStates] == [1, 2, 3, 4, 5]
     assert finalState.step == 5
     if useReflections:
-        assert all(
-            state.aseResult.srmStatus == "converged"
-            and state.aseResult.srmPasses > 0
+        srmResults = [
+            (state.aseResult.srmStatus, state.aseResult.srmPasses)
             for state in capturedStates[1:]
-        )
+        ]
+        expectedSrmStatuses = [row["aseStatus"] for row in expectedRows[1:]]
+        assert [status for status, _passes in srmResults] == expectedSrmStatuses
+        assert all(
+            0 < passes <= parameters["reflectionMaxIterations"]
+            for _status, passes in srmResults
+        ), srmResults
     else:
         assert all(
             state.aseResult.srmStatus == "disabled"

@@ -47,7 +47,6 @@ def _mediumFromReference(reference):
         betaVolume=backendFlat(
             np.asarray(reference["initialBetaVolume"], dtype=np.float64)
         ),
-        betaCells=backendFlat(np.asarray(reference["betaCells"], dtype=np.float64)),
         claddingCellTypes=np.asarray(
             reference["claddingCellTypes"], dtype=np.uint32
         ),
