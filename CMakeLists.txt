@@ -167,6 +167,21 @@ option(
     OFF
 )
 option(
+    HASE_HOST_ROUTINE_TIMING
+    "Enable aggregate host-side routine timing selected by HASE_HOST_ROUTINE_TIMING_CSV"
+    OFF
+)
+option(
+    HASE_STEP_TIMING
+    "Enable compiled-step timing output selected by HASE_STEP_TIMING_CSV"
+    OFF
+)
+option(
+    HASE_PUMP_PROFILE_SYNCHRONIZE
+    "Synchronize after the complete pump evaluation for benchmark attribution"
+    OFF
+)
+option(
     HASE_FORWARD_LOGGING
     "Forward captured calcPhiASE stdout and stderr through the Python openPMD launcher."
     OFF
@@ -918,6 +933,21 @@ if(HASE_BENCHMARK)
         PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark/benchmark.cpp"
     )
     target_compile_definitions(hase_core INTERFACE HASE_ENABLE_BENCHMARK)
+endif()
+if(HASE_HOST_ROUTINE_TIMING)
+    target_compile_definitions(
+        hase_core
+        INTERFACE HASE_ENABLE_HOST_ROUTINE_TIMING
+    )
+endif()
+if(HASE_STEP_TIMING)
+    target_compile_definitions(hase_core INTERFACE HASE_ENABLE_STEP_TIMING)
+endif()
+if(HASE_PUMP_PROFILE_SYNCHRONIZE)
+    target_compile_definitions(
+        hase_core
+        INTERFACE HASE_ENABLE_PUMP_PROFILE_SYNCHRONIZE
+    )
 endif()
 if(HASE_FORWARD_LOGGING)
     target_compile_definitions(hase_core INTERFACE HASE_FORWARD_LOGGING)
