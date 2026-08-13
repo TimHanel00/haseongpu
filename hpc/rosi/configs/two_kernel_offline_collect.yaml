@@ -1,0 +1,20 @@
+schema_version: 3
+tuning:
+  mode: online_fixed
+  strategy: exhaustive
+  random_seed: 5489
+  runs_per_candidate: 9
+  minimum_runs_per_candidate: 9
+  maximum_executions: 45
+  maximum_consecutive_strategy_retries: 64
+  mann_whitney_early_stop: false
+  history_window_size: 32
+history:
+  file: compact-history.json
+  read: false
+  write: true
+  sample_count: 32
+complete_history:
+  file: full-history.json
+  read: false
+  write: true

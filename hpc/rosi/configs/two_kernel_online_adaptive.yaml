@@ -1,0 +1,20 @@
+schema_version: 3
+tuning:
+  mode: online_adaptive
+  strategy: learned_hybrid
+  random_seed: 5489
+  maximum_consecutive_strategy_retries: 64
+  history_window_size: 64
+history:
+  file: compact-history.json
+  read: true
+  write: true
+  sample_count: 64
+complete_history:
+  file: full-history.json
+  read: true
+  write: true
+learning:
+  fallback: random
+  candidate_pool_size: 25
+  candidate_batch_size: 25

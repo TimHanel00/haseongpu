@@ -1,0 +1,14 @@
+schema_version: 3
+tuning:
+  mode: offline
+  strategy: random
+  random_seed: 5489
+  history_window_size: 32
+history:
+  file: compact-history.json
+  read: true
+  write: false
+complete_history:
+  file: full-history.json
+  read: true
+  write: false
