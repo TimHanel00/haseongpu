@@ -149,35 +149,6 @@ for context in contexts:
 print("validated exhaustive history for six contexts with five candidates and nine samples each")
 PY
 
-run_mode baseline_0 "${evaluation_steps}" '' '' '' 0 1
-python3 - "${run_root}/raw/${backend}/baseline_0/trace.jsonl" <<'PY'
-import collections
-import json
-import pathlib
-import sys
-
-expected = {
-    ("AccumulateForwardPhiAse", (2,), (512,)): 15_992,
-    ("AccumulateForwardPhiAse", (5,), (512,)): 15_992,
-    ("AccumulateForwardPhiAse", (16,), (512,)): 15_992,
-    ("AccumulateForwardPhiAse", (52,), (512,)): 15_992,
-    ("AccumulateForwardPhiAse", (166,), (512,)): 10_496,
-    ("TraceGeneralPump", (97,), (512,)): 8_000,
-}
-records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]
-counts = collections.Counter(
-    (record["kernel"], tuple(record["original_num_frames"]), tuple(record["original_frame_extent"]))
-    for record in records
-)
-assert set(counts) == set(expected)
-assert all(counts[key] >= required + 1 for key, required in expected.items())
-assert all(record["evaluation_runtime_measurement_source"] == "device_event" for record in records)
-assert all(record["evaluation_measured"] for record in records)
-assert all(record["candidate_count"] == 1 for record in records)
-assert all(record["selected_num_frames"] == record["original_num_frames"] for record in records)
-assert all(record["selected_frame_extent"] == record["original_frame_extent"] for record in records)
-print("validated reusable equal-count baseline for six contexts")
-PY
 run_mode \
     offline "${evaluation_steps}" \
     "${source_root}/hpc/rosi/configs/two_kernel_offline.yaml" \
@@ -196,6 +167,5 @@ run_mode \
     online_adaptive "${evaluation_steps}" \
     "${source_root}/hpc/rosi/configs/two_kernel_online_adaptive.yaml" \
     "${adaptive_compact}" "${adaptive_complete}" 1 0
-run_mode baseline_1 "${evaluation_steps}" '' '' '' 0 1
 
 touch "${run_root}/completed"

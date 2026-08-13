@@ -13,7 +13,10 @@ module load python/3.12.4
 
 readonly source_root=/home/th168408/workspace/haseonpu-master-two-kernel-tuning-20260813
 readonly run_root=/home/th168408/workspace/haseonpu-alpakatune-runs/master-two-kernel-tuning-20260813-r1
+readonly baseline_trace=/home/th168408/workspace/haseonpu-alpakatune-runs/master-all-kernel-timing-20260813-r1/raw/Cuda_NvidiaGpu_GpuCuda/timing_only/trace.jsonl
 test -e "${run_root}/completed"
+test -s "${baseline_trace}"
 "${source_root}/.venv-two-kernel-tuning/bin/python3" \
-    "${source_root}/scripts/analyze_two_kernel_tuning.py" "${run_root}"
+    "${source_root}/scripts/analyze_two_kernel_tuning.py" "${run_root}" \
+    --baseline-trace "${baseline_trace}"
 touch "${run_root}/analysis-completed"

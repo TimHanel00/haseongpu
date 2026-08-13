@@ -19,7 +19,7 @@ import numpy as np
 
 BACKEND = "Cuda_NvidiaGpu_GpuCuda"
 KERNELS = ("AccumulateForwardPhiAse", "TraceGeneralPump")
-RAW_MODES = ("baseline_0", "offline", "online_fixed", "online_adaptive", "baseline_1")
+RAW_MODES = ("offline", "online_fixed", "online_adaptive")
 PLOT_MODES = ("baseline", "offline", "online_fixed", "online_adaptive")
 MODE_LABELS = {
     "baseline": "Baseline",
@@ -45,6 +45,38 @@ EXPECTED_CONTEXT_SAMPLES = {
 
 def load_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def load_baseline_reference(path: Path) -> list[dict]:
+    result: list[dict] = []
+    for source in load_jsonl(path):
+        if source.get("kernel") not in KERNELS:
+            continue
+        frames = source["num_frames"]
+        extent = source["frame_extent"]
+        coverage = frames[0] * extent[0]
+        result.append(
+            {
+                "mode": "baseline",
+                "kernel": source["kernel"],
+                "evaluation_runtime_measurement_source": source["runtime_measurement_source"],
+                "evaluation_runtime_seconds": source["runtime_seconds"],
+                "evaluation_measured": source["measured"],
+                "coverage": coverage,
+                "selected_coverage": coverage,
+                "original_num_frames": frames,
+                "original_frame_extent": extent,
+                "selected_num_frames": frames,
+                "selected_frame_extent": extent,
+                "candidate_count": source["candidate_count"],
+                "legal_candidate_count": 1,
+                "tuner_measured": False,
+                "loaded_from_cache": False,
+                "learned_status": None,
+                "tuning_complete": False,
+            }
+        )
+    return result
 
 
 def context_key(record: dict) -> tuple[str, tuple[int, ...], tuple[int, ...]]:
@@ -76,7 +108,7 @@ def validate_mode(mode: str, records: list[dict]) -> list[str]:
     if any(record.get("selected_coverage") != record.get("coverage") for record in records):
         failures.append(f"{mode}: a selected FrameSpec changed worker coverage")
 
-    if mode.startswith("baseline_"):
+    if mode == "baseline":
         if len(measured_records) != len(records):
             failures.append(f"{mode}: baseline contains an unmeasured evaluation launch")
         if any(record.get("candidate_count") != 1 for record in records):
@@ -135,24 +167,7 @@ def group_contexts(records: list[dict]) -> dict[tuple, list[dict]]:
     return dict(grouped)
 
 
-def blended_baseline(first: list[dict], second: list[dict]) -> list[dict]:
-    first_contexts = group_contexts(first)
-    second_contexts = group_contexts(second)
-    if set(first_contexts) != set(second_contexts):
-        raise ValueError("baseline repetitions contain different launch contexts")
-    result: list[dict] = []
-    for key in sorted(first_contexts):
-        left = first_contexts[key]
-        right = second_contexts[key]
-        if len(left) != len(right):
-            raise ValueError(f"baseline repetitions differ in sample count for {key}")
-        split = len(left) // 2
-        result.extend(left[:split])
-        result.extend(right[split:])
-    return result
-
-
-def equal_count_records(records: list[dict]) -> list[dict]:
+def equal_count_records(records: list[dict], drop_warmup: bool) -> list[dict]:
     contexts = group_contexts([record for record in records if record.get("evaluation_measured")])
     if set(contexts) != set(EXPECTED_CONTEXT_SAMPLES):
         raise ValueError("trace does not contain the six expected launch contexts")
@@ -160,11 +175,13 @@ def equal_count_records(records: list[dict]) -> list[dict]:
     for key in sorted(contexts):
         values = contexts[key]
         required = EXPECTED_CONTEXT_SAMPLES[key]
-        if len(values) < required + 1:
-            raise ValueError(f"{key} has {len(values)} measured calls; need at least {required + 1}")
-        # Drop one measured warm-up consistently, then retain exactly the
-        # original 2,000-step baseline count for this launch context.
-        result.extend(values[1 : required + 1])
+        first = 1 if drop_warmup else 0
+        needed = required + first
+        if len(values) < needed:
+            raise ValueError(f"{key} has {len(values)} measured calls; need at least {needed}")
+        # Tuning modes run one extra application step, so drop one measured
+        # warm-up and retain the prior campaign's exact context count.
+        result.extend(values[first:needed])
     return result
 
 
@@ -313,7 +330,7 @@ def write_report(path: Path, summary: dict, failures: list[str]) -> dict[str, bo
     lines = [
         "# Two-kernel A100 tuning campaign",
         "",
-        "All plotted modes use equal per-kernel sample counts. Every duration is measured only with Alpaka device events: tuner-owned event pairs during learning and direct event pairs during cached replay. FrameSpec candidates preserve the original worker coverage exactly.",
+        "All plotted modes use equal per-kernel sample counts. Baseline samples come from the prior fixed-default all-kernel campaign; no new baseline was run. Every duration is measured only with Alpaka device events: tuner-owned event pairs during learning and direct event pairs during cached replay. FrameSpec candidates preserve the original worker coverage exactly.",
         "",
         "## Median results",
         "",
@@ -349,22 +366,26 @@ def write_report(path: Path, summary: dict, failures: list[str]) -> dict[str, bo
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_root", type=Path)
+    parser.add_argument("--baseline-trace", required=True, type=Path)
     args = parser.parse_args()
     raw = args.run_root / "raw" / BACKEND
     traces = {mode: load_jsonl(raw / mode / "trace.jsonl") for mode in RAW_MODES}
+    baseline = load_baseline_reference(args.baseline_trace)
 
     failures: list[str] = []
+    failures.extend(validate_mode("baseline", baseline))
     for mode, records in traces.items():
         failures.extend(validate_mode(mode, records))
-    comparable = {mode: equal_count_records(records) for mode, records in traces.items()}
-    reference_counts = Counter(record["kernel"] for record in comparable["baseline_0"])
-    for mode in RAW_MODES[1:]:
+    comparable = {mode: equal_count_records(records, True) for mode, records in traces.items()}
+    comparable["baseline"] = equal_count_records(baseline, False)
+    reference_counts = Counter(record["kernel"] for record in comparable["baseline"])
+    for mode in RAW_MODES:
         counts = Counter(record["kernel"] for record in comparable[mode])
         if counts != reference_counts:
             failures.append(f"{mode}: sample counts {dict(counts)} differ from baseline {dict(reference_counts)}")
 
     records_by_mode = {
-        "baseline": blended_baseline(comparable["baseline_0"], comparable["baseline_1"]),
+        "baseline": comparable["baseline"],
         "offline": comparable["offline"],
         "online_fixed": comparable["online_fixed"],
         "online_adaptive": comparable["online_adaptive"],
