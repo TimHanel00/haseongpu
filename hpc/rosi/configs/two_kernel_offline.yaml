@@ -3,6 +3,8 @@ tuning:
   mode: offline
   strategy: random
   random_seed: 5489
+  runs_per_candidate: 9
+  minimum_runs_per_candidate: 9
   history_window_size: 32
 history:
   file: compact-history.json

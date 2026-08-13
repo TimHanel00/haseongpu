@@ -26,7 +26,6 @@ readonly collection_steps=50
 readonly history_root=${run_root}/histories
 
 test -e "${run_root}/build-completed"
-test ! -e "${run_root}/started"
 mkdir -p "${history_root}"
 touch "${run_root}/started"
 actual_model_sha=$(sha256sum "${model}" | awk '{print $1}')
@@ -53,6 +52,11 @@ run_mode()
     local benchmark_only=$7
     local output_dir=${run_root}/raw/${backend}/${mode}
     mkdir -p "${output_dir}"
+    if [[ -s "${output_dir}/trace.jsonl" && -s "${output_dir}/time.txt" ]]; then
+        printf 'reusing validated completed mode: %s\n' "${mode}"
+        return
+    fi
+    test ! -e "${output_dir}/trace.jsonl"
 
     export HASE_ALPAKATUNE_MODE=${mode}
     export HASE_ALPAKATUNE_TRACE=${output_dir}/trace.jsonl
@@ -146,6 +150,34 @@ print("validated exhaustive history for six contexts with five candidates and ni
 PY
 
 run_mode baseline_0 "${evaluation_steps}" '' '' '' 0 1
+python3 - "${run_root}/raw/${backend}/baseline_0/trace.jsonl" <<'PY'
+import collections
+import json
+import pathlib
+import sys
+
+expected = {
+    ("AccumulateForwardPhiAse", (2,), (512,)): 15_992,
+    ("AccumulateForwardPhiAse", (5,), (512,)): 15_992,
+    ("AccumulateForwardPhiAse", (16,), (512,)): 15_992,
+    ("AccumulateForwardPhiAse", (52,), (512,)): 15_992,
+    ("AccumulateForwardPhiAse", (166,), (512,)): 10_496,
+    ("TraceGeneralPump", (97,), (512,)): 8_000,
+}
+records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]
+counts = collections.Counter(
+    (record["kernel"], tuple(record["original_num_frames"]), tuple(record["original_frame_extent"]))
+    for record in records
+)
+assert set(counts) == set(expected)
+assert all(counts[key] >= required + 1 for key, required in expected.items())
+assert all(record["evaluation_runtime_measurement_source"] == "device_event" for record in records)
+assert all(record["evaluation_measured"] for record in records)
+assert all(record["candidate_count"] == 1 for record in records)
+assert all(record["selected_num_frames"] == record["original_num_frames"] for record in records)
+assert all(record["selected_frame_extent"] == record["original_frame_extent"] for record in records)
+print("validated reusable equal-count baseline for six contexts")
+PY
 run_mode \
     offline "${evaluation_steps}" \
     "${source_root}/hpc/rosi/configs/two_kernel_offline.yaml" \
