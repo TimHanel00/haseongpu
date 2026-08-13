@@ -51,10 +51,11 @@ namespace hase::core
         auto i = alpaka::onHost::executeForEachIfHasDevice(
             [&](auto const& backend) -> int
             {
-                auto deviceSpec = backend[alpaka::object::deviceSpec];
                 auto exec = backend[alpaka::object::exec];
 
-                auto devSelector = alpaka::onHost::makeDeviceSelector(deviceSpec);
+                auto devSelector = alpaka::onHost::makeDeviceSelector(
+                    backend[alpaka::object::api],
+                    backend[alpaka::object::deviceKind]);
 
                 std::size_t deviceCount = devSelector.getDeviceCount();
                 if(deviceCount == 0u)

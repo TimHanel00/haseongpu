@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include <alpakaUtils/TimedEnqueue.hpp>
 #include <benchmark.hpp>
 #include <core/forwardSrm.hpp>
 #include <core/mesh.hpp>
@@ -60,7 +61,12 @@ namespace hase::core
     template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
     class ForwardPhiAseDeviceContext
     {
+#if HASE_ENABLE_ALPAKATUNE
+        using T_Queue = ALPAKA_TYPEOF(
+            std::declval<T_Device&>().makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled));
+#else
         using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::nonBlocking));
+#endif
         using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
         using T_FloatBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<float>(std::declval<T_Device&>(), std::size_t{1}));
         using T_UnsignedBuffer
@@ -74,7 +80,11 @@ namespace hase::core
             ExperimentParameters const& experiment,
             HostMesh const& hostMesh)
             : m_devBundle(device, executor)
+#if HASE_ENABLE_ALPAKATUNE
+            , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled))
+#else
             , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::nonBlocking))
+#endif
             , m_vertexBatchScoreSum(
                   alpaka::onHost::alloc<double>(
                       m_devBundle.device,
@@ -223,7 +233,8 @@ namespace hase::core
             else
             {
                 BENCH_SYNC(m_queue, AccumulateForwardPhiAse);
-                m_queue.enqueue(
+                hase::alpakaUtils::timedEnqueue(
+                    m_queue,
                     frameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::forward::AccumulateForwardPhiAse{},
@@ -233,7 +244,8 @@ namespace hase::core
                         betaVolumeTotal,
                         accumulation,
                         spectrum,
-                        rngSeed});
+                        rngSeed},
+                    "AccumulateForwardPhiAse");
             }
         }
 

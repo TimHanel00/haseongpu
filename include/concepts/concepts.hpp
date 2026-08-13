@@ -22,8 +22,10 @@ namespace hase::concepts
     template<
         alpaka::concepts::Api T_Api,
         alpaka::concepts::DeviceKind T_DeviceKind,
-        alpaka::concepts::QueueKind T_QueueKind>
-    struct IsQueue<alpaka::onHost::Queue<alpaka::onHost::Device<T_Api, T_DeviceKind>, T_QueueKind>> : std::true_type
+        alpaka::concepts::QueueKind T_QueueKind,
+        alpaka::concepts::Timing T_Timing>
+    struct IsQueue<alpaka::onHost::Queue<alpaka::onHost::Device<T_Api, T_DeviceKind>, T_QueueKind, T_Timing>>
+        : std::true_type
     {
     };
 

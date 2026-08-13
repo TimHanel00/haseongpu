@@ -614,9 +614,10 @@ namespace hase::core
         alpaka::onHost::executeForEachIfHasDevice(
             [&](auto const& backend)
             {
-                auto deviceSpec = backend[alpaka::object::deviceSpec];
                 auto exec = backend[alpaka::object::exec];
-                auto devSelector = alpaka::onHost::makeDeviceSelector(deviceSpec);
+                auto devSelector = alpaka::onHost::makeDeviceSelector(
+                    backend[alpaka::object::api],
+                    backend[alpaka::object::deviceKind]);
                 if(devSelector.getDeviceCount() == 0u)
                 {
                     return 0;

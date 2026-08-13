@@ -159,10 +159,11 @@ TEMPLATE_LIST_TEST_CASE(
     hase::tests::TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector
+        = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::api], backend[alpaka::object::deviceKind]);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for the selected backend");
         return;
     }
     auto device = deviceSelector.makeDevice(0);
@@ -220,10 +221,11 @@ TEMPLATE_LIST_TEST_CASE(
     hase::tests::TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector
+        = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::api], backend[alpaka::object::deviceKind]);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for the selected backend");
         return;
     }
     auto device = deviceSelector.makeDevice(0);

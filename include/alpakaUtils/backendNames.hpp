@@ -30,7 +30,9 @@ namespace hase::alpakaUtils
         alpaka::onHost::executeForEachIfHasDevice(
             [&](auto const& backend) -> int
             {
-                auto devSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+                auto devSelector = alpaka::onHost::makeDeviceSelector(
+                    backend[alpaka::object::api],
+                    backend[alpaka::object::deviceKind]);
                 auto sampleDevice = devSelector.makeDevice(0);
                 names.emplace_back(getNameForBackend(backend, sampleDevice));
                 return 0;

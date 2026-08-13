@@ -1,6 +1,10 @@
 #include <core/simulation.hpp>
 #include <openpmd/OpenPmdParser.hpp>
 
+#if HASE_ENABLE_ALPAKATUNE
+#    include <alpakaTune/alpakaTune.hpp>
+#endif
+
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -98,6 +102,12 @@ int main(int argc, char** argv)
                     }
                 });
         }
+
+#if HASE_ENABLE_ALPAKATUNE
+        // All worker threads have joined. Flush here so persistence failures
+        // are observable instead of being hidden by static destruction.
+        alpakaTune::flushPersistence();
+#endif
 
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
         MPI_Finalize();

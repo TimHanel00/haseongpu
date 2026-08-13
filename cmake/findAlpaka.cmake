@@ -1,12 +1,12 @@
 include_guard(GLOBAL)
 
 set(HASE_ALPAKA_GIT_REPOSITORY
-    "https://github.com/alpaka-group/alpaka3.git"
+    "https://github.com/TimHanel00/alpaka3.git"
     CACHE STRING
     "Git repository used when fetching alpaka"
 )
 set(HASE_ALPAKA_GIT_TAG
-    "58065f933b3d46406c4abb7c74111567938a0ee6"
+    "176dcc921041328f891d58e80614585e7848ef95"
     CACHE STRING
     "Git tag or commit used when fetching alpaka"
 )

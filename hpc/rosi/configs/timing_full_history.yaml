@@ -1,0 +1,21 @@
+schema_version: 3
+tuning:
+  # One unchanged FrameSpec is supplied by HASE. Horizon-less adaptive mode
+  # therefore measures every natural launch without completing into replay.
+  mode: online_adaptive
+  strategy: exhaustive
+  random_seed: 5489
+  runs_per_candidate: 1
+  minimum_runs_per_candidate: 1
+  mann_whitney_early_stop: false
+  maximum_consecutive_strategy_retries: 1
+  history_window_size: 250000
+# Deliberately no queue and no horizon: accepted launches execute directly.
+history:
+  file: compact-history.json
+  read: false
+  write: true
+complete_history:
+  file: full-history.json
+  read: false
+  write: true
