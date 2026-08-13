@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=hase-time-history
+#SBATCH --job-name=hase-all-kernel-time
 #SBATCH --partition=gpu-a100,gpu-a100-haicu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --output=/home/th168408/workspace/haseonpu-alpakatune-runs/master-timing-history-20260813-r1/slurm-%j.out
+#SBATCH --output=/home/th168408/workspace/haseonpu-alpakatune-runs/master-all-kernel-timing-20260813-r1/slurm-%j.out
 
 set -euo pipefail
 module purge
@@ -15,9 +15,9 @@ module load cmake/4.0.3
 module load cuda/12.8
 module load python/3.12.4
 
-readonly source_root=/home/th168408/workspace/haseonpu-master-timing-history-20260813
+readonly source_root=/home/th168408/workspace/haseonpu-master-all-kernel-timing-20260813
 readonly shared_root=/home/th168408/workspace/haseonpu-alpakatune-forwardtet4-20260724
-readonly run_root=/home/th168408/workspace/haseonpu-alpakatune-runs/master-timing-history-20260813-r1
+readonly run_root=/home/th168408/workspace/haseonpu-alpakatune-runs/master-all-kernel-timing-20260813-r1
 readonly output_dir=${run_root}/raw/Cuda_NvidiaGpu_GpuCuda/timing_only
 readonly rounds=2000
 
@@ -46,10 +46,17 @@ unset HASE_ALPAKATUNE_MODEL HASE_ALPAKATUNE_BASELINE_ONLY HASE_ALPAKATUNE_KERNEL
     printf 'hase_master_commit=51850a2f3904151954ab07a3b9a87491684318eb\n'
     printf 'alpaka_tune_commit=997974047a9e6c8a4d5ee1efc97705f64810b446\n'
     printf 'alpaka_commit=176dcc921041328f891d58e80614585e7848ef95\n'
-    printf 'instrumented_kernel=AccumulateForwardPhiAse\nactive_tuning=false\n'
+    printf 'instrumented_scope=all_explicit_hase_kernel_launches\nactive_tuning=false\n'
+    printf 'tunable_parameter_count=0\nframe_spec=application_default_unchanged\n'
     sha256sum \
         "${source_root}/include/alpakaUtils/TimedEnqueue.hpp" \
         "${source_root}/include/core/calcForwardPhiAse.hpp" \
+        "${source_root}/include/core/forwardSrm.hpp" \
+        "${source_root}/include/core/timeSteppedSimulation.hpp" \
+        "${source_root}/include/kernels/activePointMasks.hpp" \
+        "${source_root}/include/kernels/derivativeComposition.hpp" \
+        "${source_root}/include/kernels/forwardPhiAseMapping.hpp" \
+        "${source_root}/include/kernels/generalPump.hpp" \
         "${source_root}/hpc/rosi/configs/timing_full_history.yaml" \
         "${HASE_CALCPHIASE}"
     grep -E '^(HASE_ENABLE_ALPAKATUNE|HASE_ALPAKATUNE_GIT_TAG|HASE_ALPAKA_GIT_TAG):' \
@@ -85,23 +92,32 @@ assert history["schema_version"] == 11
 contexts = list(history["contexts"].values())
 assert contexts
 sample_count = 0
+kernel_names = set()
 for context in contexts:
     assert context["candidate_count"] == 1
-    assert context["metadata"]["kernel"].endswith("AccumulateForwardPhiAse")
     assert context["metadata"]["mode"] == "online_adaptive"
     assert context["policy"]["queue"] is None
+    assert context["candidate_configurations"] == [{}]
+    assert context["metadata"]["model_context"]["dimensions"] == []
+    kernel_names.add(context["metadata"]["kernel"])
     samples = context["candidate_samples"]
     assert len(samples) == 1 and samples[0]
     sample_count += len(samples[0])
 assert sample_count >= 15000
+assert len(kernel_names) >= 8
 
 trace = [json.loads(line) for line in pathlib.Path(sys.argv[2]).read_text().splitlines() if line]
 assert len(trace) == sample_count
 assert all(row["measured"] for row in trace)
 assert all(row["runtime_measurement_source"] == "device_event" for row in trace)
 assert all(row["candidate_count"] == 1 for row in trace)
+assert all(row["tunable_parameter_count"] == 0 for row in trace)
 assert all(not row["active_queue"] for row in trace)
-print(f"validated {sample_count} device-event samples across {len(contexts)} contexts")
+assert {row["kernel"] for row in trace} == {name.rsplit("::", 1)[-1] for name in kernel_names}
+print(
+    f"validated {sample_count} device-event samples across "
+    f"{len(kernel_names)} kernels and {len(contexts)} fixed-launch contexts"
+)
 PY
 
 touch "${run_root}/completed"

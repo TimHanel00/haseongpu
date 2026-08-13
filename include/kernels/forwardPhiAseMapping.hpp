@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TimedEnqueue.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <core/mesh.hpp>
 #include <kernels/forward/accumulation.hpp>
@@ -183,7 +184,8 @@ namespace hase::kernels
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{mesh.numberOfCells});
-        queue.enqueue(
+        hase::alpakaUtils::timedEnqueue(
+            queue,
             cellFrameSpec,
             alpaka::KernelBundle{
                 FinalizeForwardVolumePhiAse{rayCount, batchCount, betaVolumeTotal, fluorescenceRate, sigmaA, sigmaE},
@@ -195,7 +197,8 @@ namespace hase::kernels
                 volumePhiAse,
                 standardError,
                 relativeStandardError,
-                volumeDndtAse});
+                volumeDndtAse},
+            "FinalizeForwardVolumePhiAse");
     }
 
 } // namespace hase::kernels

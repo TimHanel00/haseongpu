@@ -360,13 +360,15 @@ namespace hase::core
                     m_devBundle.device,
                     m_devBundle.executor,
                     alpaka::Vec{mesh.numberOfCells});
-                m_queue.enqueue(
+                hase::alpakaUtils::timedEnqueue(
+                    m_queue,
                     cellFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::BuildBetaVolumeWeights{},
                         mesh,
                         betaVolume,
-                        m_betaVolumeWeights});
+                        m_betaVolumeWeights},
+                    "BuildBetaVolumeWeights");
                 alpaka::onHost::inclusiveScan(
                     m_queue,
                     m_devBundle.executor,
@@ -377,13 +379,15 @@ namespace hase::core
                     m_devBundle.device,
                     m_devBundle.executor,
                     alpaka::Vec{1u});
-                m_queue.enqueue(
+                hase::alpakaUtils::timedEnqueue(
+                    m_queue,
                     scalarFrameSpec,
                     alpaka::KernelBundle{
                         hase::kernels::CaptureBetaVolumeTotal{},
                         mesh.numberOfCells,
                         meshContainer.betaVolumePrefix,
-                        m_betaVolumeTotal});
+                        m_betaVolumeTotal},
+                    "CaptureBetaVolumeTotal");
             }
             std::vector<double> hostTotal(1u, 0.0);
             alpaka::onHost::memcpy(m_queue, hostTotal, m_betaVolumeTotal);

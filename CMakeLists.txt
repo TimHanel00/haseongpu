@@ -178,7 +178,7 @@ option(
 )
 option(
     HASE_ENABLE_ALPAKATUNE
-    "Measure selected HASE kernel launches through alpakaTune"
+    "Measure explicit HASE kernel launches through alpakaTune device events"
     OFF
 )
 option(

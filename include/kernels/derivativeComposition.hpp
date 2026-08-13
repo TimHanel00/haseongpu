@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TimedEnqueue.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <concepts/concepts.hpp>
 #include <core/mesh.hpp>
@@ -81,7 +82,8 @@ namespace hase::kernels
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{mesh.numberOfCells});
-        queue.enqueue(
+        hase::alpakaUtils::timedEnqueue(
+            queue,
             frameSpec,
             alpaka::KernelBundle{
                 ComposeDerivative{sigmaAbsorption, sigmaEmission, tau, pumpEnabled},
@@ -90,7 +92,8 @@ namespace hase::kernels
                 buffers.phiAse,
                 buffers.dndtPump,
                 buffers.dndtAse,
-                buffers.derivative});
+                buffers.derivative},
+            "ComposeDerivative");
     }
 
 } // namespace hase::kernels

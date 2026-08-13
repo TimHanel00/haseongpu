@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly source_root=/home/th168408/workspace/haseonpu-master-timing-history-20260813
-readonly run_root=/home/th168408/workspace/haseonpu-alpakatune-runs/master-timing-history-20260813-r1
+readonly source_root=/home/th168408/workspace/haseonpu-master-all-kernel-timing-20260813
+readonly run_root=/home/th168408/workspace/haseonpu-alpakatune-runs/master-all-kernel-timing-20260813-r1
 
 mkdir -p "${run_root}"
 build_job=$(sbatch --parsable "${source_root}/hpc/rosi/build-timing-history.sbatch")

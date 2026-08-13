@@ -8,6 +8,7 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <concepts>
 #include <string_view>
 
 #if HASE_ENABLE_ALPAKATUNE
@@ -110,10 +111,11 @@ namespace hase::alpakaUtils
     /**
      * Measure one natural kernel launch without changing its FrameSpec.
      *
-     * The tuning bundle contains exactly the application's original frame
-     * count and extent. With an online-adaptive YAML configuration that has no
-     * queue and no horizon, every call is therefore a direct device-event
-     * measurement of the unchanged launch rather than an active search.
+     * The tuner receives an empty tuning bundle. The application's FrameSpec
+     * is therefore not a parameter and is passed to Alpaka unchanged. With an
+     * online-adaptive YAML configuration that has no queue and no horizon,
+     * every call is a direct device-event measurement rather than an active
+     * search.
      */
     template<typename T_Queue, typename T_FrameSpec, typename T_Kernel, typename... T_Args>
     void timedEnqueue(
@@ -123,102 +125,101 @@ namespace hase::alpakaUtils
         std::string_view kernelIdentity)
     {
 #if HASE_ENABLE_ALPAKATUNE
-        auto makeFrameTuning = [&]()
+        if constexpr(
+            !std::same_as<ALPAKA_TYPEOF(queue.getQueueKind()), alpaka::queueKind::NonBlocking>
+            || !std::same_as<ALPAKA_TYPEOF(queue.getTiming()), alpaka::timing::Enabled>)
         {
-            return alpakaTune::constrain(
-                alpakaTune::TunableBundle{
-                    alpakaTune::tuneFrameExtent(
-                        frameSpec,
-                        alpakaTune::RVals<ALPAKA_TYPEOF(frameSpec.getFrameExtents())>{
-                            std::vector{frameSpec.getFrameExtents()}}),
-                    alpakaTune::tuneNumFrames(
-                        frameSpec,
-                        alpakaTune::RVals<ALPAKA_TYPEOF(frameSpec.getNumFrames())>{
-                            std::vector{frameSpec.getNumFrames()}})},
-                alpakaTune::defaultFrameExtentShape(frameSpec));
-        };
-        using FrameTuning = ALPAKA_TYPEOF(makeFrameTuning());
-        using Tuner = ALPAKA_TYPEOF(
-            alpakaTune::makeTuner(
-                std::declval<alpakaTune::TunerConfig>(),
-                std::declval<FrameTuning>(),
-                queue.getDevice(),
-                frameSpec.getExecutor(),
-                kernelIdentity));
-        using Device = std::remove_cvref_t<decltype(queue.getDevice())>;
+            static_cast<void>(kernelIdentity);
+            queue.enqueue(frameSpec, bundle);
+            return;
+        }
+        else
+        {
+            using BenchmarkParameters = alpakaTune::TunableBundle<>;
+            using Tuner = ALPAKA_TYPEOF(
+                alpakaTune::makeTuner(
+                    std::declval<alpakaTune::TunerConfig>(),
+                    std::declval<BenchmarkParameters>(),
+                    queue.getDevice(),
+                    frameSpec.getExecutor(),
+                    kernelIdentity));
+            using Device = std::remove_cvref_t<decltype(queue.getDevice())>;
 
-        auto registryKey = std::string{kernelIdentity};
-        auto appendShape = [&registryKey](std::string_view label, auto const& value)
-        {
-            registryKey += ':';
-            registryKey += label;
-            for(std::size_t dimension = 0u; dimension < value.dim(); ++dimension)
-                registryKey += ':' + std::to_string(value[dimension]);
-        };
-        appendShape("frames", frameSpec.getNumFrames());
-        appendShape("extent", frameSpec.getFrameExtents());
-
-        struct TunerEntry
-        {
-            explicit TunerEntry(Device value) : device{std::move(value)}
+            auto registryKey = std::string{kernelIdentity};
+            auto appendShape = [&registryKey](std::string_view label, auto const& value)
             {
+                registryKey += ':';
+                registryKey += label;
+                for(std::size_t dimension = 0u; dimension < value.dim(); ++dimension)
+                    registryKey += ':' + std::to_string(value[dimension]);
+            };
+            appendShape("frames", frameSpec.getNumFrames());
+            appendShape("extent", frameSpec.getFrameExtents());
+
+            struct TunerEntry
+            {
+                explicit TunerEntry(Device value) : device{std::move(value)}
+                {
+                }
+
+                Device device;
+                std::unique_ptr<Tuner> tuner;
+                std::mutex mutex;
+            };
+
+            static std::mutex registryMutex;
+            static std::unordered_map<std::string, std::vector<std::shared_ptr<TunerEntry>>> registry;
+            auto entry = std::shared_ptr<TunerEntry>{};
+            {
+                std::scoped_lock lock{registryMutex};
+                auto& matchingEntries = registry[registryKey];
+                auto const found = std::ranges::find_if(
+                    matchingEntries,
+                    [&queue](auto const& candidate) { return candidate->device == queue.getDevice(); });
+                if(found != matchingEntries.end())
+                    entry = *found;
+                else
+                {
+                    entry = std::make_shared<TunerEntry>(queue.getDevice());
+                    matchingEntries.push_back(entry);
+                }
             }
 
-            Device device;
-            std::unique_ptr<Tuner> tuner;
-            std::mutex mutex;
-        };
-
-        static std::mutex registryMutex;
-        static std::unordered_map<std::string, std::vector<std::shared_ptr<TunerEntry>>> registry;
-        auto entry = std::shared_ptr<TunerEntry>{};
-        {
-            std::scoped_lock lock{registryMutex};
-            auto& matchingEntries = registry[registryKey];
-            auto const found = std::ranges::find_if(
-                matchingEntries,
-                [&queue](auto const& candidate) { return candidate->device == queue.getDevice(); });
-            if(found != matchingEntries.end())
-                entry = *found;
-            else
+            std::scoped_lock entryLock{entry->mutex};
+            if(!entry->tuner)
             {
-                entry = std::make_shared<TunerEntry>(queue.getDevice());
-                matchingEntries.push_back(entry);
+                auto config
+                    = alpakaTune::TunerConfig::fromYaml(detail::requiredTimingEnvironment("ALPAKA_TUNE_CONFIG"));
+                if(auto const path = detail::optionalTimingEnvironment("HASE_ALPAKATUNE_HISTORY"); !path.empty())
+                    config.history.file = path;
+                config.completeHistory.file = detail::requiredTimingEnvironment("HASE_ALPAKATUNE_COMPLETE_HISTORY");
+                entry->tuner = std::make_unique<Tuner>(alpakaTune::makeTuner(
+                    std::move(config),
+                    BenchmarkParameters{},
+                    queue.getDevice(),
+                    frameSpec.getExecutor(),
+                    kernelIdentity));
             }
-        }
 
-        std::scoped_lock entryLock{entry->mutex};
-        if(!entry->tuner)
-        {
-            auto config = alpakaTune::TunerConfig::fromYaml(detail::requiredTimingEnvironment("ALPAKA_TUNE_CONFIG"));
-            if(auto const path = detail::optionalTimingEnvironment("HASE_ALPAKATUNE_HISTORY"); !path.empty())
-                config.history.file = path;
-            config.completeHistory.file = detail::requiredTimingEnvironment("HASE_ALPAKATUNE_COMPLETE_HISTORY");
-            entry->tuner = std::make_unique<Tuner>(alpakaTune::makeTuner(
-                std::move(config),
-                makeFrameTuning(),
-                queue.getDevice(),
-                frameSpec.getExecutor(),
-                kernelIdentity));
-        }
-
-        auto const observation = entry->tuner->enqueueObserved(queue, frameSpec, bundle);
-        if(auto const tracePath = detail::optionalTimingEnvironment("HASE_ALPAKATUNE_TRACE"); !tracePath.empty())
-        {
-            auto const info = entry->tuner->info();
-            auto record = nlohmann::json::object();
-            record["kernel"] = kernelIdentity;
-            record["candidate_index"] = observation.candidateIndex;
-            record["runtime_seconds"] = observation.runtimeSeconds;
-            record["runtime_measurement_source"]
-                = alpakaTune::runtimeMeasurementSourceName(observation.runtimeMeasurementSource);
-            record["measured"] = observation.measured;
-            record["elapsed_seconds"] = detail::timingCampaignElapsedSeconds();
-            record["num_frames"] = detail::timingVectorJson(frameSpec.getNumFrames());
-            record["frame_extent"] = detail::timingVectorJson(frameSpec.getFrameExtents());
-            record["candidate_count"] = info.candidateCount;
-            record["active_queue"] = false;
-            detail::timingTraceStore().stage(tracePath, record);
+            auto const observation = entry->tuner->enqueueObserved(queue, frameSpec, bundle);
+            if(auto const tracePath = detail::optionalTimingEnvironment("HASE_ALPAKATUNE_TRACE"); !tracePath.empty())
+            {
+                auto const info = entry->tuner->info();
+                auto record = nlohmann::json::object();
+                record["kernel"] = kernelIdentity;
+                record["candidate_index"] = observation.candidateIndex;
+                record["runtime_seconds"] = observation.runtimeSeconds;
+                record["runtime_measurement_source"]
+                    = alpakaTune::runtimeMeasurementSourceName(observation.runtimeMeasurementSource);
+                record["measured"] = observation.measured;
+                record["elapsed_seconds"] = detail::timingCampaignElapsedSeconds();
+                record["num_frames"] = detail::timingVectorJson(frameSpec.getNumFrames());
+                record["frame_extent"] = detail::timingVectorJson(frameSpec.getFrameExtents());
+                record["candidate_count"] = info.candidateCount;
+                record["tunable_parameter_count"] = observation.configuration.size();
+                record["active_queue"] = false;
+                detail::timingTraceStore().stage(tracePath, record);
+            }
         }
 #else
         static_cast<void>(kernelIdentity);

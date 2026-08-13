@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TimedEnqueue.hpp>
 #include <alpakaUtils/backendNames.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
@@ -131,7 +132,12 @@ namespace hase::core
     template<typename T_Device, typename T_Executor>
     class CompiledSimulationRunner
     {
+#if HASE_ENABLE_ALPAKATUNE
+        using T_Queue = ALPAKA_TYPEOF(
+            std::declval<T_Device&>().makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled));
+#else
         using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::nonBlocking));
+#endif
         using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
         using T_FloatBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<float>(std::declval<T_Device&>(), std::size_t{1}));
 
@@ -145,7 +151,11 @@ namespace hase::core
             HostMesh& hostMesh)
             : m_forwardAseContext(std::move(devices), executor, experiment, hostMesh)
             , m_device(m_forwardAseContext.primaryDevice())
+#if HASE_ENABLE_ALPAKATUNE
+            , m_queue(m_device.makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled))
+#else
             , m_queue(m_device.makeQueue(alpaka::queueKind::nonBlocking))
+#endif
             , m_devBundle(m_device, executor)
             , m_experiment(experiment)
             , m_compute(compute)
@@ -508,9 +518,11 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
+            hase::alpakaUtils::timedEnqueue(
+                m_queue,
                 frameSpec,
-                alpaka::KernelBundle{hase::kernels::AddScaled{scale}, m_mesh, base, slope, out});
+                alpaka::KernelBundle{hase::kernels::AddScaled{scale}, m_mesh, base, slope, out},
+                "AddScaled");
         }
 
         void enqueueHeun(auto& base, auto& first, auto& second, auto& out)
@@ -519,9 +531,11 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
+            hase::alpakaUtils::timedEnqueue(
+                m_queue,
                 frameSpec,
-                alpaka::KernelBundle{hase::kernels::CombineHeun{m_run.timeStep}, m_mesh, base, first, second, out});
+                alpaka::KernelBundle{hase::kernels::CombineHeun{m_run.timeStep}, m_mesh, base, first, second, out},
+                "CombineHeun");
         }
 
         void enqueueRungeKutta4()
@@ -530,7 +544,8 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
+            hase::alpakaUtils::timedEnqueue(
+                m_queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::CombineRungeKutta4{m_run.timeStep},
@@ -540,7 +555,8 @@ namespace hase::core
                     m_k2,
                     m_k3,
                     m_k4,
-                    m_betaNext});
+                    m_betaNext},
+                "CombineRungeKutta4");
         }
 
         void enqueueExponentialEuler()
@@ -549,7 +565,8 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
+            hase::alpakaUtils::timedEnqueue(
+                m_queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::ExponentialEulerUpdate{
@@ -559,7 +576,8 @@ namespace hase::core
                     m_beta,
                     m_dndtPump,
                     m_dndtAse,
-                    m_betaNext});
+                    m_betaNext},
+                "ExponentialEulerUpdate");
         }
 
         void enqueueClip(auto& beta)
@@ -568,7 +586,11 @@ namespace hase::core
                 m_devBundle.device,
                 m_devBundle.executor,
                 alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(frameSpec, alpaka::KernelBundle{hase::kernels::ClipBeta{}, m_mesh, beta});
+            hase::alpakaUtils::timedEnqueue(
+                m_queue,
+                frameSpec,
+                alpaka::KernelBundle{hase::kernels::ClipBeta{}, m_mesh, beta},
+                "ClipBeta");
         }
 
         ForwardPhiAseContext<T_Device, T_Executor> m_forwardAseContext;

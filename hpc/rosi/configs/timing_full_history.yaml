@@ -1,7 +1,8 @@
 schema_version: 3
 tuning:
-  # One unchanged FrameSpec is supplied by HASE. Horizon-less adaptive mode
-  # therefore measures every natural launch without completing into replay.
+  # HASE supplies an empty tuning bundle and passes every kernel's default
+  # FrameSpec through unchanged. Horizon-less adaptive mode therefore measures
+  # every natural launch without completing into replay.
   mode: online_adaptive
   strategy: exhaustive
   random_seed: 5489

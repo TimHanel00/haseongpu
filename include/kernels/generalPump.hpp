@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/TimedEnqueue.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <core/hostRoutineTiming.hpp>
@@ -1130,7 +1131,8 @@ namespace hase::kernels
                 devBundle.device,
                 devBundle.executor,
                 alpaka::Vec{m_rayCount});
-            queue.enqueue(
+            hase::alpakaUtils::timedEnqueue(
+                queue,
                 frameSpec,
                 alpaka::KernelBundle{
                     TraceGeneralPump{},
@@ -1150,7 +1152,8 @@ namespace hase::kernels
                     m_forbiddenFace,
                     boundaryPolicyFactory,
                     vertexPumpIntegral,
-                    m_rayCount});
+                    m_rayCount},
+                "TraceGeneralPump");
         }
 
         T_DoubleBuffer m_originX, m_originY, m_originZ;
@@ -1271,14 +1274,16 @@ namespace hase::kernels
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{mesh.numberOfCells});
-        queue.enqueue(
+        hase::alpakaUtils::timedEnqueue(
+            queue,
             cellFrameSpec,
             alpaka::KernelBundle{
                 ProjectVertexPumpRateToCells{},
                 mesh,
                 vertexPumpIntegral,
                 lumpedVertexVolume,
-                cellRate});
+                cellRate},
+            "ProjectVertexPumpRateToCells");
     }
 
     template<
