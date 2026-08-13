@@ -132,7 +132,7 @@ namespace hase::core
     template<typename T_Device, typename T_Executor>
     class CompiledSimulationRunner
     {
-#if HASE_ENABLE_ALPAKATUNE
+#if HASE_ENABLE_ALPAKATUNE || HASE_ENABLE_DEVICE_TIMING
         using T_Queue = ALPAKA_TYPEOF(
             std::declval<T_Device&>().makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled));
 #else
@@ -151,7 +151,7 @@ namespace hase::core
             HostMesh& hostMesh)
             : m_forwardAseContext(std::move(devices), executor, experiment, hostMesh)
             , m_device(m_forwardAseContext.primaryDevice())
-#if HASE_ENABLE_ALPAKATUNE
+#if HASE_ENABLE_ALPAKATUNE || HASE_ENABLE_DEVICE_TIMING
             , m_queue(m_device.makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled))
 #else
             , m_queue(m_device.makeQueue(alpaka::queueKind::nonBlocking))

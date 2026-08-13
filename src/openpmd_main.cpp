@@ -5,6 +5,10 @@
 #    include <alpakaTune/alpakaTune.hpp>
 #endif
 
+#if HASE_ENABLE_DEVICE_TIMING
+#    include <alpakaUtils/TimedEnqueue.hpp>
+#endif
+
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -107,6 +111,9 @@ int main(int argc, char** argv)
         // All worker threads have joined. Flush here so persistence failures
         // are observable instead of being hidden by static destruction.
         alpakaTune::flushPersistence();
+#endif
+#if HASE_ENABLE_DEVICE_TIMING
+        hase::alpakaUtils::flushDeviceTiming();
 #endif
 
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)

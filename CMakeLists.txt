@@ -182,6 +182,17 @@ option(
     OFF
 )
 option(
+    HASE_ENABLE_DEVICE_TIMING
+    "Measure selected HASE kernel launches directly with Alpaka device events"
+    OFF
+)
+if(HASE_ENABLE_ALPAKATUNE AND HASE_ENABLE_DEVICE_TIMING)
+    message(
+        FATAL_ERROR
+        "HASE_ENABLE_ALPAKATUNE and HASE_ENABLE_DEVICE_TIMING are mutually exclusive"
+    )
+endif()
+option(
     HASE_FORWARD_LOGGING
     "Forward captured calcPhiASE stdout and stderr through the Python openPMD launcher."
     OFF
@@ -925,6 +936,9 @@ target_link_libraries(hase_core INTERFACE alpaka::alpaka)
 if(HASE_ENABLE_ALPAKATUNE)
     target_link_libraries(hase_core INTERFACE alpakaTune::alpakaTune)
     target_compile_definitions(hase_core INTERFACE HASE_ENABLE_ALPAKATUNE=1)
+endif()
+if(HASE_ENABLE_DEVICE_TIMING)
+    target_compile_definitions(hase_core INTERFACE HASE_ENABLE_DEVICE_TIMING=1)
 endif()
 if(TARGET CUDA::cudart)
     target_link_libraries(hase_core INTERFACE CUDA::cudart)

@@ -61,7 +61,7 @@ namespace hase::core
     template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
     class ForwardPhiAseDeviceContext
     {
-#if HASE_ENABLE_ALPAKATUNE
+#if HASE_ENABLE_ALPAKATUNE || HASE_ENABLE_DEVICE_TIMING
         using T_Queue = ALPAKA_TYPEOF(
             std::declval<T_Device&>().makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled));
 #else
@@ -80,7 +80,7 @@ namespace hase::core
             ExperimentParameters const& experiment,
             HostMesh const& hostMesh)
             : m_devBundle(device, executor)
-#if HASE_ENABLE_ALPAKATUNE
+#if HASE_ENABLE_ALPAKATUNE || HASE_ENABLE_DEVICE_TIMING
             , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled))
 #else
             , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::nonBlocking))

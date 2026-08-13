@@ -14,7 +14,9 @@
 #if HASE_ENABLE_ALPAKATUNE
 #    include <alpakaTune/alpakaTune.hpp>
 #    include <nlohmann/json.hpp>
+#endif
 
+#if HASE_ENABLE_ALPAKATUNE || HASE_ENABLE_DEVICE_TIMING
 #    include <algorithm>
 #    include <array>
 #    include <chrono>
@@ -23,6 +25,7 @@
 #    include <cstdlib>
 #    include <filesystem>
 #    include <fstream>
+#    include <iomanip>
 #    include <limits>
 #    include <memory>
 #    include <mutex>
@@ -133,9 +136,115 @@ namespace hase::alpakaUtils
     } // namespace detail
 #endif
 
+#if HASE_ENABLE_DEVICE_TIMING
+    namespace detail
+    {
+        inline auto requiredDeviceTimingEnvironment(char const* name) -> std::string
+        {
+            auto const* value = std::getenv(name);
+            if(value == nullptr || value[0] == '\0')
+                throw std::runtime_error{std::string{"Missing required environment variable: "} + name};
+            return value;
+        }
+
+        inline auto deviceTimingKernelEnabled(std::string_view kernel) -> bool
+        {
+            static auto const configured = requiredDeviceTimingEnvironment("HASE_DEVICE_TIMING_KERNELS");
+            auto const entries = std::string_view{configured};
+            auto begin = std::size_t{0u};
+            while(begin <= entries.size())
+            {
+                auto const end = entries.find(',', begin);
+                auto const entry = entries.substr(begin, end == std::string_view::npos ? end : end - begin);
+                if(entry == kernel)
+                    return true;
+                if(end == std::string_view::npos)
+                    break;
+                begin = end + 1u;
+            }
+            return false;
+        }
+
+        struct DeviceTimingRecord
+        {
+            std::string kernel;
+            std::string mode;
+            std::uintmax_t originalNumFrames;
+            std::uintmax_t originalFrameExtent;
+            std::uintmax_t selectedNumFrames;
+            std::uintmax_t selectedFrameExtent;
+            double durationNanoseconds;
+        };
+
+        class DeviceTimingStore
+        {
+        public:
+            ~DeviceTimingStore() noexcept
+            {
+                try
+                {
+                    flush();
+                }
+                catch(...)
+                {
+                }
+            }
+
+            void stage(DeviceTimingRecord record)
+            {
+                std::scoped_lock lock{m_mutex};
+                m_records.push_back(std::move(record));
+            }
+
+            void flush()
+            {
+                std::scoped_lock lock{m_mutex};
+                if(m_flushed)
+                    return;
+                auto const path = std::filesystem::path{requiredDeviceTimingEnvironment("HASE_DEVICE_TIMING_CSV")};
+                if(path.has_parent_path())
+                    std::filesystem::create_directories(path.parent_path());
+                std::ofstream output{path};
+                if(!output)
+                    throw std::runtime_error{"Could not open device timing CSV: " + path.string()};
+                output << "Sample,Kernel,Mode,KernelMode,OriginalNumFrames,OriginalFrameExtent,SelectedNumFrames,"
+                          "SelectedFrameExtent,TunerMeasured,DurationNs,RuntimeSource\n";
+                output << std::setprecision(std::numeric_limits<double>::max_digits10);
+                for(std::size_t index = 0u; index < m_records.size(); ++index)
+                {
+                    auto const& record = m_records[index];
+                    output << index + 1u << ',' << record.kernel << ',' << record.mode << ',' << record.kernel << " | "
+                           << record.mode << ',' << record.originalNumFrames << ',' << record.originalFrameExtent
+                           << ',' << record.selectedNumFrames << ',' << record.selectedFrameExtent << ",false,"
+                           << record.durationNanoseconds << ",device_event\n";
+                }
+                if(!output)
+                    throw std::runtime_error{"Could not write device timing CSV: " + path.string()};
+                m_flushed = true;
+            }
+
+        private:
+            std::mutex m_mutex;
+            std::vector<DeviceTimingRecord> m_records;
+            bool m_flushed = false;
+        };
+
+        inline auto deviceTimingStore() -> DeviceTimingStore&
+        {
+            static DeviceTimingStore store;
+            return store;
+        }
+    } // namespace detail
+
+    inline void flushDeviceTiming()
+    {
+        detail::deviceTimingStore().flush();
+    }
+#endif
+
     /**
-     * Tune one selected one-dimensional kernel launch and independently
-     * benchmark the actual launch with Alpaka events.
+     * Benchmark an explicitly selected one-dimensional kernel launch with
+     * Alpaka events, optionally selecting its FrameSpec through alpakaTune.
      *
      * Five legal candidates preserve the original worker coverage while using
      * 32, 64, 128, 256, or 512 workers per frame. Tuner measurements supply
@@ -373,6 +482,107 @@ namespace hase::alpakaUtils
                 record["legal_candidate_count"] = frameExtentValues.size();
                 detail::timingTraceStore().stage(tracePath, record);
             }
+        }
+#elif HASE_ENABLE_DEVICE_TIMING
+        if(!detail::deviceTimingKernelEnabled(kernelIdentity))
+        {
+            queue.enqueue(frameSpec, bundle);
+            return;
+        }
+        if constexpr(
+            !std::same_as<ALPAKA_TYPEOF(queue.getQueueKind()), alpaka::queueKind::NonBlocking>
+            || !std::same_as<ALPAKA_TYPEOF(queue.getTiming()), alpaka::timing::Enabled>)
+        {
+            queue.enqueue(frameSpec, bundle);
+            return;
+        }
+        else
+        {
+            using Device = std::remove_cvref_t<decltype(queue.getDevice())>;
+            auto selectedFrames = frameSpec.getNumFrames();
+            auto selectedExtent = frameSpec.getFrameExtents();
+            auto const frameMode = detail::requiredDeviceTimingEnvironment("HASE_DEVICE_TIMING_FRAME_SPECS");
+            if(frameMode == "selected")
+            {
+                auto const originalFrames = static_cast<std::uintmax_t>(frameSpec.getNumFrames()[0u]);
+                auto const originalExtent = static_cast<std::uintmax_t>(frameSpec.getFrameExtents()[0u]);
+                auto selection = std::optional<std::pair<std::uintmax_t, std::uintmax_t>>{};
+                if(kernelIdentity == "AccumulateForwardPhiAse" && originalExtent == 512u)
+                {
+                    if(originalFrames == 2u)
+                        selection = {{16u, 64u}};
+                    else if(originalFrames == 5u)
+                        selection = {{80u, 32u}};
+                    else if(originalFrames == 16u)
+                        selection = {{256u, 32u}};
+                    else if(originalFrames == 52u)
+                        selection = {{208u, 128u}};
+                    else if(originalFrames == 166u)
+                        selection = {{2656u, 32u}};
+                }
+                else if(kernelIdentity == "TraceGeneralPump" && originalFrames == 97u && originalExtent == 512u)
+                    selection = {{194u, 256u}};
+                if(!selection)
+                    throw std::runtime_error{
+                        "No hand-selected FrameSpec for " + std::string{kernelIdentity} + " with original shape "
+                        + std::to_string(originalFrames) + "x" + std::to_string(originalExtent)};
+                using FrameCountScalar = std::remove_cvref_t<ALPAKA_TYPEOF(selectedFrames[0u])>;
+                using FrameExtentScalar = std::remove_cvref_t<ALPAKA_TYPEOF(selectedExtent[0u])>;
+                selectedFrames[0u] = static_cast<FrameCountScalar>(selection->first);
+                selectedExtent[0u] = static_cast<FrameExtentScalar>(selection->second);
+            }
+            else if(frameMode != "default")
+                throw std::runtime_error{"HASE_DEVICE_TIMING_FRAME_SPECS must be 'default' or 'selected'."};
+
+            auto registryKey = std::string{kernelIdentity} + ':' + std::to_string(frameSpec.getNumFrames()[0u]) + ':'
+                               + std::to_string(frameSpec.getFrameExtents()[0u]);
+
+            struct TimingEntry
+            {
+                explicit TimingEntry(Device value)
+                    : device{std::move(value)}
+                    , start{device.makeEvent(alpaka::timing::enabled)}
+                    , end{device.makeEvent(alpaka::timing::enabled)}
+                {
+                }
+
+                Device device;
+                ALPAKA_TYPEOF(std::declval<Device&>().makeEvent(alpaka::timing::enabled)) start;
+                ALPAKA_TYPEOF(std::declval<Device&>().makeEvent(alpaka::timing::enabled)) end;
+                std::mutex mutex;
+            };
+
+            static std::mutex registryMutex;
+            static std::unordered_map<std::string, std::vector<std::shared_ptr<TimingEntry>>> registry;
+            auto entry = std::shared_ptr<TimingEntry>{};
+            {
+                std::scoped_lock lock{registryMutex};
+                auto& matchingEntries = registry[registryKey];
+                auto const found = std::ranges::find_if(
+                    matchingEntries,
+                    [&queue](auto const& candidate) { return candidate->device == queue.getDevice(); });
+                if(found != matchingEntries.end())
+                    entry = *found;
+                else
+                {
+                    entry = std::make_shared<TimingEntry>(queue.getDevice());
+                    matchingEntries.push_back(entry);
+                }
+            }
+            auto const selectedFrameSpec = T_FrameSpec{selectedFrames, selectedExtent, frameSpec.getExecutor()};
+            std::scoped_lock entryLock{entry->mutex};
+            queue.enqueue(entry->start);
+            queue.enqueue(selectedFrameSpec, bundle);
+            queue.enqueue(entry->end);
+            auto const runtimeSeconds = alpaka::onHost::getElapsedTime(entry->start, entry->end).count();
+            detail::deviceTimingStore().stage(
+                {.kernel = std::string{kernelIdentity},
+                 .mode = detail::requiredDeviceTimingEnvironment("HASE_DEVICE_TIMING_MODE"),
+                 .originalNumFrames = static_cast<std::uintmax_t>(frameSpec.getNumFrames()[0u]),
+                 .originalFrameExtent = static_cast<std::uintmax_t>(frameSpec.getFrameExtents()[0u]),
+                 .selectedNumFrames = static_cast<std::uintmax_t>(selectedFrames[0u]),
+                 .selectedFrameExtent = static_cast<std::uintmax_t>(selectedExtent[0u]),
+                 .durationNanoseconds = runtimeSeconds * 1.0e9});
         }
 #else
         static_cast<void>(kernelIdentity);
