@@ -33,12 +33,14 @@ MODE_COLORS = {
     "online_fixed": "#e9c46a",
     "online_adaptive": "#e76f51",
 }
-EXPECTED_CONTEXT_SAMPLES = {
+COMPARISON_CONTEXT_SAMPLES = {
     ("AccumulateForwardPhiAse", (2,), (512,)): 15_992,
     ("AccumulateForwardPhiAse", (5,), (512,)): 15_992,
     ("AccumulateForwardPhiAse", (16,), (512,)): 15_992,
     ("AccumulateForwardPhiAse", (52,), (512,)): 15_992,
-    ("AccumulateForwardPhiAse", (166,), (512,)): 10_496,
+    # Offline and fixed each spend one of this shortest context's calls on
+    # their unmeasured winner-cache bootstrap. Use the largest common count.
+    ("AccumulateForwardPhiAse", (166,), (512,)): 10_495,
     ("TraceGeneralPump", (97,), (512,)): 8_000,
 }
 
@@ -167,21 +169,17 @@ def group_contexts(records: list[dict]) -> dict[tuple, list[dict]]:
     return dict(grouped)
 
 
-def equal_count_records(records: list[dict], drop_warmup: bool) -> list[dict]:
+def equal_count_records(records: list[dict]) -> list[dict]:
     contexts = group_contexts([record for record in records if record.get("evaluation_measured")])
-    if set(contexts) != set(EXPECTED_CONTEXT_SAMPLES):
+    if set(contexts) != set(COMPARISON_CONTEXT_SAMPLES):
         raise ValueError("trace does not contain the six expected launch contexts")
     result: list[dict] = []
     for key in sorted(contexts):
         values = contexts[key]
-        required = EXPECTED_CONTEXT_SAMPLES[key]
-        first = 1 if drop_warmup else 0
-        needed = required + first
-        if len(values) < needed:
-            raise ValueError(f"{key} has {len(values)} measured calls; need at least {needed}")
-        # Tuning modes run one extra application step, so drop one measured
-        # warm-up and retain the prior campaign's exact context count.
-        result.extend(values[first:needed])
+        required = COMPARISON_CONTEXT_SAMPLES[key]
+        if len(values) < required:
+            raise ValueError(f"{key} has {len(values)} measured calls; need at least {required}")
+        result.extend(values[:required])
     return result
 
 
@@ -376,8 +374,8 @@ def main() -> None:
     failures.extend(validate_mode("baseline", baseline))
     for mode, records in traces.items():
         failures.extend(validate_mode(mode, records))
-    comparable = {mode: equal_count_records(records, True) for mode, records in traces.items()}
-    comparable["baseline"] = equal_count_records(baseline, False)
+    comparable = {mode: equal_count_records(records) for mode, records in traces.items()}
+    comparable["baseline"] = equal_count_records(baseline)
     reference_counts = Counter(record["kernel"] for record in comparable["baseline"])
     for mode in RAW_MODES:
         counts = Counter(record["kernel"] for record in comparable[mode])
