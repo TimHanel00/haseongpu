@@ -15,8 +15,6 @@
 #include <concepts/concepts.hpp>
 #include <core/mesh.hpp>
 
-#include <cmath>
-
 namespace hase::kernels
 {
     template<typename T>
@@ -37,7 +35,7 @@ namespace hase::kernels
 
         ALPAKA_FN_ACC void operator()(
             auto const& acc,
-            hase::core::DeviceMeshView const mesh,
+            core::DeviceMeshView const mesh,
             auto betaVolume,
             auto phiAse,
             auto dndtPump,
@@ -70,7 +68,7 @@ namespace hase::kernels
 
     void enqueueComposeDerivative(
         auto& devBundle,
-        hase::concepts::Queue auto const& queue,
+        concepts::Queue auto const& queue,
         auto const& mesh,
         double sigmaAbsorption,
         double sigmaEmission,
@@ -78,7 +76,7 @@ namespace hase::kernels
         bool pumpEnabled,
         ComposeDerivativeBufferHandle auto& buffers)
     {
-        auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+        auto frameSpec = alpakaUtils::getFrameSpec<uint32_t>(
             devBundle.device,
             devBundle.executor,
             alpaka::Vec{mesh.numberOfCells});

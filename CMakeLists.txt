@@ -197,6 +197,7 @@ option(
     "Forward captured calcPhiASE stdout and stderr through the Python openPMD launcher."
     OFF
 )
+option(HASE_DEBUG_LOGGING "Enable additional backend debug logging." OFF)
 set(HASE_RUNTIME_DIR
     "${CMAKE_SOURCE_DIR}/build"
     CACHE PATH
@@ -983,8 +984,8 @@ endif()
 if(HASE_STEP_TIMING)
     target_compile_definitions(hase_core INTERFACE HASE_ENABLE_STEP_TIMING)
 endif()
-if(HASE_FORWARD_LOGGING)
-    target_compile_definitions(hase_core INTERFACE HASE_FORWARD_LOGGING)
+if(HASE_DEBUG_LOGGING)
+    target_compile_definitions(hase_core INTERFACE HASE_ENABLE_DEBUG_LOGGING)
 endif()
 alpaka_finalize(hase)
 

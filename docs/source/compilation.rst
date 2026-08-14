@@ -147,9 +147,29 @@ These build-time measurements are independent of
 report Python frontend transport, snapshot, and callback time without requiring
 a special build.
 
-``HASE_FORWARD_LOGGING``
-   Default ``OFF``.  Forwards captured ``calcPhiASE`` stdout/stderr through the
-   Python openPMD launcher.
+``HASE_DEBUG_LOGGING``
+   Default ``OFF``. Enables additional backend messages at the debug verbosity
+   level. The Python frontend preserves raw simulation-step completion records
+   in debug builds so their ordering remains visible alongside the additional
+   backend messages. Normal builds render those records as a progress bar.
+
+Backend stream forwarding
+-------------------------
+
+The Python launcher displays ``calcPhiASE`` stdout and stderr while the backend
+runs. This runtime behavior is enabled by default and does not depend on a
+CMake option. During a normal time-stepped run, the frontend turns backend step
+completion records into a persistent, one-line progress bar with elapsed and
+estimated remaining time. Set ``HASE_FORWARD_LOGGING`` to ``OFF`` for one
+launch to drain both streams without displaying messages or the progress bar.
+
+After each completed simulation step, the backend emits a flushed record of the
+form ``[HASE_STEP_COMPLETE] step=N/M pump=P ase=A`` after earlier work in its
+Alpaka queue has completed. Builds configured with ``HASE_DEBUG_LOGGING=ON``
+display these records unchanged instead of using the progress bar. Set
+``HASE_BACKEND_LOG_FILE`` to a path to append both streams, including the raw
+step records, to a prefixed diagnostic log. Backend failures name that file
+instead of copying its contents into the exception.
 
 MPI Option
 ----------
@@ -274,9 +294,11 @@ Runtime selection is still done through user configuration:
 
 .. code-block:: yaml
 
-   compute:
-     backend: Host_Cpu_CpuSerial
-     openpmd_backend: auto
+   schema_version: 2
+   simulation:
+     phi_ase:
+       backend: Host_Cpu_CpuSerial
+       openpmd_backend: auto
 
 Use ``python3 utils/configure_hase.py`` or ``hase-configure`` to generate a
 matching YAML snippet and install command for common setups.
