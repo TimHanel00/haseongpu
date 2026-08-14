@@ -472,6 +472,8 @@ namespace hase::kernels
             T_VertexPumpIntegralView vertexPumpIntegral,
             unsigned const rayCount) const
         {
+            // Grid-stride logical indexing keeps every ray covered exactly
+            // once when tuning changes the physical grid worker count.
             for(auto [rayIndex] :
                 alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{rayCount}))
             {

@@ -186,12 +186,123 @@ option(
     "Measure selected HASE kernel launches directly with Alpaka device events"
     OFF
 )
+set(HASE_STATIC_FRAMESPEC_MODE
+    "default"
+    CACHE STRING
+    "Ordinary launch FrameSpec mode: default or selected"
+)
+set_property(
+    CACHE HASE_STATIC_FRAMESPEC_MODE
+    PROPERTY STRINGS default selected
+)
+set(HASE_STATIC_FRAMESPEC_WINNERS_FILE
+    ""
+    CACHE FILEPATH
+    "Generated JSON containing per-context static FrameSpec winners"
+)
+set(HASE_STATIC_FRAMESPEC_WINNERS_SHA256
+    "none"
+    CACHE STRING
+    "SHA-256 digest of HASE_STATIC_FRAMESPEC_WINNERS_FILE"
+)
+if(NOT HASE_STATIC_FRAMESPEC_MODE MATCHES "^(default|selected)$")
+    message(FATAL_ERROR "HASE_STATIC_FRAMESPEC_MODE must be default or selected")
+endif()
 if(HASE_ENABLE_ALPAKATUNE AND HASE_ENABLE_DEVICE_TIMING)
     message(
         FATAL_ERROR
         "HASE_ENABLE_ALPAKATUNE and HASE_ENABLE_DEVICE_TIMING are mutually exclusive"
     )
 endif()
+if(HASE_STATIC_FRAMESPEC_MODE STREQUAL "selected" AND (HASE_ENABLE_ALPAKATUNE OR HASE_ENABLE_DEVICE_TIMING))
+    message(
+        FATAL_ERROR
+        "selected static FrameSpecs are an ordinary launch mode and require both instrumentation options OFF"
+    )
+endif()
+
+set(HASE_STATIC_FRAMESPEC_WINNER_ENTRIES "")
+set(HASE_STATIC_FRAMESPEC_WINNER_COUNT 0)
+if(HASE_STATIC_FRAMESPEC_WINNERS_FILE)
+    if(NOT EXISTS "${HASE_STATIC_FRAMESPEC_WINNERS_FILE}")
+        message(FATAL_ERROR "Static FrameSpec winners file does not exist: ${HASE_STATIC_FRAMESPEC_WINNERS_FILE}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${HASE_STATIC_FRAMESPEC_WINNERS_FILE}")
+    file(SHA256 "${HASE_STATIC_FRAMESPEC_WINNERS_FILE}" HASE_STATIC_FRAMESPEC_WINNERS_DIGEST)
+    set(HASE_STATIC_FRAMESPEC_WINNERS_SHA256
+        "${HASE_STATIC_FRAMESPEC_WINNERS_DIGEST}"
+        CACHE STRING
+        "SHA-256 digest of HASE_STATIC_FRAMESPEC_WINNERS_FILE"
+        FORCE
+    )
+    file(READ "${HASE_STATIC_FRAMESPEC_WINNERS_FILE}" HASE_STATIC_FRAMESPEC_WINNERS_JSON)
+    string(JSON HASE_STATIC_FRAMESPEC_SCHEMA GET "${HASE_STATIC_FRAMESPEC_WINNERS_JSON}" schema_version)
+    if(NOT HASE_STATIC_FRAMESPEC_SCHEMA EQUAL 1)
+        message(FATAL_ERROR "Unsupported static FrameSpec winners schema: ${HASE_STATIC_FRAMESPEC_SCHEMA}")
+    endif()
+    string(JSON HASE_STATIC_FRAMESPEC_WINNER_COUNT LENGTH "${HASE_STATIC_FRAMESPEC_WINNERS_JSON}" contexts)
+    if(HASE_STATIC_FRAMESPEC_WINNER_COUNT LESS 1)
+        message(FATAL_ERROR "Static FrameSpec winners file contains no contexts")
+    endif()
+    math(EXPR HASE_STATIC_FRAMESPEC_WINNER_LAST "${HASE_STATIC_FRAMESPEC_WINNER_COUNT} - 1")
+    foreach(HASE_STATIC_FRAMESPEC_WINNER_INDEX RANGE 0 ${HASE_STATIC_FRAMESPEC_WINNER_LAST})
+        foreach(
+            HASE_STATIC_FRAMESPEC_FIELD
+            IN ITEMS
+                kernel
+                original_num_frames
+                original_frame_extent
+                selected_num_frames
+                selected_frame_extent
+        )
+            string(
+                JSON HASE_STATIC_FRAMESPEC_${HASE_STATIC_FRAMESPEC_FIELD}
+                GET
+                "${HASE_STATIC_FRAMESPEC_WINNERS_JSON}"
+                contexts
+                ${HASE_STATIC_FRAMESPEC_WINNER_INDEX}
+                ${HASE_STATIC_FRAMESPEC_FIELD}
+            )
+        endforeach()
+        if(
+            NOT HASE_STATIC_FRAMESPEC_kernel
+                MATCHES
+                "^(AccumulateForwardPhiAse|AccumulateForwardPhiAseReservoir|AccumulateReflectedForwardPhiAse|TraceGeneralPump)$"
+        )
+            message(FATAL_ERROR "Unexpected kernel in static FrameSpec winners: ${HASE_STATIC_FRAMESPEC_kernel}")
+        endif()
+        foreach(
+            HASE_STATIC_FRAMESPEC_VALUE
+            IN ITEMS
+                HASE_STATIC_FRAMESPEC_original_num_frames
+                HASE_STATIC_FRAMESPEC_original_frame_extent
+                HASE_STATIC_FRAMESPEC_selected_num_frames
+                HASE_STATIC_FRAMESPEC_selected_frame_extent
+        )
+            if(NOT "${${HASE_STATIC_FRAMESPEC_VALUE}}" MATCHES "^[1-9][0-9]*$")
+                message(FATAL_ERROR "Static FrameSpec winner dimensions must be positive")
+            endif()
+        endforeach()
+        string(
+            APPEND HASE_STATIC_FRAMESPEC_WINNER_ENTRIES
+            "        GeneratedFrameSpecWinner{\"${HASE_STATIC_FRAMESPEC_kernel}\", ${HASE_STATIC_FRAMESPEC_original_num_frames}u, ${HASE_STATIC_FRAMESPEC_original_frame_extent}u, ${HASE_STATIC_FRAMESPEC_selected_num_frames}u, ${HASE_STATIC_FRAMESPEC_selected_frame_extent}u},\n"
+        )
+    endforeach()
+elseif(HASE_STATIC_FRAMESPEC_MODE STREQUAL "selected")
+    message(FATAL_ERROR "selected static FrameSpecs require HASE_STATIC_FRAMESPEC_WINNERS_FILE")
+else()
+    set(HASE_STATIC_FRAMESPEC_WINNERS_SHA256
+        "none"
+        CACHE STRING
+        "SHA-256 digest of HASE_STATIC_FRAMESPEC_WINNERS_FILE"
+        FORCE
+    )
+endif()
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/StaticFrameSpecWinners.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/include/alpakaUtils/StaticFrameSpecWinners.hpp"
+    @ONLY
+)
 option(
     HASE_FORWARD_LOGGING
     "Forward captured calcPhiASE stdout and stderr through the Python openPMD launcher."
@@ -252,6 +363,9 @@ if(NOT HASE_BUILD_RUNTIME)
         if(
             HASE_CACHE_VARIABLE MATCHES "^HASE_"
             OR HASE_CACHE_VARIABLE MATCHES "^alpaka_"
+            OR HASE_CACHE_VARIABLE
+                MATCHES
+                "^FETCHCONTENT_SOURCE_DIR_.+$"
             OR HASE_CACHE_VARIABLE
                 IN_LIST
                 HASE_FORWARDED_TARGET_TOOLCHAIN_VARIABLES
@@ -643,7 +757,7 @@ if(HASE_ENABLE_ALPAKATUNE)
         "Git repository used when fetching alpakaTune"
     )
     set(HASE_ALPAKATUNE_GIT_TAG
-        "997974047a9e6c8a4d5ee1efc97705f64810b446"
+        "bbf6e93eb803a09a5b4d5b9736a5b519163051d2"
         CACHE STRING
         "Git tag or commit used when fetching alpakaTune"
     )
@@ -770,6 +884,7 @@ target_include_directories(
     INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Benchmark>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -941,6 +1056,12 @@ endif()
 if(HASE_ENABLE_DEVICE_TIMING)
     target_compile_definitions(hase_core INTERFACE HASE_ENABLE_DEVICE_TIMING=1)
 endif()
+if(HASE_STATIC_FRAMESPEC_MODE STREQUAL "selected")
+    target_compile_definitions(
+        hase_core
+        INTERFACE HASE_STATIC_FRAMESPEC_SELECTED=1
+    )
+endif()
 if(TARGET CUDA::cudart)
     target_link_libraries(hase_core INTERFACE CUDA::cudart)
     list(APPEND HASE_BUILD_TREE_RPATH "$<TARGET_FILE_DIR:CUDA::cudart>")
@@ -1022,6 +1143,10 @@ if(HASE_INSTALL_CPP_INTERFACE)
     install(
         DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+    install(
+        FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/include/alpakaUtils/StaticFrameSpecWinners.hpp"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/alpakaUtils"
     )
 endif()
 

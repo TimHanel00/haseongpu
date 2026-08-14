@@ -323,10 +323,12 @@ def test_thinFrontendPropagatesBuildSettingsToResidentRuntime(tmp_path):
     dependency_prefix = tmp_path / "system dependencies"
     runtime_dir = tmp_path / "resident runtime"
     frontend_dir = tmp_path / "thin frontend"
+    fetchcontent_source = tmp_path / "explicit alpakaTune source"
     compiler_launcher = tmp_path / "emptyCompileLauncher.py"
     _write_fake_system_dependencies(dependency_prefix)
     system_openpmd_dir = _write_fake_system_openpmd(dependency_prefix)
     _write_empty_compile_launcher(compiler_launcher)
+    fetchcontent_source.mkdir()
 
     configured_arguments = [
         "-DHASE_TESTING=OFF",
@@ -341,6 +343,7 @@ def test_thinFrontendPropagatesBuildSettingsToResidentRuntime(tmp_path):
         f"-DopenPMD_DIR={system_openpmd_dir}",
         "-DHASE_BUILD_RELEASE=OFF",
         "-DCMAKE_BUILD_TYPE=Release",
+        f"-DFETCHCONTENT_SOURCE_DIR_ALPAKATUNE={fetchcontent_source}",
         (
             "-DCMAKE_CXX_COMPILER_LAUNCHER="
             f"{sys.executable};{compiler_launcher}"
@@ -378,6 +381,10 @@ def test_thinFrontendPropagatesBuildSettingsToResidentRuntime(tmp_path):
     runtime_cache = _cmake_cache_values(runtime_dir / "CMakeCache.txt")
     assert runtime_cache["CMAKE_CXX_FLAGS"] == "-DHASE_RUNTIME_ABI_MARKER"
     assert Path(runtime_cache["openPMD_DIR"]) == system_openpmd_dir
+    assert (
+        Path(runtime_cache["FETCHCONTENT_SOURCE_DIR_ALPAKATUNE"])
+        == fetchcontent_source
+    )
     assert (
         runtime_dir / "python" / "pyInclude" / "_runtime" / "calcPhiASE"
     ).is_file()

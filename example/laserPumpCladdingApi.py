@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -114,6 +116,36 @@ def printState(state):
         f"time={state.time:.3e}s "
         f"mean_beta={state.beta_volume.mean():.6e} "
         f"mean_phi={state.phi_ase.mean():.6e}"
+    )
+
+
+def campaignSummary(state, *, elapsedSeconds):
+    """Return the stable, cell-centered summary used by validation campaigns."""
+    phiAse = None if state.phi_ase is None else np.asarray(state.phi_ase, dtype=np.float64)
+    betaVolume = np.asarray(state.beta_volume, dtype=np.float64)
+    elapsedSeconds = float(elapsedSeconds)
+    if not np.isfinite(elapsedSeconds) or elapsedSeconds < 0.0:
+        raise ValueError("elapsedSeconds must be finite and non-negative")
+    return {
+        "completed_steps": int(state.step),
+        "timed_out": False,
+        "finite": bool(
+            (phiAse is None or np.isfinite(phiAse).all())
+            and np.isfinite(betaVolume).all()
+        ),
+        "elapsed_seconds": elapsedSeconds,
+        "phi_ase_sum": None if phiAse is None else float(phiAse.sum(dtype=np.float64)),
+        "beta_volume_sum": float(betaVolume.sum(dtype=np.float64)),
+    }
+
+
+def writeCampaignSummary(state, path, *, elapsedSeconds):
+    """Write :func:`campaignSummary` as deterministic JSON."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(campaignSummary(state, elapsedSeconds=elapsedSeconds), indent=2) + "\n",
+        encoding="utf-8",
     )
 
 
@@ -372,6 +404,7 @@ def runExample(
     pumpRngSeed=5489,
     reportTimings=False,
     outputSteps=None,
+    enableVtk=True,
     **AseOverride,
 ):
     simulation = buildSimulation(
@@ -393,13 +426,14 @@ def runExample(
     print(f"Running simulation with backend {simulation.phi_ase.backend}")
     print(f"Using openPMD backend {simulation.phi_ase.openpmdBackend}")
     simulation.on_step(printState)
-    simulation.on_step(
-        writeVtkFields,
-        Path(vtkOutputDir),
-        absorption,
-        simulation.cross_sections,
-        medium.get("nTot").value,
-    )
+    if enableVtk:
+        simulation.on_step(
+            writeVtkFields,
+            Path(vtkOutputDir),
+            absorption,
+            simulation.cross_sections,
+            medium.get("nTot").value,
+        )
     if openPmdOutputDir is not None:
         simulation.on_step(writeParaviewState, openPmdOutputDir, absorption)
     simulation.step()
@@ -438,6 +472,13 @@ def main(argv=None):
         help="Number of outer steps with ASE. Zero disables ASE. Default: 150.",
     )
     parser.add_argument("--vtk-output-dir", type=Path, default=scriptDir)
+    parser.add_argument("--no-vtk", action="store_true", help="Disable VTK callbacks during timed campaigns")
+    parser.add_argument(
+        "--summary-json",
+        type=Path,
+        default=None,
+        help="Write the final cell-centered campaign summary as JSON",
+    )
     parser.add_argument("--openpmd-output-dir", type=Path, default=None)
     parser.add_argument(
         "--disable-pre-pump",
@@ -447,6 +488,12 @@ def main(argv=None):
     parser.add_argument("--tet4-input", type=Path, default=None)
     parser.add_argument("--phiase-only", action="store_true")
     parser.add_argument("--rng-seed", type=int, default=None)
+    parser.add_argument(
+        "--forward-ray-count",
+        type=int,
+        default=None,
+        help="Use one fixed global ASE ray count and disable adaptive refinement.",
+    )
     parser.add_argument(
         "--pump-ray-count", type=int, default=50000,
         help="Equal-power launch rays per pump source. Default: 50000.",
@@ -468,6 +515,8 @@ def main(argv=None):
     aseOverrides = {}
     if args.rng_seed is not None:
         aseOverrides["rngSeed"] = args.rng_seed
+    if args.forward_ray_count is not None:
+        aseOverrides["forwardRayCount"] = args.forward_ray_count
     if args.phiase_only:
         if args.tet4_input is None:
             parser.error("--phiase-only requires --tet4-input")
@@ -483,6 +532,7 @@ def main(argv=None):
         print(f"meanPhi: {float(phi.mean()):.17g}")
         return
 
+    started = time.monotonic()
     state = runExample(
         args.backend,
         simulation_steps=args.simulation_steps,
@@ -497,8 +547,15 @@ def main(argv=None):
         pumpRayCount=args.pump_ray_count,
         pumpRngSeed=args.pump_rng_seed,
         outputSteps=args.output_steps,
+        enableVtk=not args.no_vtk,
         **aseOverrides,
     )
+    if args.summary_json is not None:
+        writeCampaignSummary(
+            state,
+            args.summary_json,
+            elapsedSeconds=time.monotonic() - started,
+        )
     print(f"phiAse shape: {state.phi_ase.shape}")
     print(f"betaVolume shape: {state.beta_volume.shape}")
 

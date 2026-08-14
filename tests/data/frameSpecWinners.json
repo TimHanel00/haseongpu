@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "contexts": [
+    {
+      "kernel": "AccumulateForwardPhiAse",
+      "original_num_frames": 52,
+      "original_frame_extent": 512,
+      "selected_num_frames": 201,
+      "selected_frame_extent": 128
+    },
+    {
+      "kernel": "AccumulateForwardPhiAse",
+      "original_num_frames": 166,
+      "original_frame_extent": 512,
+      "selected_num_frames": 2656,
+      "selected_frame_extent": 32
+    },
+    {
+      "kernel": "AccumulateForwardPhiAseReservoir",
+      "original_num_frames": 977,
+      "original_frame_extent": 128,
+      "selected_num_frames": 3908,
+      "selected_frame_extent": 32
+    },
+    {
+      "kernel": "AccumulateReflectedForwardPhiAse",
+      "original_num_frames": 977,
+      "original_frame_extent": 128,
+      "selected_num_frames": 1954,
+      "selected_frame_extent": 64
+    },
+    {
+      "kernel": "TraceGeneralPump",
+      "original_num_frames": 97,
+      "original_frame_extent": 512,
+      "selected_num_frames": 123,
+      "selected_frame_extent": 256
+    }
+  ]
+}

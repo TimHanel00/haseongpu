@@ -8,6 +8,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include "FrameSpecPolicy.hpp"
+
 #include <concepts>
 #include <string_view>
 
@@ -246,10 +248,11 @@ namespace hase::alpakaUtils
      * Benchmark an explicitly selected one-dimensional kernel launch with
      * Alpaka events, optionally selecting its FrameSpec through alpakaTune.
      *
-     * Five legal candidates preserve the original worker coverage while using
-     * 32, 64, 128, 256, or 512 workers per frame. Tuner measurements supply
-     * search/adaptive durations; cached offline and fixed winners use the same
-     * direct start/kernel/end event pattern without host recommendation time.
+     * Independent legal grid and frame-extent axes allow the grid-stride
+     * kernels to vary physical worker coverage. Tuner measurements supply
+     * search/adaptive durations. Legacy cached winners retain HASE's direct
+     * event measurement; replayFastPath delegates terminal replay entirely to
+     * alpakaTune.
      */
     template<typename T_Queue, typename T_FrameSpec, typename T_Kernel, typename... T_Args>
     void timedEnqueue(
@@ -280,36 +283,56 @@ namespace hase::alpakaUtils
             using FrameScalar = ALPAKA_TYPEOF(frameSpec.getFrameExtents()[0u]);
             using FrameCountScalar = ALPAKA_TYPEOF(frameSpec.getNumFrames()[0u]);
 
-            auto const coverage = static_cast<std::uintmax_t>(frameSpec.getFrameExtents()[0u])
-                                  * static_cast<std::uintmax_t>(frameSpec.getNumFrames()[0u]);
+            auto const originalShape = FrameShape{
+                static_cast<std::uintmax_t>(frameSpec.getNumFrames()[0u]),
+                static_cast<std::uintmax_t>(frameSpec.getFrameExtents()[0u])};
+            auto const coverage = originalShape.workerCount();
+            auto maximumFrameExtent = originalShape.frameExtent;
+            if(coverage <= std::numeric_limits<FrameCountScalar>::max())
+            {
+                auto logicalExtent = frameSpec.getNumFrames();
+                logicalExtent[0u] = static_cast<FrameCountScalar>(coverage);
+                if constexpr(requires {
+                                 alpaka::onHost::getFrameSpec(
+                                     queue.getDevice(),
+                                     frameSpec.getExecutor(),
+                                     logicalExtent);
+                             })
+                {
+                    auto const deviceFrameSpec
+                        = alpaka::onHost::getFrameSpec(queue.getDevice(), frameSpec.getExecutor(), logicalExtent);
+                    maximumFrameExtent = std::max(
+                        maximumFrameExtent,
+                        static_cast<std::uintmax_t>(deviceFrameSpec.getFrameExtents()[0u]));
+                }
+            }
+            auto const tuningSpace = makeFrameSpecTuningSpace(originalShape, maximumFrameExtent);
             auto extentCandidates = std::vector<FrameExtents>{};
             auto frameCountCandidates = std::vector<NumFrames>{};
-            for(auto const extentValue : std::array<std::uintmax_t, 5u>{32u, 64u, 128u, 256u, 512u})
+            for(auto const extentValue : tuningSpace.frameExtents)
             {
-                if(coverage % extentValue != 0u || extentValue > std::numeric_limits<FrameScalar>::max()
-                   || coverage / extentValue > std::numeric_limits<FrameCountScalar>::max())
+                if(extentValue > std::numeric_limits<FrameScalar>::max())
                     continue;
                 auto extent = frameSpec.getFrameExtents();
-                auto frames = frameSpec.getNumFrames();
                 extent[0u] = static_cast<FrameScalar>(extentValue);
-                frames[0u] = static_cast<FrameCountScalar>(coverage / extentValue);
                 extentCandidates.push_back(extent);
+            }
+            for(auto const frameCountValue : tuningSpace.numFrames)
+            {
+                if(frameCountValue > std::numeric_limits<FrameCountScalar>::max())
+                    continue;
+                auto frames = frameSpec.getNumFrames();
+                frames[0u] = static_cast<FrameCountScalar>(frameCountValue);
                 frameCountCandidates.push_back(frames);
             }
-            if(std::ranges::find(extentCandidates, frameSpec.getFrameExtents()) == extentCandidates.end())
-                extentCandidates.push_back(frameSpec.getFrameExtents());
-            if(std::ranges::find(frameCountCandidates, frameSpec.getNumFrames()) == frameCountCandidates.end())
-                frameCountCandidates.push_back(frameSpec.getNumFrames());
 
             auto const frameExtentValues = alpakaTune::RVals<FrameExtents>{std::move(extentCandidates)};
             auto const numFrameValues = alpakaTune::RVals<NumFrames>{std::move(frameCountCandidates)};
             auto makeFrameTuning = [&]()
             {
-                return alpakaTune::constrain(
-                    alpakaTune::TunableBundle{
-                        alpakaTune::tuneFrameExtent(frameSpec, frameExtentValues),
-                        alpakaTune::tuneNumFrames(frameSpec, numFrameValues)},
-                    alpakaTune::preserveCoverage(frameSpec));
+                return alpakaTune::TunableBundle{
+                    alpakaTune::tuneFrameExtent(frameSpec, frameExtentValues),
+                    alpakaTune::tuneNumFrames(frameSpec, numFrameValues)};
             };
             using FrameTuning = ALPAKA_TYPEOF(makeFrameTuning());
             using Tuner = ALPAKA_TYPEOF(
@@ -336,19 +359,29 @@ namespace hase::alpakaUtils
             {
                 explicit TunerEntry(Device value)
                     : device{std::move(value)}
-                    , benchmarkStart{device.makeEvent(alpaka::timing::enabled)}
-                    , benchmarkEnd{device.makeEvent(alpaka::timing::enabled)}
                 {
                 }
 
+                struct BenchmarkEvents
+                {
+                    explicit BenchmarkEvents(Device& device)
+                        : start{device.makeEvent(alpaka::timing::enabled)}
+                        , end{device.makeEvent(alpaka::timing::enabled)}
+                    {
+                    }
+
+                    ALPAKA_TYPEOF(std::declval<Device&>().makeEvent(alpaka::timing::enabled)) start;
+                    ALPAKA_TYPEOF(std::declval<Device&>().makeEvent(alpaka::timing::enabled)) end;
+                };
+
                 Device device;
-                ALPAKA_TYPEOF(std::declval<Device&>().makeEvent(alpaka::timing::enabled)) benchmarkStart;
-                ALPAKA_TYPEOF(std::declval<Device&>().makeEvent(alpaka::timing::enabled)) benchmarkEnd;
+                std::optional<BenchmarkEvents> benchmarkEvents;
                 std::unique_ptr<Tuner> tuner;
                 std::optional<alpakaTune::ParameterConfiguration> replayConfiguration;
                 std::size_t replayCandidateIndex{};
                 std::optional<std::string> learnedStatus;
                 bool loadedFromCache{};
+                bool replayFastPath{};
                 std::mutex mutex;
             };
 
@@ -383,6 +416,7 @@ namespace hase::alpakaUtils
                     config.completeHistory.file = path;
                 if(auto const model = detail::optionalTimingEnvironment("HASE_ALPAKATUNE_MODEL"); !model.empty())
                     config.learnedModelFile = model;
+                entry->replayFastPath = config.replayFastPath;
                 entry->tuner = std::make_unique<Tuner>(alpakaTune::makeTuner(
                     std::move(config),
                     makeFrameTuning(),
@@ -418,13 +452,24 @@ namespace hase::alpakaUtils
             auto benchmarkRuntime = std::optional<double>{};
             auto measureDirect = [&](auto const& selectedFrameSpec)
             {
-                queue.enqueue(entry->benchmarkStart);
+                if(!entry->benchmarkEvents)
+                    entry->benchmarkEvents.emplace(entry->device);
+                queue.enqueue(entry->benchmarkEvents->start);
                 queue.enqueue(selectedFrameSpec, bundle);
-                queue.enqueue(entry->benchmarkEnd);
-                return alpaka::onHost::getElapsedTime(entry->benchmarkStart, entry->benchmarkEnd).count();
+                queue.enqueue(entry->benchmarkEvents->end);
+                return alpaka::onHost::getElapsedTime(entry->benchmarkEvents->start, entry->benchmarkEvents->end)
+                    .count();
             };
+            auto const tracePath = detail::optionalTimingEnvironment("HASE_ALPAKATUNE_TRACE");
             if(benchmarkOnly)
                 benchmarkRuntime = measureDirect(frameSpec);
+            else if(entry->replayFastPath && tracePath.empty())
+            {
+                // alpakaTune owns terminal/offline replay completely: no
+                // HASE winner cache, observation, or benchmark event pair.
+                entry->tuner->enqueue(queue, frameSpec, bundle);
+                return;
+            }
             else if(entry->replayConfiguration)
             {
                 selectedExtent = selectVector(*entry->replayConfiguration, frameExtentValues.values(), 0u);
@@ -443,7 +488,7 @@ namespace hase::alpakaUtils
                 entry->loadedFromCache = observation->loadedFromCache;
                 if(observation->runtimeSeconds)
                     benchmarkRuntime = observation->runtimeSeconds;
-                else if(observation->tuningComplete)
+                else if(observation->tuningComplete && !entry->replayFastPath)
                 {
                     // Cache the offline or terminal fixed winner selected by
                     // this unmeasured launch. Later calls use direct events.
@@ -451,7 +496,7 @@ namespace hase::alpakaUtils
                     entry->replayCandidateIndex = observation->candidateIndex;
                 }
             }
-            if(auto const tracePath = detail::optionalTimingEnvironment("HASE_ALPAKATUNE_TRACE"); !tracePath.empty())
+            if(!tracePath.empty())
             {
                 auto record = nlohmann::json::object();
                 record["kernel"] = kernelIdentity;
@@ -479,7 +524,7 @@ namespace hase::alpakaUtils
                 record["selected_coverage"] = static_cast<std::uintmax_t>(selectedFrames[0u])
                                               * static_cast<std::uintmax_t>(selectedExtent[0u]);
                 record["candidate_count"] = benchmarkOnly ? 1u : entry->tuner->info().candidateCount;
-                record["legal_candidate_count"] = frameExtentValues.size();
+                record["legal_candidate_count"] = frameExtentValues.size() * numFrameValues.size();
                 detail::timingTraceStore().stage(tracePath, record);
             }
         }
@@ -506,30 +551,30 @@ namespace hase::alpakaUtils
             {
                 auto const originalFrames = static_cast<std::uintmax_t>(frameSpec.getNumFrames()[0u]);
                 auto const originalExtent = static_cast<std::uintmax_t>(frameSpec.getFrameExtents()[0u]);
-                auto selection = std::optional<std::pair<std::uintmax_t, std::uintmax_t>>{};
+                auto selection = std::optional<FrameShape>{};
                 if(kernelIdentity == "AccumulateForwardPhiAse" && originalExtent == 512u)
                 {
                     if(originalFrames == 2u)
-                        selection = {{16u, 64u}};
+                        selection = FrameShape{16u, 64u};
                     else if(originalFrames == 5u)
-                        selection = {{80u, 32u}};
+                        selection = FrameShape{80u, 32u};
                     else if(originalFrames == 16u)
-                        selection = {{256u, 32u}};
+                        selection = FrameShape{256u, 32u};
                     else if(originalFrames == 52u)
-                        selection = {{208u, 128u}};
+                        selection = FrameShape{208u, 128u};
                     else if(originalFrames == 166u)
-                        selection = {{2656u, 32u}};
+                        selection = FrameShape{2656u, 32u};
                 }
                 else if(kernelIdentity == "TraceGeneralPump" && originalFrames == 97u && originalExtent == 512u)
-                    selection = {{194u, 256u}};
+                    selection = FrameShape{194u, 256u};
                 if(!selection)
                     throw std::runtime_error{
                         "No hand-selected FrameSpec for " + std::string{kernelIdentity} + " with original shape "
                         + std::to_string(originalFrames) + "x" + std::to_string(originalExtent)};
                 using FrameCountScalar = std::remove_cvref_t<ALPAKA_TYPEOF(selectedFrames[0u])>;
                 using FrameExtentScalar = std::remove_cvref_t<ALPAKA_TYPEOF(selectedExtent[0u])>;
-                selectedFrames[0u] = static_cast<FrameCountScalar>(selection->first);
-                selectedExtent[0u] = static_cast<FrameExtentScalar>(selection->second);
+                selectedFrames[0u] = static_cast<FrameCountScalar>(selection->numFrames);
+                selectedExtent[0u] = static_cast<FrameExtentScalar>(selection->frameExtent);
             }
             else if(frameMode != "default")
                 throw std::runtime_error{"HASE_DEVICE_TIMING_FRAME_SPECS must be 'default' or 'selected'."};
@@ -586,7 +631,11 @@ namespace hase::alpakaUtils
         }
 #else
         static_cast<void>(kernelIdentity);
+#if HASE_STATIC_FRAMESPEC_SELECTED
+        queue.enqueue(selectStaticFrameSpec(frameSpec, kernelIdentity), bundle);
+#else
         queue.enqueue(frameSpec, bundle);
+#endif
 #endif
     }
 } // namespace hase::alpakaUtils

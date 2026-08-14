@@ -665,6 +665,90 @@ def testLaserPumpCladdingCliAcceptsZeroAseSteps(monkeypatch, tmp_path):
     assert calls[-1]["kwargs"]["spectralResolution"] == 191
 
 
+def testLaserPumpCladdingCampaignSummaryUsesCellCenteredState(tmp_path):
+    state = SimpleNamespace(
+        step=7,
+        phi_ase=np.asarray([1.0, 2.5], dtype=np.float32),
+        beta_volume=np.asarray([0.25, 0.75], dtype=np.float64),
+    )
+    path = tmp_path / "nested" / "summary.json"
+
+    laserPumpCladding.writeCampaignSummary(state, path, elapsedSeconds=3.25)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "completed_steps": 7,
+        "timed_out": False,
+        "finite": True,
+        "elapsed_seconds": 3.25,
+        "phi_ase_sum": 3.5,
+        "beta_volume_sum": 1.0,
+    }
+
+
+def testLaserPumpCladdingExampleCanDisableVtk(
+    monkeypatch,
+    tmp_path,
+    smallGainMedium,
+    fakeCompiledSnapshots,
+):
+    monkeypatch.setattr(laserPumpCladding, "laserPumpCladdingMedium", lambda **kwargs: smallGainMedium)
+
+    state = laserPumpCladding.runExample(
+        simulation_steps=2,
+        pump_steps=1,
+        ase_steps=2,
+        vtkOutputDir=tmp_path,
+        enableVtk=False,
+    )
+
+    assert state.step == 2
+    assert list(tmp_path.glob("*.vtk")) == []
+
+
+def testLaserPumpCladdingCliSupportsNoVtkAndSummary(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run_example(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return SimpleNamespace(
+            step=2,
+            phi_ase=np.asarray([4.0, 5.0]),
+            beta_volume=np.asarray([0.4, 0.6]),
+        )
+
+    ticks = iter((10.0, 12.5))
+    monkeypatch.setattr(laserPumpCladding, "runExample", fake_run_example)
+    monkeypatch.setattr(laserPumpCladding.time, "monotonic", lambda: next(ticks))
+    summary = tmp_path / "summary.json"
+
+    laserPumpCladding.main(
+        [
+            "--no-vtk",
+            "--summary-json",
+            str(summary),
+            "--forward-ray-count",
+            "1000000",
+            "--simulation-steps",
+            "2",
+            "--pump-steps",
+            "2",
+            "--ase-steps",
+            "2",
+        ]
+    )
+
+    assert calls[-1]["kwargs"]["enableVtk"] is False
+    assert calls[-1]["kwargs"]["forwardRayCount"] == 1_000_000
+    assert json.loads(summary.read_text(encoding="utf-8")) == {
+        "completed_steps": 2,
+        "timed_out": False,
+        "finite": True,
+        "elapsed_seconds": 2.5,
+        "phi_ase_sum": 9.0,
+        "beta_volume_sum": 1.0,
+    }
+
+
 def testLaserPumpCladdingLauncherUsesSupportedCliOptions(monkeypatch, tmp_path):
     calls = []
 

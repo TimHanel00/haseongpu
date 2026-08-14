@@ -378,6 +378,8 @@ namespace hase::kernels::forward
             auto spectrum,
             unsigned const rngSeed) const
         {
+            // Grid-stride logical indexing keeps every ray covered exactly
+            // once when tuning changes the physical grid worker count.
             for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
                     acc,
                     alpaka::onAcc::worker::threadsInGrid,
