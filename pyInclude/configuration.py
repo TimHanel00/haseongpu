@@ -4,16 +4,16 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Declarative schema-v2 construction of public HASEonGPU Python objects."""
+"""Schema-v3 construction of the composable physical object graph."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from .geometry import GainMedium, SurfaceOptics, VolumeTopology
-from .geometry.volume import BOUND_INTERNAL, BOUND_STOP
+from hase_units import units
+from material_library import Material
+from .geometry import SurfaceOptics, VolumeTopology
 from .laser import (
-    CrossSectionData,
     PlanarPumpRelay,
     Pump,
     PumpAngularDistribution,
@@ -22,6 +22,8 @@ from .laser import (
     SurfacePumpInjector,
     UniformPumpProfile,
 )
+from .lowering import _crossSections
+from .physical import Domain, GainMedium, OpticalComponent
 from .simulation import PhiASE
 from .timeIntegration import (
     ExplicitEuler,
@@ -34,12 +36,11 @@ from .timeIntegration import (
 )
 
 
-_REMOVED_OPTICS_FIELDS = {
-    "refractive_indices",
-    "reflectivities",
-    "surface_reflectivity",
-    "surface_refractive_index_inside",
-    "surface_refractive_index_outside",
+_REGISTRY_KEYS = {
+    Material: "materials",
+    Domain: "domains",
+    OpticalComponent: "optical_components",
+    GainMedium: "gain_media",
 }
 
 
@@ -49,107 +50,169 @@ def _mapping(value, path):
     return dict(value)
 
 
-def _reject_unknown(mapping, allowed, path):
+def _rejectUnknown(mapping, allowed, path):
     unknown = sorted(set(mapping) - set(allowed))
     if unknown:
         raise ValueError(f"unsupported {path} options: {unknown}")
 
 
-def _one_of(mapping, names, path):
+def _oneOf(mapping, names, path):
     selected = [name for name in names if name in mapping]
     if len(selected) != 1:
         raise ValueError(f"{path} requires exactly one of: {', '.join(names)}")
     return selected[0]
 
 
-def _resolve_path(root, value):
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else root / path
-
-
-def _load_yaml(filename):
+def _loadYaml(filename):
     try:
         import yaml
     except ImportError as exc:
-        raise ImportError("simulation YAML requires PyYAML") from exc
+        raise ImportError("schema-v3 YAML requires PyYAML") from exc
     path = Path(filename).expanduser().resolve()
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     if not isinstance(data, dict):
-        raise ValueError(f"simulation config '{path}' must contain a mapping")
-    if data.get("schema_version") != 2:
-        raise ValueError("simulation YAML requires schema_version: 2")
-    _reject_unknown(data, {"schema_version", "cross_sections", "simulation"}, "top-level")
+        raise ValueError(f"configuration {path} must contain a mapping")
+    if data.get("schema_version") != 3:
+        raise ValueError("configuration requires schema_version: 3")
+    allowed = {
+        "schema_version",
+        "materials",
+        "topologies",
+        "domains",
+        "optical_components",
+        "gain_media",
+        "simulation",
+    }
+    _rejectUnknown(data, allowed, "top-level")
     return path, data
 
 
-def _cross_section_data(spec, root, path):
-    spec = _mapping(spec, path)
-    form = _one_of(spec, ("from_directory", "monochromatic", "inline"), path)
-    _reject_unknown(spec, {form}, path)
-    values = spec[form]
-    if form == "from_directory":
-        if isinstance(values, (str, Path)):
-            directory = values
-            resolution = 1000
-        else:
-            values = _mapping(values, f"{path}.from_directory")
-            _reject_unknown(values, {"path", "resolution"}, f"{path}.from_directory")
-            directory = values["path"]
-            resolution = values.get("resolution", 1000)
-        return CrossSectionData.fromDirectory(_resolve_path(root, directory), resolution=resolution)
-    values = _mapping(values, f"{path}.{form}")
-    if form == "monochromatic":
-        _reject_unknown(
-            values,
-            {"wavelength", "cross_section_absorption", "cross_section_emission"},
-            f"{path}.monochromatic",
+class _YamlContext:
+    def __init__(self, filename, **injected):
+        self.path, self.data = _loadYaml(filename)
+        self.root = self.path.parent
+        self.cache = {
+            "materials": dict(injected.get("materials", {})),
+            "topologies": dict(injected.get("topologies", {})),
+            "domains": dict(injected.get("domains", {})),
+            "optical_components": dict(
+                injected.get("opticalComponents", injected.get("optical_components", {}))
+            ),
+            "gain_media": dict(injected.get("gainMedia", injected.get("gain_media", {}))),
+        }
+        unknown = sorted(
+            set(injected)
+            - {"materials", "topologies", "domains", "opticalComponents", "optical_components", "gainMedia", "gain_media"}
         )
-        return CrossSectionData.monochromatic(
-            wavelength=values["wavelength"],
-            crossSectionAbsorption=values["cross_section_absorption"],
-            crossSectionEmission=values["cross_section_emission"],
+        if unknown:
+            raise TypeError(f"unknown injected object registries: {unknown}")
+        self._resolving = []
+
+    def resolve(self, registry, name):
+        name = str(name)
+        if name in self.cache[registry]:
+            return self.cache[registry][name]
+        marker = (registry, name)
+        if marker in self._resolving:
+            chain = " -> ".join(f"{kind}.{item}" for kind, item in (*self._resolving, marker))
+            raise ValueError(f"cyclic YAML reference: {chain}")
+        section = _mapping(self.data.get(registry, {}), registry)
+        if name not in section:
+            raise ValueError(f"unknown {registry} reference: {name}")
+        self._resolving.append(marker)
+        try:
+            builders = {
+                "materials": self._material,
+                "topologies": self._topology,
+                "domains": self._domain,
+                "optical_components": self._component,
+                "gain_media": self._gainMedium,
+            }
+            result = builders[registry](name, section[name])
+            self.cache[registry][name] = result
+            return result
+        finally:
+            self._resolving.pop()
+
+    def _path(self, value):
+        path = Path(value).expanduser()
+        return path if path.is_absolute() else self.root / path
+
+    def _material(self, registryName, value):
+        path = f"materials.{registryName}"
+        spec = _mapping(value, path)
+        allowed = {
+            "from_hdf5",
+            "temperature",
+            "active_ion_density",
+            "interpolation",
+            "spectral_resolution",
+            "name",
+            "optical_axis",
+            "refractive_index",
+            "fluorescence_lifetime",
+            "bulk_attenuation",
+            "absorption_coefficient",
+        }
+        _rejectUnknown(spec, allowed, path)
+        source = _mapping(spec.get("from_hdf5"), f"{path}.from_hdf5")
+        _rejectUnknown(source, {"path", "key"}, f"{path}.from_hdf5")
+        material = Material.fromHdf5(
+            self._path(source["path"]),
+            key=source.get("key"),
+            temperature=(None if "temperature" not in spec else float(spec["temperature"]) * units.K),
+            activeIonDensity=float(spec.get("active_ion_density", 0.0)) / units.cm**3,
+            spectralResolution=spec.get("spectral_resolution"),
+            interpolation=spec.get("interpolation", "exact"),
+            name=spec.get("name", registryName),
+            opticalAxis=spec.get("optical_axis"),
         )
-    _reject_unknown(
-        values,
-        {
-            "wavelengths_absorption",
-            "cross_section_absorption",
-            "wavelengths_emission",
-            "cross_section_emission",
-            "resolution",
-        },
-        f"{path}.inline",
-    )
-    return CrossSectionData(
-        wavelengthsAbsorption=values["wavelengths_absorption"],
-        crossSectionAbsorption=values["cross_section_absorption"],
-        wavelengthsEmission=values["wavelengths_emission"],
-        crossSectionEmission=values["cross_section_emission"],
-        resolution=values.get("resolution", 1),
-    )
+        if "refractive_index" in spec:
+            material.refractiveIndex = float(spec["refractive_index"])
+        if "fluorescence_lifetime" in spec:
+            material.fluorescenceLifetime = float(spec["fluorescence_lifetime"]) * units.s
+        attenuationNames = {
+            name for name in ("bulk_attenuation", "absorption_coefficient") if name in spec
+        }
+        if len(attenuationNames) > 1:
+            raise ValueError(
+                f"{path} provides both bulk_attenuation and absorption_coefficient"
+            )
+        if attenuationNames:
+            name = attenuationNames.pop()
+            material.bulkAttenuation = float(spec[name]) / units.cm
+        return material.validate()
 
+    def _topologyValue(self, value, path):
+        if isinstance(value, str):
+            return self.resolve("topologies", value)
+        spec = _mapping(value, path)
+        form = _oneOf(spec, ("from_file", "from_tetrahedra"), path)
+        _rejectUnknown(spec, {form}, path)
+        values = _mapping(spec[form], f"{path}.{form}")
+        if form == "from_file":
+            _rejectUnknown(values, {"path", "format", "boundary_default", "mesh_size"}, f"{path}.{form}")
+            kwargs = {}
+            if values.get("boundary_default") is not None:
+                from .geometry.volume import BOUND_INTERNAL, BOUND_STOP
 
-def _load_cross_sections(spec, root):
-    spec = _mapping(spec, "cross_sections")
-    if not spec:
-        raise ValueError("cross_sections must define at least one CrossSectionData object")
-    return {
-        str(name): _cross_section_data(value, root, f"cross_sections.{name}")
-        for name, value in spec.items()
-    }
-
-
-def _topology(spec, root):
-    spec = _mapping(spec, "simulation.gain_medium.topology")
-    form = _one_of(spec, ("from_file", "from_tetrahedra"), "simulation.gain_medium.topology")
-    _reject_unknown(spec, {form}, "simulation.gain_medium.topology")
-    values = _mapping(spec[form], f"simulation.gain_medium.topology.{form}")
-    if form == "from_tetrahedra":
-        _reject_unknown(
+                kwargs["boundaryDefault"] = {
+                    "stop": BOUND_STOP,
+                    "internal": BOUND_INTERNAL,
+                }.get(values["boundary_default"], values["boundary_default"])
+            if values.get("mesh_size") is not None:
+                kwargs["meshSize"] = values["mesh_size"]
+            meshFormat = values.get("format")
+            return VolumeTopology.fromFile(
+                self._path(values["path"]),
+                format=None if meshFormat == "auto" else meshFormat,
+                **kwargs,
+            )
+        _rejectUnknown(
             values,
             {"points", "cell_point_indices", "cell_domains", "face_boundaries", "metadata"},
-            "simulation.gain_medium.topology.from_tetrahedra",
+            f"{path}.{form}",
         )
         return VolumeTopology.fromTetrahedra(
             values["points"],
@@ -159,123 +222,128 @@ def _topology(spec, root):
             metadata=values.get("metadata"),
         )
 
-    _reject_unknown(
-        values,
-        {"path", "format", "boundary_default", "mesh_size"},
-        "simulation.gain_medium.topology.from_file",
-    )
-    path = _resolve_path(root, values["path"])
-    mesh_format = values.get("format")
-    if mesh_format == "auto":
-        mesh_format = None
-    kwargs = {}
-    if "boundary_default" in values:
-        boundary = values["boundary_default"]
-        boundary = {"stop": BOUND_STOP, "internal": BOUND_INTERNAL}.get(boundary, boundary)
-        kwargs["boundaryDefault"] = boundary
-    if "mesh_size" in values and values["mesh_size"] is not None:
-        kwargs["meshSize"] = values["mesh_size"]
-    return VolumeTopology.fromFile(path, format=mesh_format, **kwargs)
+    def _topology(self, name, value):
+        return self._topologyValue(value, f"topologies.{name}")
 
+    def _domainOperand(self, value, path):
+        if isinstance(value, str):
+            return self.resolve("domains", value)
+        return self._domain(path, value, anonymous=True)
 
-def _assignment(spec, *, surface):
-    spec = _mapping(spec, "surface domain assignment" if surface else "cell domain assignment")
-    aliases = {
-        "cell_indices": "cellIndices",
-        "face_indices": "faceIndices",
-        "gmsh_name": "gmshName",
-        "gmsh_tag": "gmshTag",
-        "allow_internal": "allowInternal",
-    }
-    allowed = {"domain", "name", "where", "cell_indices", "gmsh_name", "gmsh_tag"}
-    if surface:
-        allowed = {"domain", "name", "where", "face_indices", "gmsh_name", "gmsh_tag", "allow_internal"}
-    _reject_unknown(spec, allowed, "surface domain assignment" if surface else "cell domain assignment")
-    return {aliases.get(name, name): value for name, value in spec.items()}
-
-
-def _gain_medium(spec, root):
-    spec = _mapping(spec, "simulation.gain_medium")
-    _reject_unknown(
-        spec,
-        {"from_vtk", "topology", "cell_domains", "surface_domains", "properties", "surface_optics", "custom_fields"},
-        "simulation.gain_medium",
-    )
-    if ("from_vtk" in spec) == ("topology" in spec):
-        raise ValueError("simulation.gain_medium requires exactly one of from_vtk or topology")
-    medium = (
-        GainMedium.fromVtk(_resolve_path(root, spec["from_vtk"]))
-        if "from_vtk" in spec
-        else GainMedium(_topology(spec["topology"], root))
-    )
-    if "cell_domains" in spec:
-        assignments = [_assignment(value, surface=False) for value in spec["cell_domains"]]
-        medium.topology = medium.topology.withCellDomains(assignments)
-    if "surface_domains" in spec:
-        assignments = [_assignment(value, surface=True) for value in spec["surface_domains"]]
-        medium.topology = medium.topology.withSurfaceDomains(assignments)
-
-    properties = _mapping(spec.get("properties", {}), "simulation.gain_medium.properties")
-    removed = sorted(set(properties) & _REMOVED_OPTICS_FIELDS)
-    if removed:
-        raise ValueError(
-            "raw optics fields are not public schema-v2 properties; configure surface_optics instead: "
-            + ", ".join(removed)
+    def _domain(self, name, value, anonymous=False):
+        path = name if anonymous else f"domains.{name}"
+        spec = _mapping(value, path)
+        forms = (
+            "from_gmsh",
+            "where",
+            "topology",
+            "component",
+            "exterior_cells",
+            "exterior_tets",
+            "union",
+            "difference",
+            "boundary",
         )
-    property_names = {
-        "beta_volume": "betaVolume",
-        "cladding_cell_types": "claddingCellTypes",
-        "n_tot": "nTot",
-        "fluorescence_lifetime": "crystalTFluo",
-        "cladding_number": "claddingNumber",
-        "cladding_absorption": "claddingAbsorption",
-    }
-    _reject_unknown(properties, property_names, "simulation.gain_medium.properties")
-    medium.withPhysicalProperties(**{property_names[name]: value for name, value in properties.items()})
-
-    optics = _mapping(spec.get("surface_optics", {}), "simulation.gain_medium.surface_optics")
-    if optics:
-        optics_by_domain = {}
-        for domain, value in optics.items():
-            value = _mapping(value, f"simulation.gain_medium.surface_optics.{domain}")
-            _reject_unknown(
-                value,
-                {"reflectivity", "n_inside", "n_outside"},
-                f"simulation.gain_medium.surface_optics.{domain}",
+        form = _oneOf(spec, forms, path)
+        _rejectUnknown(spec, {form}, path)
+        data = spec[form]
+        if form == "from_gmsh":
+            data = _mapping(data, f"{path}.from_gmsh")
+            _rejectUnknown(data, {"topology", "physical_group", "entity_kind"}, f"{path}.from_gmsh")
+            return Domain.fromGmsh(
+                self.resolve("topologies", data["topology"]),
+                data["physical_group"],
+                entityKind=data.get("entity_kind"),
             )
-            optics_by_domain[domain] = SurfaceOptics(**value)
-        medium.with_surface_optics(
-            optics_by_domain
+        if form == "where":
+            data = _mapping(data, f"{path}.where")
+            _rejectUnknown(data, {"topology", "selector", "entity_kind"}, f"{path}.where")
+            return Domain.where(
+                self.resolve("topologies", data["topology"]),
+                data["selector"],
+                entityKind=data.get("entity_kind", "surface"),
+            )
+        if form == "topology":
+            if isinstance(data, str):
+                topology, entityKind = self.resolve("topologies", data), "volume"
+            else:
+                data = _mapping(data, f"{path}.topology")
+                _rejectUnknown(data, {"name", "entity_kind"}, f"{path}.topology")
+                topology, entityKind = self.resolve("topologies", data["name"]), data.get("entity_kind", "volume")
+            return Domain.fromTopology(topology, entityKind=entityKind)
+        if form == "component":
+            return self.resolve("optical_components", data).domain
+        if form in {"exterior_cells", "exterior_tets"}:
+            return self.resolve("optical_components", data).exteriorCells
+        if form == "boundary":
+            return self._domainOperand(data, f"{path}.boundary").boundary()
+        if form == "union":
+            if not isinstance(data, list) or not data:
+                raise ValueError(f"{path}.union must be a non-empty sequence")
+            return Domain(self._domainOperand(item, f"{path}.union") for item in data)
+        if not isinstance(data, list) or len(data) != 2:
+            raise ValueError(f"{path}.difference must contain exactly two operands")
+        return self._domainOperand(data[0], f"{path}.difference") - self._domainOperand(
+            data[1], f"{path}.difference"
         )
-    custom_fields = spec.get("custom_fields", [])
-    if not isinstance(custom_fields, list):
-        raise ValueError("simulation.gain_medium.custom_fields must be a sequence")
-    aliases = {
-        "unit_si": "unitSI",
-        "unit_dimension": "unitDimension",
-        "backend_required": "backendRequired",
-    }
-    for index, field in enumerate(custom_fields):
-        field = _mapping(field, f"simulation.gain_medium.custom_fields[{index}]")
-        _reject_unknown(
-            field,
-            {"name", "entity", "values", "dtype", "unit", "unit_si", "unit_dimension", "dynamic", "backend_required"},
-            f"simulation.gain_medium.custom_fields[{index}]",
+
+    def _component(self, registryName, value):
+        path = f"optical_components.{registryName}"
+        spec = _mapping(value, path)
+        allowed = {"material", "domain", "name", "optical_role", "surface_optics"}
+        _rejectUnknown(spec, allowed, path)
+        if "domain" not in spec:
+            raise ValueError(f"{path} requires domain")
+        kwargs = {
+            "material": self.resolve("materials", spec["material"]),
+            "name": spec.get("name", registryName),
+            "opticalRole": spec.get("optical_role"),
+            "domain": self.resolve("domains", spec["domain"]),
+        }
+        component = OpticalComponent(**kwargs)
+        optics = spec.get("surface_optics", [])
+        if not isinstance(optics, list):
+            raise ValueError(f"{path}.surface_optics must be a sequence")
+        for index, assignment in enumerate(optics):
+            assignment = _mapping(assignment, f"{path}.surface_optics[{index}]")
+            _rejectUnknown(
+                assignment,
+                {
+                    "domain",
+                    "reflectivity",
+                    "interior_refractive_index",
+                    "exterior_refractive_index",
+                },
+                f"{path}.surface_optics[{index}]",
+            )
+            component.assignSurfaceOptics(
+                self.resolve("domains", assignment["domain"]),
+                SurfaceOptics(
+                    reflectivity=float(assignment.get("reflectivity", 0.0)),
+                    n_inside=float(
+                        assignment.get("interior_refractive_index", component.material.refractiveIndex)
+                    ),
+                    n_outside=float(assignment.get("exterior_refractive_index", 1.0)),
+                ),
+            )
+        return component
+
+    def _gainMedium(self, registryName, value):
+        path = f"gain_media.{registryName}"
+        spec = _mapping(value, path)
+        _rejectUnknown(spec, {"components", "name"}, path)
+        components = spec.get("components")
+        if not isinstance(components, list) or not components:
+            raise ValueError(f"{path}.components must be a non-empty sequence")
+        medium = GainMedium(
+            [self.resolve("optical_components", name) for name in components],
+            name=spec.get("name", registryName),
         )
-        name = field.pop("name")
-        medium.defineField(name, **{aliases.get(key, key): value for key, value in field.items()})
-    return medium
+        return medium
 
 
-def _phi_ase(spec, cross_sections):
+def _phiAse(spec, spectra):
     spec = _mapping(spec, "simulation.phi_ase")
-    reference = spec.pop("cross_sections", None)
-    if reference is None:
-        raise ValueError("simulation.phi_ase.cross_sections is required")
-    try:
-        spectra = cross_sections[str(reference)]
-    except KeyError as exc:
-        raise ValueError(f"unknown cross_sections reference: {reference}") from exc
     aliases = {
         "propagation_mode": "propagationMode",
         "min_rays": "minRays",
@@ -296,32 +364,36 @@ def _phi_ase(spec, cross_sections):
         "max_sample_range": "maxSampleRange",
     }
     unchanged = {"repetitions", "monochromatic", "backend", "ase_steps"}
-    _reject_unknown(spec, set(aliases) | unchanged, "simulation.phi_ase")
+    _rejectUnknown(spec, set(aliases) | unchanged, "simulation.phi_ase")
     values = {aliases.get(name, name): value for name, value in spec.items()}
-    return PhiASE(crossSections=spectra, spectralProperties=spectra, **values), spectra
+    return PhiASE(crossSections=spectra, spectralProperties=spectra, **values)
 
 
-def _pump_spectrum(spec):
+def _pumpSpectrum(spec):
     spec = _mapping(spec, "pump.spectrum")
     if "monochromatic" in spec:
-        _reject_unknown(spec, {"monochromatic"}, "pump.spectrum")
+        _rejectUnknown(spec, {"monochromatic"}, "pump.spectrum")
         return PumpSpectrum.monochromatic(spec["monochromatic"])
-    _reject_unknown(spec, {"wavelengths", "weights"}, "pump.spectrum")
+    _rejectUnknown(spec, {"wavelengths", "weights"}, "pump.spectrum")
     return PumpSpectrum(spec["wavelengths"], spec["weights"])
 
 
-def _angular_distribution(spec):
+def _angularDistribution(spec):
     spec = _mapping(spec, "pump.angular_distribution")
-    form = _one_of(spec, ("collimated", "uniform_cone", "discrete"), "pump.angular_distribution")
-    _reject_unknown(spec, {form}, "pump.angular_distribution")
+    form = _oneOf(spec, ("collimated", "uniform_cone", "discrete"), "pump.angular_distribution")
+    _rejectUnknown(spec, {form}, "pump.angular_distribution")
     values = _mapping(spec[form], f"pump.angular_distribution.{form}")
     if form == "collimated":
-        _reject_unknown(values, set(), "pump.angular_distribution.collimated")
+        _rejectUnknown(values, set(), "pump.angular_distribution.collimated")
         return PumpAngularDistribution.collimated()
     if form == "uniform_cone":
-        _reject_unknown(values, {"half_angle", "polar_samples", "azimuthal_samples"}, "pump.angular_distribution.uniform_cone")
-        return PumpAngularDistribution.uniform_cone(**values)
-    _reject_unknown(values, {"polar_angles", "azimuthal_angles", "weights"}, "pump.angular_distribution.discrete")
+        _rejectUnknown(values, {"half_angle", "polar_samples", "azimuthal_samples"}, "pump.angular_distribution.uniform_cone")
+        return PumpAngularDistribution.uniformCone(
+            values["half_angle"],
+            polarSamples=values.get("polar_samples", 8),
+            azimuthalSamples=values.get("azimuthal_samples", 16),
+        )
+    _rejectUnknown(values, {"polar_angles", "azimuthal_angles", "weights"}, "pump.angular_distribution.discrete")
     return PumpAngularDistribution(**values)
 
 
@@ -329,62 +401,53 @@ def _profile(spec):
     spec = _mapping(spec, "pump.profile")
     kind = spec.pop("kind", None)
     if kind == "uniform":
-        _reject_unknown(spec, set(), "pump.profile")
+        _rejectUnknown(spec, set(), "pump.profile")
         return UniformPumpProfile()
     if kind != "super_gaussian":
         raise ValueError("pump.profile.kind must be 'uniform' or 'super_gaussian'")
-    _reject_unknown(spec, {"radius_u", "radius_v", "exponent", "center", "axis_u", "axis_v"}, "pump.profile")
+    _rejectUnknown(spec, {"radius_u", "radius_v", "exponent", "center", "axis_u", "axis_v"}, "pump.profile")
     return SuperGaussianPumpProfile(**spec)
 
 
-def _pump(spec, cross_sections):
+def _pump(spec, context):
     spec = _mapping(spec, "simulation.pumps[]")
-    _reject_unknown(
-        spec,
-        {
-            "name", "total_power", "cross_sections", "ray_count", "pump_steps", "rng_seed",
-            "spectrum", "angular_distribution", "profile", "injection", "relays",
-        },
-        "simulation.pumps[]",
-    )
-    reference = str(spec["cross_sections"])
-    if reference not in cross_sections:
-        raise ValueError(f"unknown cross_sections reference: {reference}")
+    allowed = {
+        "name", "total_power", "ray_count", "pump_steps", "rng_seed", "spectrum",
+        "angular_distribution", "profile", "injection", "relays",
+    }
+    _rejectUnknown(spec, allowed, "simulation.pumps[]")
     pump = Pump(
         name=spec.get("name"),
         total_power=spec["total_power"],
         ray_count=spec["ray_count"],
         pump_steps=spec.get("pump_steps"),
         rng_seed=spec.get("rng_seed", 5489),
-        cross_sections=cross_sections[reference],
-        spectrum=_pump_spectrum(spec["spectrum"]),
-        angular_distribution=_angular_distribution(
-            spec.get("angular_distribution", {"collimated": {}})
-        ),
+        spectrum=_pumpSpectrum(spec["spectrum"]),
+        angular_distribution=_angularDistribution(spec.get("angular_distribution", {"collimated": {}})),
         profile=_profile(spec.get("profile", {"kind": "uniform"})),
     )
     injection = _mapping(spec["injection"], "pump.injection")
-    _reject_unknown(injection, {"surface_domains"}, "pump.injection")
+    _rejectUnknown(injection, {"domain"}, "pump.injection")
+    injector = SurfacePumpInjector(context.resolve("domains", injection["domain"]))
     relays = []
-    relay_keys = {
-        "exit_domains",
-        "entry_domains",
-        "flip_u",
-        "flip_v",
-        "rotation",
-        "offset",
-        "tilt",
-        "magnification",
-        "transmission",
+    relayKeys = {
+        "exit_domain", "entry_domain", "flip_u", "flip_v", "rotation", "offset",
+        "tilt", "magnification", "transmission",
     }
-    for relay in spec.get("relays", []):
-        relay = _mapping(relay, "pump.relays[]")
-        _reject_unknown(relay, relay_keys, "pump.relays[]")
-        relays.append(PlanarPumpRelay(**relay))
-    return pump, SurfacePumpInjector(injection["surface_domains"]), tuple(relays)
+    for value in spec.get("relays", []):
+        value = _mapping(value, "pump.relays[]")
+        _rejectUnknown(value, relayKeys, "pump.relays[]")
+        relays.append(
+            PlanarPumpRelay(
+                context.resolve("domains", value.pop("exit_domain")),
+                context.resolve("domains", value.pop("entry_domain")),
+                **value,
+            )
+        )
+    return pump, injector, tuple(relays)
 
 
-def _time_integrator(spec):
+def _timeIntegrator(spec):
     spec = _mapping(spec, "simulation.time_integrator")
     method = spec.pop("method", None)
     classes = {
@@ -399,20 +462,30 @@ def _time_integrator(spec):
     if method not in classes:
         raise ValueError("unsupported simulation.time_integrator.method")
     if method == "implicit_euler":
-        _reject_unknown(spec, {"iterations", "tolerance"}, "simulation.time_integrator")
+        _rejectUnknown(spec, {"iterations", "tolerance"}, "simulation.time_integrator")
         return ImplicitEuler(**spec)
-    _reject_unknown(spec, set(), "simulation.time_integrator")
+    _rejectUnknown(spec, set(), "simulation.time_integrator")
     return classes[method]()
 
 
-def simulation_from_yaml(filename, *, simulation_cls):
-    """Construct one ``Simulation`` from schema-v2 YAML without executing it."""
-    path, data = _load_yaml(filename)
-    root = path.parent
-    cross_sections = _load_cross_sections(data.get("cross_sections", {}), root)
-    spec = _mapping(data.get("simulation"), "simulation")
+def objectFromYaml(cls, filename, name, **objects):
+    """Resolve only one named major primitive from schema-v3 YAML."""
+    try:
+        registry = _REGISTRY_KEYS[cls]
+    except KeyError as exc:
+        raise TypeError(f"{cls.__name__}.fromYaml is not a schema-v3 major primitive") from exc
+    return _YamlContext(filename, **objects).resolve(registry, name)
+
+
+def simulationFromYaml(filename, *, simulationCls, **objects):
+    """Construct the complete schema-v3 simulation graph without executing it."""
+    context = _YamlContext(filename, **objects)
+    spec = _mapping(context.data.get("simulation"), "simulation")
     allowed = {
+        "optical_components",
         "gain_medium",
+        "exterior_surface",
+        "initial_excitation",
         "phi_ase",
         "pumps",
         "time_integrator",
@@ -426,31 +499,56 @@ def simulation_from_yaml(filename, *, simulation_cls):
         "output_fields",
         "control_fields",
     }
-    _reject_unknown(spec, allowed, "simulation")
+    _rejectUnknown(spec, allowed, "simulation")
     if "simulation_steps" in spec and "max_time" in spec:
-        raise ValueError("simulation configures at most one of: simulation_steps, max_time")
-    medium = _gain_medium(spec["gain_medium"], root)
-    phi_ase, spectra = _phi_ase(spec["phi_ase"], cross_sections)
-    mode = str(spec.get("execution_mode", "autonomous")).replace("_", "-")
-    simulation = simulation_cls(
-        gain_medium=medium,
-        phi_ase=phi_ase,
-        time_integrator=_time_integrator(spec["time_integrator"]),
-        time_step_size=spec["time_step_size"],
-        cross_sections=spectra,
-        simulation_steps=spec.get("simulation_steps"),
-        max_time=spec.get("max_time"),
-        pre_pump=spec.get("pre_pump", False),
-        report_timings=spec.get("report_timings", False),
-        execution_mode=mode,
-        output_steps=spec.get("output_steps"),
-        output_fields=spec.get("output_fields"),
-        control_fields=spec.get("control_fields", ()),
+        raise ValueError("simulation configures at most one of simulation_steps and max_time")
+    componentNames = spec.get("optical_components")
+    if not isinstance(componentNames, list) or not componentNames:
+        raise ValueError("simulation.optical_components must be a non-empty sequence")
+    components = [context.resolve("optical_components", name) for name in componentNames]
+    medium = context.resolve("gain_media", spec["gain_medium"])
+    material = medium.components[0].material
+    spectra = _crossSections(material)
+    excitationSpec = spec.get("initial_excitation", {"value": 0.0})
+    excitationSpec = _mapping(excitationSpec, "simulation.initial_excitation")
+    form = _oneOf(excitationSpec, ("value", "domains"), "simulation.initial_excitation")
+    _rejectUnknown(excitationSpec, {form}, "simulation.initial_excitation")
+    if form == "value":
+        excitation = excitationSpec["value"]
+    else:
+        assignments = excitationSpec["domains"]
+        if not isinstance(assignments, list) or not assignments:
+            raise ValueError("simulation.initial_excitation.domains must be a non-empty sequence")
+        excitation = {}
+        for index, assignment in enumerate(assignments):
+            assignment = _mapping(assignment, f"simulation.initial_excitation.domains[{index}]")
+            _rejectUnknown(assignment, {"domain", "value"}, f"simulation.initial_excitation.domains[{index}]")
+            excitation[context.resolve("domains", assignment["domain"])] = assignment["value"]
+    simulation = simulationCls(
+        opticalComponents=components,
+        gainMedium=medium,
+        exteriorSurface=(
+            None
+            if spec.get("exterior_surface") is None
+            else context.resolve("domains", spec["exterior_surface"])
+        ),
+        initialExcitation=excitation,
+        phiASE=_phiAse(spec["phi_ase"], spectra),
+        timeIntegrator=_timeIntegrator(spec["time_integrator"]),
+        timeStepSize=spec["time_step_size"],
+        simulationSteps=spec.get("simulation_steps"),
+        maxTime=spec.get("max_time"),
+        prePump=spec.get("pre_pump", False),
+        reportTimings=spec.get("report_timings", False),
+        executionMode=str(spec.get("execution_mode", "autonomous")).replace("_", "-"),
+        outputSteps=spec.get("output_steps"),
+        outputFields=spec.get("output_fields"),
+        controlFields=spec.get("control_fields", ()),
     )
-    pumps = spec.get("pumps", [])
-    if not pumps:
-        raise ValueError("simulation.pumps must contain at least one Pump registration")
-    for pump_spec in pumps:
-        pump, injection, relays = _pump(pump_spec, cross_sections)
-        simulation.add_pump(pump, injection_method=injection, relays=relays)
+    for pumpSpec in spec.get("pumps", []):
+        pump, injector, relays = _pump(pumpSpec, context)
+        simulation.addPump(pump, injector, relays=relays)
     return simulation
+
+
+__all__ = ["objectFromYaml", "simulationFromYaml"]

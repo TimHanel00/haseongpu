@@ -1,103 +1,90 @@
-Python Interface Guide
+Python interface guide
 ======================
 
-The Python interface describes a simulation as a graph of physical and
-numerical objects. Python assembles that graph; the compiled C++/Alpaka runtime
-performs pump transport, ASE transport, and time integration. Current forward
-simulations use an explicit Tet4 ``VolumeTopology`` and one evolving excitation
-value per cell.
-
-The :doc:`laserPumpCladding tutorial <laserPumpCladding>` shows these objects in
-one runnable workflow. This guide explains how the pieces relate and links to
-the page that owns each concept. Generated signatures and complete member lists
-are in the :doc:`Python API Reference <pythonAPI>`.
+The Python frontend separates material data, geometry, physical composition,
+and numerical execution. The compiled C++/Alpaka runtime receives a lowered
+representation of that graph; backend fields are not the public construction
+API.
 
 Object model
 ------------
 
-The setup proceeds from geometry to physical state and then to solvers:
+Five types define the physical graph:
 
-#. ``VolumeTopology`` owns points, Tet4 connectivity, derived geometry, and
-   named cell and surface domains.
-#. ``GainMedium`` combines that topology with excitation, material constants,
-   cladding fields, and boundary optics.
-#. ``CrossSectionData`` supplies wavelength-dependent absorption and emission
-   cross sections.
-#. ``Pump`` describes a physical source. ``SurfacePumpInjector`` and optional
-   ``PlanarPumpRelay`` objects place that source in the geometry. Each pump owns
-   its ray count, RNG seed, and active outer steps.
-#. ``PhiASE`` controls the ASE Monte Carlo estimator and its compute and
-   transport settings.
-#. ``Simulation`` combines those objects with a time integrator and returns one
-   ``TimeStepState`` snapshot for each selected output step. With no explicit
-   ``output_steps`` schedule, every completed step is selected.
+``Material``
+   A mutable optical state resolved at one temperature. Materials carry
+   refractive index, optional passive bulk attenuation, fluorescence lifetime,
+   active-ion density, optical axis, metadata, and any absorption/emission
+   spectra used by ASE and pump transport.
 
-A compact assembly has this shape:
+``OpticalComponent``
+   One physical object: a volume ``Domain`` combined with one ``Material``.
+   Components own their boundary-optics assignments.
+
+``GainMedium``
+   The active subset of the simulation's optical components. Passive cladding
+   remains an ``OpticalComponent`` but is not placed in this container.
+
+``Domain``
+   An immutable typed region of volume cells or faces. Its frontend operations
+   are independent of the concrete cell type and support union (``+``),
+   difference (``-``), and boundary extraction.
+
+``Simulation``
+   The complete graph plus excitation state, pumps, ASE controls, time
+   integration, and execution controls.
+
+A material-library record is resolved before it enters this graph:
+
+.. code-block:: text
+
+   MaterialLibrary --resolve--> Material --------+
+                                                  +--> OpticalComponent --+--> Simulation
+   mesh implementation -----------> Domain ------+          |             |
+                                                            +--> GainMedium-+
+
+A compact programmatic graph looks like this:
 
 .. code-block:: python
 
-   import numpy as np
    from HASEonGPU import (
-       CrossSectionData, FrozenPhiAseRungeKutta4, GainMedium,
-       PhiASE, Pump, PumpSpectrum, Simulation,
-       SurfacePumpInjector, VolumeTopology,
+       Domain, ExplicitEuler, GainMedium, OpticalComponent, PhiASE, Simulation,
+       VolumeTopology, units,
    )
+   from material_library import loadBuiltinMaterials
 
-   pump_cross_sections = ...
-   write_state = ...
-
-   topology = VolumeTopology.fromFile("crystal.msh")
-   medium = GainMedium(topology).withPhysicalProperties(
-       betaVolume=np.zeros(topology.numberOfCells),
-       nTot=2.776e20,
-       crystalTFluo=9.41e-4,
+   material = loadBuiltinMaterials().resolve(
+       "YbYAG",
+       temperature=293.15 * units.K,
+       activeIonDensity=2.776e20 / units.cm**3,
    )
-
-   spectra = CrossSectionData.fromDirectory("spectra", resolution=1000)
-   phi_ase = PhiASE.fromYaml(
-       "phiase.yaml", spectralProperties=spectra, ase_steps=150
-   )
-   pump = Pump(
-       total_power=16_000.0,
-       spectrum=PumpSpectrum.monochromatic(940e-9),
-       cross_sections=pump_cross_sections,
-       ray_count=50_000,
-       pump_steps=50,
-       rng_seed=5489,
-   )
+   topology = VolumeTopology.fromFile("crystal.msh", format="gmsh")
+   crystalDomain = Domain.fromTopology(topology)
+   component = OpticalComponent(domain=crystalDomain, material=material)
+   gainMedium = GainMedium([component])
 
    simulation = Simulation(
-       gain_medium=medium,
-       phi_ase=phi_ase,
-       time_integrator=FrozenPhiAseRungeKutta4(),
-       time_step_size=2e-5,
-       simulation_steps=150,
-       cross_sections=spectra,
-   ).add_pump(
-       pump,
-       injection_method=SurfacePumpInjector("pump_input"),
+       opticalComponents=[component],
+       gainMedium=gainMedium,
+       initialExcitation=0.0,
+       phiASE=PhiASE(ase_steps=0),
+       timeIntegrator=ExplicitEuler(),
+       timeStepSize=1e-6,
+       simulationSteps=1,
    )
 
-   simulation.on_step(write_state)
-   simulation.step()
+The simulation obtains executable geometry from its component domains; it does
+not own a separate topology list or aggregate optical domain. Gain and passive
+regions must be disjoint. Domains on one shared topology retain adjacency,
+while independent mesh bindings remain disconnected. The public domain model
+can represent other cell structures, but the current backend lowers Tet4
+``VolumeTopology`` bindings only. Gain components must reference the same
+resolved ``Material`` object, and passive components must share one attenuation
+coefficient.
 
-The names passed to ``SurfacePumpInjector`` and ``SurfaceOptics`` resolve
-against surface domains on the topology. The ASE spectrum passed to ``PhiASE``
-describes spontaneous-emission transport; a pump may use a separate
-single-wavelength ``CrossSectionData`` object. ``Simulation`` owns neither a
-second geometry nor a second excitation field: all solvers operate on the
-cell-centered state in ``GainMedium``.
-
-Configuration boundaries
-------------------------
-
-Geometry, material state, spectra, and physical pumps are Python objects.
-``Simulation.from_yaml`` constructs a complete schema-v2 simulation object
-graph. ``PhiASE.fromYaml`` can read the ``simulation.phi_ase`` subsection for
-applications that assemble the remaining objects in Python. The Alpaka compute
-backend and openPMD storage backend are independent choices. See
-:doc:`Backend Selection <backendSelection>` and :doc:`openPMD Transport
-<openpmdTransport>` rather than duplicating those choices in simulation code.
+``Simulation.fromYaml`` constructs the same graph from schema version 3. Named
+Python objects can be injected into that construction, allowing measured or
+generated objects to be combined with durable YAML run configuration.
 
 Concept pages
 -------------
@@ -106,6 +93,7 @@ Concept pages
    :maxdepth: 2
    :caption: Python modeling concepts
 
+   python_interface/materials
    python_interface/topology
    python_interface/gain_medium
    python_interface/spectral_decomposition

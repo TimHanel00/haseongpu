@@ -4,141 +4,89 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import numpy as np
+"""Small programmatic example of the five-object frontend graph."""
 
 from _source_tree_import import ensure_hase_importable
 
 ensure_hase_importable()
 
-from HASEonGPU import (
+from HASEonGPU import (  # noqa: E402
+    CrossSectionTable,
+    Domain,
     GainMedium,
-    Grid,
-    MeshTopology,
+    Material,
+    OpticalComponent,
     PhiASE,
-    PrimitiveFieldSpec,
-    PrismSchema,
-    PlanarPumpRelay,
     Pump,
     PumpSpectrum,
-    SuperGaussianPumpProfile,
-    SurfacePumpInjector,
     RungeKutta4,
     Simulation,
-    SpectralDecomposition,
-    vtkWedge,
+    SurfacePumpInjector,
+    VolumeTopology,
+    units,
 )
-def initFunc(simulation):
-    medium=simulation.gainMedium
+
+
 def printState(state):
     print(
-        f"step={state.step:03d} "
-        f"time={state.time:.3e}s "
-        f"mean_beta={state.beta_volume.mean():.6e} "
-        f"mean_phi={state.phi_ase.mean():.6e}"
+        f"step={state.step:03d} time={state.time:.3e}s "
+        f"mean_beta={state.betaVolume.mean():.6e} "
+        f"mean_phi={state.phiAse.mean():.6e}"
     )
 
-
-def writeVtkState(state, outputFile):
-    vtkWedge(outputFile, state)
 
 def main():
-    # docs:start: topology
-    topology = MeshTopology.fromGrid(
-        Grid(xExtent=4, yExtent=4, zExtent=0.7, tileSizeX=0.25, tileSizeZ=0.7 / 9.0)
+    topology = VolumeTopology.fromTetrahedra(
+        points=[
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        cellPointIndices=[[0, 1, 2, 3], [1, 2, 3, 4]],
     )
-    # docs:end: topology
-    # docs:start: gain-medium
-    medium = GainMedium(topology=topology)
-    print("betaVolume shape:", medium.get("betaVolume").expectedShape)
-
-    for prism in medium.getPrisms():
-        prism.betaVolume = 0.0
-
-    for triangle in medium.getTriangles():
-        triangle.claddingCellTypes = 0
-
-    medium.get("nTot").value = 1.388e20 * 2.0  # Doping density [1/cm^3]
-    medium.get("crystalTFluo").value = 9.41e-4  # Fluorescence lifetime [s]
-    medium.get("claddingNumber").value = 1
-    medium.get("claddingAbsorption").value = 5.5  # [1/cm]
-
-    class ThermalPrism(PrismSchema):
-        temperature = PrimitiveFieldSpec(
-            "temperature", "custom_temperature", np.float64, unit="K", backendRequired=False
-        )
-
-    medium.withPrimitiveSchema(ThermalPrism)
-    for prism in medium.getPrisms():
-        prism.temperature = 300.0
-
-    first_prism = next(iter(medium.getPrisms()))
-    print("prism fields:", first_prism.getFields())
-    for field in first_prism.getFields():
-        if field.name == "temperature":
-            field.value(305.0)
-    print("first prism temperature:", first_prism.temperature)
-    # docs:end: gain-medium
-    # docs:start: spectral-decomposition
-    cross_sections_data = SpectralDecomposition(
-        wavelengthsAbsorption=[900.0, 910.0],
-        crossSectionAbsorption=[1.1e-21, 1.2e-21],
-        wavelengthsEmission=[1020.0, 1030.0],
-        crossSectionEmission=[2.0e-20, 2.48e-20],
-        resolution=2,
+    material = Material(
+        materialName="example gain material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.83,
+        fluorescenceLifetime=0.941 * units.ms,
+        crossSections=CrossSectionTable(
+            [900.0, 1030.0] * units.nm,
+            [1.1e-21, 1.0e-22] * units.cm**2,
+            [1.0e-22, 2.48e-20] * units.cm**2,
+        ),
+        activeIonDensity=2.776e20 / units.cm**3,
     )
-    print("spectral fields:", cross_sections_data.getFields())
-    # docs:end: spectral-decomposition
-    # docs:start: pump-properties
-    pump_profile = SuperGaussianPumpProfile(radius_u=1.5, radius_v=1.5, exponent=40)
+    component = OpticalComponent(
+        domain=Domain.fromTopology(topology),
+        material=material,
+    )
+    gainMedium = GainMedium([component])
+    pumpInput = Domain.where(topology, "z_min")
     pump = Pump(
-        total_power=16e3 * 16.0,
+        total_power=16_000.0,
         spectrum=PumpSpectrum.monochromatic(940e-9),
-        cross_sections=cross_sections_data,
-        ray_count=100000,
+        ray_count=100_000,
         pump_steps=3,
-        profile=pump_profile,
     )
-    # docs:end: pump-properties
-
-
-    # docs:start: phi-ase
-    phi_ase = PhiASE(
-        spectralProperties=cross_sections_data,
-        forwardRayCount=1000,
-        repetitions=1,
-        relativeStandardErrorThreshold=0.1,
-        useReflections=True,
-        backend="Host_Cpu_CpuSerial",
-        parallelMode="single",
-        numDevices=1,
-        ase_steps=3,
-    )
-    # docs:end: phi-ase
-
-    # docs:start: simulation
     simulation = Simulation(
-        gain_medium=medium,
-        phi_ase=phi_ase,
-        time_integrator=RungeKutta4(),
-        time_step_size=1e-5,
-        max_time=1e-3,
-    ).add_pump(
-        pump,
-        injection_method=SurfacePumpInjector(surface_domains=(1,)),
-        relays=(PlanarPumpRelay.retroreflect((2,)),),
-    )
-    simulation.on_init(initFunc)
-    simulation.on_step(printState)
-    simulation.on_step(writeVtkState, "minimal_phi_ase_{step:03d}.vtk")
-    simulation.step(3)
-    # Equivalent long run:
-    # simulation.run_until(max_time=1e-3)
-    # docs:end: simulation
-
-    # docs:start: results
-    last_state = simulation.get_last_state()
-    print(f"last completed step: {last_state.step}")
-    # docs:end: results
+        opticalComponents=[component],
+        gainMedium=gainMedium,
+        initialExcitation=0.0,
+        phiASE=PhiASE(
+            forwardRayCount=1000,
+            repetitions=1,
+            backend="Host_Cpu_CpuSerial",
+            ase_steps=3,
+        ),
+        timeIntegrator=RungeKutta4(),
+        timeStepSize=1e-5,
+        simulationSteps=3,
+    ).addPump(pump, SurfacePumpInjector(pumpInput))
+    simulation.onStep(printState)
+    simulation.step()
+    print(f"last completed step: {simulation.getLastState().step}")
 
 
 if __name__ == "__main__":

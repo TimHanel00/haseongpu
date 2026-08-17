@@ -8,7 +8,8 @@
 import numpy as np
 import pytest
 
-from HASEonGPU import GainMedium, Gmsh, MeshTopology
+from HASEonGPU import Gmsh, MeshTopology
+from pyInclude.geometry.core import GainMedium
 
 
 def _requireGmsh():

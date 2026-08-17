@@ -32,6 +32,19 @@ optics model supports constant specular reflectivity and total internal
 reflection, but not Fresnel reflection/transmission, refracted rays, or general
 internal optical interfaces.
 
+The Python material API now separates versioned, temperature-resolved HDF5
+records from mutable run conditions. Unit-bearing ``Material`` and
+``CrossSectionTable`` values are assigned to typed ``Domain`` selections
+through disjoint ``OpticalComponent`` volumes. ``GainMedium`` selects the
+active subset, while passive components remain part of the complete optical
+assembly and may carry material-level bulk attenuation;
+``absorptionCoefficient`` is the material-facing alias for
+``bulkAttenuation``. Domains expose generic region algebra independently of the
+concrete cell structure; the current backend lowers Tet4 bindings only.
+``Simulation`` accepts an optional declared exterior surface; when omitted, it
+infers the boundary of all component domains without exposing an aggregate
+optical-domain attribute. Schema version 3 represents the same graph in YAML.
+
 ## HASEonGPU 2.1.1
 
 Patch release that moves pump time stepping and frozen-RK4 integration into the

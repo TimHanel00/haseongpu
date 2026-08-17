@@ -2,9 +2,10 @@ openPMD Transport
 =================
 
 HASEonGPU uses openPMD as the transport boundary between the Python frontend and
-the C++ ``calcPhiASE`` backend.  Users normally work with Python objects such
-as ``GainMedium`` and ``PhiASE``; the transport converts those objects into the
-records and attributes consumed by the backend. This page owns storage-backend,
+the C++ ``calcPhiASE`` backend. Users construct ``Material``,
+``OpticalComponent``, ``Domain``, ``GainMedium``, and ``PhiASE`` objects; a
+``Simulation`` lowers that physical graph to the records and attributes
+consumed by the backend. This page owns storage-backend,
 provider-compatibility, and record-layout details; Alpaka compute selection is
 documented separately in :doc:`backendSelection`.
 
@@ -37,7 +38,7 @@ Select it in Python or YAML:
 
 .. code-block:: yaml
 
-   schema_version: 2
+   schema_version: 3
    simulation:
      phi_ase:
        backend: Host_Cpu_CpuSerial       # Alpaka compute backend
@@ -66,7 +67,7 @@ Use ``openpmdSession="persistent"`` to let ``PhiASE`` own a reusable stream, or
 ``openpmdSession="interval"`` to force one-shot behavior.  ``Simulation`` owns a separate transport session for each compiled run;
 caller-managed simulation sessions are not supported.
 
-``Simulation.step(...)`` and ``Simulation.run_until(...)`` launch the
+``Simulation.step(...)`` and ``Simulation.runUntil(...)`` launch the
 compiled ``calcPhiASE --cpp-control`` path. Python writes one initial input
 iteration with run-control attributes, then reads the snapshot series produced
 by the C++ time loop. For streaming backends, Python starts a dedicated
@@ -84,7 +85,7 @@ waits for it before starting step *N+1*. Only records listed in
 ``control_fields`` are written in these later iterations; currently that list
 may contain ``beta_volume``. Static topology, spectra, backend selection, and
 all other initialization records are transferred only in iteration zero.
-The user-facing order of ``on_init``, ``on_step``, and ``before_step`` is
+The user-facing order of ``onInit``, ``onStep``, and ``beforeStep`` is
 documented in :ref:`simulation-callback-lifecycle`.
 
 Provider Compatibility
@@ -121,10 +122,14 @@ openPMD libraries and Python bindings. Provider build options are listed in
 openPMD Record Layout
 ---------------------
 
-The Python frontend has its own object model: ``MeshTopology``,
-``GainMedium``, ``CrossSectionData``, and ``PhiASE``. Those names are not an
-openPMD schema. The transport boundary is the openPMD series written for the
-C++ backend.
+The public frontend graph and the transport representation are distinct. A
+resolved ``Material`` carries unit-bearing physical values and spectra;
+``OpticalComponent`` and ``Domain`` attach them to a ``VolumeTopology``. Before
+writing the series, lowering combines the complete optical-component assembly,
+marks the ``GainMedium`` subset as active, maps supported passive components to
+backend cladding cells, and converts ``CrossSectionTable`` to
+``CrossSectionData``. Those internal class names are not an openPMD schema. The
+wire contract is the openPMD series written for the C++ backend.
 
 All array data at that boundary is written as openPMD ``Mesh`` records below
 each ``Iteration``'s ``meshes`` group. Scalar arrays are named openPMD records
@@ -176,11 +181,6 @@ and ``dndt_ase``. ``standard_error`` has the same flux unit as ``phi_ase``;
 ``relative_standard_error`` is dimensionless. Result records use record-C
 layout.
 
-Custom fields declared with ``GainMedium.defineField(...)`` or
-``PrimitiveFieldSpec`` are serialized as additional openPMD mesh records with
-their unit metadata.  They are available to downstream readers; the current ASE
-backend ignores them unless a future backend explicitly consumes them.
-
 Result iterations also carry registered HASE extension attributes for SRM
 termination: ``srm_status``, ``srm_passes``, ``srm_remaining_fraction``,
 ``srm_max_iterations``, and ``srm_divergence_streak``. They are scalar
@@ -231,8 +231,9 @@ snapshot also includes the static canonical mesh/material/spectral records.
 Iteration Updates
 -----------------
 
-The first Python-written iteration contains the full static context: topology,
-material records, spectra, compute attributes, and ``core_beta_volume``.
+The first Python-written iteration contains the full static context: lowered
+topology, material fields, spectra, compute attributes, and
+``core_beta_volume``.
 Synchronized-debug control iterations contain only ``core_beta_volume`` and
 reuse the cached static context from iteration 0.
 

@@ -32,36 +32,45 @@ mapping is the bridge between a physical model and a runnable input:
      - Python field or object
      - Meaning
    * - :math:`\beta_j`
-     - ``medium.get("betaVolume")`` / ``TimeStepState.beta_volume``
+     - ``Simulation.initialExcitation`` / ``TimeStepState.betaVolume``
      - Cell-centered excited-state fraction.
    * - :math:`N_{\mathrm{tot}}`
-     - ``medium.get("nTot")``
+     - ``component.material.activeIonDensity``
      - Active-ion concentration used in ASE and pump gain.
    * - :math:`\tau`
-     - ``medium.get("crystalTFluo")``
+     - ``component.material.fluorescenceLifetime``
      - Fluorescence lifetime.
    * - :math:`\sigma_a(\lambda)`, :math:`\sigma_e(\lambda)`
-     - ``CrossSectionData``
+     - ``component.material.crossSections``
      - Wavelength-dependent absorption and emission cross sections.
+   * - :math:`\alpha_{\mathrm{bulk}}`
+     - ``passiveComponent.material.bulkAttenuation``
+     - Constant passive intensity attenuation coefficient.
    * - :math:`\Phi_j`
-     - ``TimeStepState.phi_ase``
+     - ``TimeStepState.phiAse``
      - ASE flux estimate after backend physical scaling.
    * - :math:`d\beta/dt|_{\mathrm{ASE}}`
-     - ``TimeStepState.dndt_ase``
+     - ``TimeStepState.dndtAse``
      - ASE depletion contribution.
    * - :math:`d\beta/dt|_{\mathrm{pump}}`
-     - ``TimeStepState.dndt_pump``
+     - ``TimeStepState.dndtPump``
      - Pump-induced population contribution.
    * - :math:`P`
      - ``Pump.total_power``
      - Pump power integrated over the injection aperture.
    * - boundary reflectivity and indices
-     - ``SurfaceOptics``
+     - ``component.surfaceOptics`` / ``SurfaceOptics``
      - Domain-assigned ASE boundary properties.
 
 Object construction and units are documented in the :doc:`Python Interface
 Guide <pythonInterface>`. This page owns the estimator equations, physical
 normalization, and model limits.
+
+The frontend obtains :math:`N_{\mathrm{tot}}`, :math:`\tau`, and both cross
+sections from the resolved gain ``Material``. Lowering converts these
+unit-bearing values to the backend fields used in the equations. Pump and ASE
+therefore cannot select inconsistent material spectra in a high-level
+``Simulation``.
 
 .. _forward-ase-model:
 
@@ -112,8 +121,21 @@ and emission cross sections is
    g_j = N_{\mathrm{tot}}
          \left[\beta_j(\sigma_e + \sigma_a) - \sigma_a\right].
 
-Cladding cells instead use the configured cladding absorption. For a segment of
-length :math:`\ell` in cell :math:`j`, the ray weight changes by
+Cells belonging to a passive optical component instead use
+
+.. math::
+
+   g_j = -\alpha_{\mathrm{bulk}}.
+
+The frontend obtains this coefficient from the passive material's
+``bulkAttenuation`` or its material-facing alias ``absorptionCoefficient``, then
+converts it to the legacy backend field ``claddingAbsorption``. The material
+coefficient is constant and wavelength-independent in the current backend; it
+is distinct from the active-ion absorption cross section
+:math:`\sigma_a(\lambda)`. An omitted coefficient contributes
+:math:`\alpha_{\mathrm{bulk}}=0`; surface reflection remains a separate
+``SurfaceOptics`` interaction. For a segment of length :math:`\ell` in cell
+:math:`j`, the ray weight changes by
 
 .. math::
 

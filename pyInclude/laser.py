@@ -400,12 +400,12 @@ class PumpAngularDistribution:
         return cls([0.0], [0.0], [1.0])
 
     @classmethod
-    def uniform_cone(cls, half_angle, *, polar_samples=8, azimuthal_samples=16):
-        if half_angle <= 0.0 or half_angle >= 0.5 * np.pi:
-            raise ValueError("half_angle must be in (0, pi/2)")
-        cos_edges = np.linspace(1.0, np.cos(float(half_angle)), int(polar_samples) + 1)
+    def uniformCone(cls, halfAngle, *, polarSamples=8, azimuthalSamples=16):
+        if halfAngle <= 0.0 or halfAngle >= 0.5 * np.pi:
+            raise ValueError("halfAngle must be in (0, pi/2)")
+        cos_edges = np.linspace(1.0, np.cos(float(halfAngle)), int(polarSamples) + 1)
         polar = np.arccos(0.5 * (cos_edges[:-1] + cos_edges[1:]))
-        azimuthal = (np.arange(int(azimuthal_samples)) + 0.5) * (2.0 * np.pi / int(azimuthal_samples))
+        azimuthal = (np.arange(int(azimuthalSamples)) + 0.5) * (2.0 * np.pi / int(azimuthalSamples))
         theta, phi = np.meshgrid(polar, azimuthal, indexing="ij")
         return cls(theta.reshape(-1), phi.reshape(-1), np.ones(theta.size))
 
@@ -468,10 +468,6 @@ class SuperGaussianPumpProfile:
         v = relative @ np.asarray(self.axis_v) / self.radius_v
         return np.exp(-((u * u + v * v) ** (0.5 * self.exponent)))
 
-    def weight_at(self, points):
-        """Evaluate the dimensionless spatial profile at world coordinates."""
-        return self.weightAt(points)
-
 
 @dataclass(frozen=True)
 class Pump:
@@ -479,7 +475,6 @@ class Pump:
 
     total_power: float
     spectrum: PumpSpectrum
-    cross_sections: CrossSectionData
     ray_count: int
     pump_steps: int | None = None
     rng_seed: int = 5489
@@ -492,8 +487,6 @@ class Pump:
             raise ValueError("pump total_power must be finite and positive")
         if not isinstance(self.spectrum, PumpSpectrum):
             raise TypeError("pump spectrum must be PumpSpectrum")
-        if not isinstance(self.cross_sections, CrossSectionData):
-            raise TypeError("pump cross_sections must be CrossSectionData")
         if isinstance(self.ray_count, bool) or not isinstance(self.ray_count, (int, np.integer)):
             raise TypeError("pump ray_count must be an integer")
         if self.ray_count <= 0:
@@ -521,7 +514,6 @@ class GaussianPump(Pump):
         *,
         total_power,
         spectrum,
-        cross_sections,
         ray_count,
         pump_steps=None,
         rng_seed=5489,
@@ -539,7 +531,6 @@ class GaussianPump(Pump):
         super().__init__(
             total_power=total_power,
             spectrum=spectrum,
-            cross_sections=cross_sections,
             ray_count=ray_count,
             pump_steps=pump_steps,
             rng_seed=rng_seed,
@@ -567,9 +558,11 @@ class SurfacePumpInjector:
     surface_domains: object
 
     def __post_init__(self):
+        from .physical import Domain
+
         domains = (
             (self.surface_domains,)
-            if isinstance(self.surface_domains, (str, int))
+            if isinstance(self.surface_domains, (str, int, Domain))
             else tuple(self.surface_domains)
         )
         if not domains:
@@ -598,10 +591,12 @@ class PlanarPumpRelay:
     """Dimensionless relay throughput; one means lossless return reinjection."""
 
     def __post_init__(self):
-        exit_domains = (self.exit_domains,) if isinstance(self.exit_domains, (str, int)) else tuple(self.exit_domains)
+        from .physical import Domain
+
+        exit_domains = (self.exit_domains,) if isinstance(self.exit_domains, (str, int, Domain)) else tuple(self.exit_domains)
         entry_domains = (
             (self.entry_domains,)
-            if isinstance(self.entry_domains, (str, int))
+            if isinstance(self.entry_domains, (str, int, Domain))
             else tuple(self.entry_domains)
         )
         if not exit_domains or not entry_domains:
@@ -641,7 +636,7 @@ class PlanarPumpRelay:
 
 @dataclass(frozen=True)
 class _PumpSource:
-    """CamelCase transport adapter assembled by ``Simulation.add_pump``."""
+    """CamelCase transport adapter assembled by ``Simulation.addPump``."""
 
     surfaceDomains: tuple
     totalPower: float
@@ -664,12 +659,35 @@ class _PumpProperties:
 
 def integrate_pump_profile(topology, surface_domains, profile):
     """Integrate a normalized profile over tagged triangular boundary faces."""
-    domains = (surface_domains,) if isinstance(surface_domains, (str, int)) else tuple(surface_domains)
-    domain_map = topology.surfaceDomainMap()
-    domain_ids = {domain_map.resolve(value) if isinstance(value, str) else int(value) for value in domains}
-    mask = (np.asarray(topology.neighborCells) < 0) & np.isin(
-        np.asarray(topology.faceBoundaries), list(domain_ids)
-    )
+    from .physical import Domain, SURFACE
+
+    if isinstance(surface_domains, Domain):
+        selected = surface_domains
+    else:
+        domains = (
+            (surface_domains,)
+            if isinstance(surface_domains, (str, int))
+            else tuple(surface_domains)
+        )
+        typed = [value for value in domains if isinstance(value, Domain)]
+        if typed:
+            if len(typed) != len(domains):
+                raise TypeError("pump profile domains must be all typed Domains or all mesh labels")
+            selected = Domain(typed)
+        else:
+            domain_map = topology.surfaceDomainMap()
+            domain_ids = {
+                domain_map.resolve(value) if isinstance(value, str) else int(value)
+                for value in domains
+            }
+            selected = None
+            mask = (np.asarray(topology.neighborCells) < 0) & np.isin(
+                np.asarray(topology.faceBoundaries), list(domain_ids)
+            )
+    if selected is not None:
+        if selected.entityKind != SURFACE:
+            raise TypeError("pump profile integration requires a surface Domain")
+        mask = selected.maskFor(topology)
     cell_faces = np.argwhere(mask)
     if cell_faces.size == 0:
         raise ValueError("pump profile integration selected no exterior faces")

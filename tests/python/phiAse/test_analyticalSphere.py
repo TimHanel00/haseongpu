@@ -11,7 +11,8 @@ import tempfile
 import numpy as np
 import pytest
 
-from HASEonGPU import GainMedium, PhiASE, SpectralDecomposition, VolumeTopology
+from HASEonGPU import PhiASE, SpectralDecomposition, VolumeTopology
+from pyInclude.geometry.core import GainMedium
 from openpmd_backend_matrix import openpmd_runtime_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
 

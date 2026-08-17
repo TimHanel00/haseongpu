@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from openpmd_backend_matrix import openpmd_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
@@ -169,8 +170,8 @@ def testPhiAseMpiPreflightDoesNotUseLauncherLocalDeviceVisibility(monkeypatch):
     assert checked == ["adios"]
 
 
-def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath, legacyPhiAseConfigPath):
-    phiAse = PhiASE(phiAseTestConfigPath)
+def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
+    phiAse = PhiASE.fromYaml(phiAseTestConfigPath)
 
     assert phiAse.minRays == 1000
     assert phiAse.maxRays == 10000
@@ -193,11 +194,6 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath, legacyPhiAseCo
     assert fromArgs.minRays == 32
     assert fromArgs.maxRays == 10000
     assert fromArgs.openpmdBackend == "adios-sst"
-
-    legacy = PhiASE(legacyPhiAseConfigPath)
-    assert legacy.minRays == 1000
-    assert legacy.maxRays == 100000
-
 
 def testPhiAseDefaultBackendSerializesAvailableAlpakaBackend():
     phiAse = PhiASE()
@@ -230,13 +226,23 @@ def testPhiAseDefaultBackendSerializesAvailableAlpakaBackend():
 
 def testPhiAseLoadsOpenPmdBackendFromConfig():
     assert PhiASE().openpmdBackend == "auto"
-    assert PhiASE({"compute": {"openpmd_backend": "hdf5"}}).openpmdBackend == "hdf5"
-    assert PhiASE({"compute": {"openpmdBackend": "adios-sst"}}).openpmdBackend == "adios-sst"
+    assert PhiASE(openpmdBackend="hdf5").openpmdBackend == "hdf5"
+    assert PhiASE(openpmdBackend="adios-sst").openpmdBackend == "adios-sst"
 
 
-def testPhiAseRejectsRetiredMseThreshold():
-    with pytest.raises(ValueError, match="relative_standard_error_threshold"):
-        PhiASE({"experiment": {"mse_threshold": 0.1}})
+def testPhiAseRejectsRetiredMseThreshold(tmp_path):
+    path = tmp_path / "retired-mse.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 3,
+                "simulation": {"phi_ase": {"mse_threshold": 0.1}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="mse_threshold"):
+        PhiASE.fromYaml(path)
 
 
 def testPhiAseMpiRunUsesOpenPmdTransportMetadata(
@@ -367,12 +373,8 @@ def testPhiAseRunForwardsConfiguredOpenPmdBackend(
     )
 
     PhiASE(
-        {
-            "compute": {
-                "backend": "Host_Cpu_CpuSerial",
-                "openpmd_backend": "hdf5",
-            }
-        },
+        backend="Host_Cpu_CpuSerial",
+        openpmdBackend="hdf5",
         spectralProperties=crossSections,
     ).run(gainMedium=smallGainMedium)
 
@@ -512,7 +514,7 @@ def testSimulationRunStepsPassesStreamingBackendToCompiledTransport(monkeypatch)
 
 
 def testPhiAseNPerNodeLoadsFromArgsAndConfig():
-    phiAse = PhiASE({"compute": {"nPerNode": 3}})
+    phiAse = PhiASE(nPerNode=3)
     assert phiAse.nPerNode == 3
 
     parser = argparse.ArgumentParser()

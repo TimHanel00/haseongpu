@@ -294,7 +294,7 @@ Runtime selection is still done through user configuration:
 
 .. code-block:: yaml
 
-   schema_version: 2
+   schema_version: 3
    simulation:
      phi_ase:
        backend: Host_Cpu_CpuSerial

@@ -15,7 +15,8 @@ import pytest
 import pyInclude.openpmd.transport as transport
 from openpmd_backend_matrix import openpmd_runtime_backend, openpmd_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
-from pyInclude.geometry import GainMedium, MeshTopology, OpenPmdScalarField, VolumeTopology
+from pyInclude.geometry import MeshTopology, OpenPmdScalarField, VolumeTopology
+from pyInclude.geometry.core import GainMedium
 from pyInclude.laser import (
     CrossSectionData,
     PlanarPumpRelay,
@@ -1462,7 +1463,7 @@ def test_timeSteppedInputIncludesInitialVolumeBeta(tmp_path):
     output = tmp_path / ("time_stepped_input" + _file_suffix_for_tests())
     simulation = SimpleNamespace(
         phiASE=asymmetric_phi_ase(),
-        gainMedium=asymmetric_medium(),
+        _backendGainMedium=asymmetric_medium(),
         crossSections=asymmetric_cross_sections(),
     )
 
@@ -1905,9 +1906,9 @@ def test_simulation_run_control_serializes_general_pump_graph():
     simulation = SimpleNamespace(
         pump=pump,
         phiASE=SimpleNamespace(ase_steps=7),
-        pre_pump=False,
-        current_step=0,
-        gainMedium=SimpleNamespace(topology=SimpleNamespace(surfaceDomainMap=lambda: None)),
+        prePump=False,
+        currentStep=0,
+        _backendGainMedium=SimpleNamespace(topology=SimpleNamespace(surfaceDomainMap=lambda: None)),
         timeStep=2.0e-6,
         timeIntegrationSolver=SimpleNamespace(name="implicit-euler", iterations=5, tolerance=1.0e-7),
         outputFields=("beta_volume", "dndt_pump"),
@@ -2064,7 +2065,7 @@ def test_streaming_simulation_keeps_input_series_open_until_backend_exits(monkey
     monkeypatch.setattr(transport.subprocess, "Popen", FakeProcess)
     monkeypatch.setattr(transport, "read_simulation_output", fake_read_simulation_output)
 
-    simulation = SimpleNamespace(phiASE=object(), gainMedium=object(), crossSections=object())
+    simulation = SimpleNamespace(phiASE=object(), _backendGainMedium=object(), crossSections=object())
     states = transport._run_streaming_simulation(
         ["calcPhiASE", "--cpp-control"],
         tmp_path / "input.sst",
@@ -2144,7 +2145,7 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
         return [SimpleNamespace(step=3)]
 
     def update_control(state):
-        simulation.gainMedium.beta = float(state.step)
+        simulation._backendGainMedium.beta = float(state.step)
 
     monkeypatch.setattr(transport, "OpenPmdInputSeries", FakeInputSeries)
     monkeypatch.setattr(transport.subprocess, "Popen", FakeProcess)
@@ -2154,7 +2155,7 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
         executionMode="synchronized-debug",
         controlFields=("beta_volume",),
         phiASE=object(),
-        gainMedium=SimpleNamespace(beta=0.0),
+        _backendGainMedium=SimpleNamespace(beta=0.0),
         crossSections=object(),
     )
     states = transport._run_streaming_simulation(

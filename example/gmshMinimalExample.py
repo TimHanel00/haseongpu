@@ -4,157 +4,106 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+"""Construct a Tet4 component from named Gmsh physical groups."""
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import gmsh
-import numpy as np
 
 from _source_tree_import import ensure_hase_importable
 
 ensure_hase_importable()
 
-from HASEonGPU import (
+from HASEonGPU import (  # noqa: E402
+    CrossSectionTable,
+    Domain,
     GainMedium,
-    MeshTopology,
+    Material,
+    OpticalComponent,
     PhiASE,
-    PlanarPumpRelay,
     Pump,
     PumpSpectrum,
-    SuperGaussianPumpProfile,
-    SurfacePumpInjector,
     RungeKutta4,
     Simulation,
-    SpectralDecomposition,
-    vtkWedge,
+    SurfacePumpInjector,
+    VolumeTopology,
+    units,
 )
 
 
-def initFunc(simulation):
-    medium = simulation.gainMedium
-    print(f"gmsh topology: {medium.numberOfTriangles} triangles, {medium.numberOfPrisms} prisms")
-
-
-def printState(state):
-    print(
-        f"step={state.step:03d} "
-        f"time={state.time:.3e}s "
-        f"mean_beta={state.beta_volume.mean():.6e} "
-        f"mean_phi={state.phi_ase.mean():.6e}"
-    )
-
-
-def writeVtkState(state, outputFile):
-    vtkWedge(outputFile, state)
-
-
-def cylindrical_core_cladding_surfaces(core_radius, cladding_radius, *, mesh_size):
-    geo = gmsh.model.geo
-    center = geo.addPoint(0.0, 0.0, 0.0, mesh_size)
-    rings = []
-    for radius in (core_radius, cladding_radius):
-        rings.append(
-            [
-                geo.addPoint(radius, 0.0, 0.0, mesh_size),
-                geo.addPoint(0.0, radius, 0.0, mesh_size),
-                geo.addPoint(-radius, 0.0, 0.0, mesh_size),
-                geo.addPoint(0.0, -radius, 0.0, mesh_size),
-            ]
-        )
-    core_points, cladding_points = rings
-    core_arcs = [geo.addCircleArc(core_points[i], center, core_points[(i + 1) % 4]) for i in range(4)]
-    cladding_arcs = [geo.addCircleArc(cladding_points[i], center, cladding_points[(i + 1) % 4]) for i in range(4)]
-    core = geo.addPlaneSurface([geo.addCurveLoop(core_arcs)])
-    cladding = geo.addPlaneSurface([geo.addCurveLoop(cladding_arcs), geo.addCurveLoop([-arc for arc in core_arcs])])
-    return core, cladding
-
-
-def write_minimal_gmsh_mesh(filename):
+def writeMinimalGmshMesh(filename):
     gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
-        gmsh.model.add("hase_cylindrical_core_cladding")
-        core, cladding = cylindrical_core_cladding_surfaces(0.5, 0.8, mesh_size=0.4)
-        gmsh.model.geo.synchronize()
-
-        gmsh.model.addPhysicalGroup(2, [core], 20)
-        gmsh.model.setPhysicalName(2, 20, "Core")
-        gmsh.model.addPhysicalGroup(2, [cladding], 21)
-        gmsh.model.setPhysicalName(2, 21, "CladdingShell")
-
-        gmsh.model.mesh.generate(2)
+        gmsh.model.add("hase_gmsh_component")
+        volume = gmsh.model.occ.addBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+        gmsh.model.occ.synchronize()
+        gmsh.model.addPhysicalGroup(3, [volume], 1)
+        gmsh.model.setPhysicalName(3, 1, "Crystal")
+        boundary = gmsh.model.getBoundary([(3, volume)], oriented=False)
+        bottom = []
+        top = []
+        for dimension, tag in boundary:
+            center = gmsh.model.occ.getCenterOfMass(dimension, tag)
+            if abs(center[2]) < 1.0e-12:
+                bottom.append(tag)
+            elif abs(center[2] - 1.0) < 1.0e-12:
+                top.append(tag)
+        for tag, name, surfaces in ((2, "PumpInput", bottom), (3, "PumpOutput", top)):
+            gmsh.model.addPhysicalGroup(2, surfaces, tag)
+            gmsh.model.setPhysicalName(2, tag, name)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 0.5)
+        gmsh.model.mesh.generate(3)
         gmsh.write(str(filename))
     finally:
         gmsh.finalize()
 
 
 def main():
-    with TemporaryDirectory() as tmpdir:
-        gmsh_file = Path(tmpdir) / "minimal_core_cladding.msh"
-        write_minimal_gmsh_mesh(gmsh_file)
+    with TemporaryDirectory() as temporaryDirectory:
+        meshPath = Path(temporaryDirectory) / "component.msh"
+        writeMinimalGmshMesh(meshPath)
+        topology = VolumeTopology.fromFile(meshPath, format="gmsh")
+        crystalDomain = Domain.fromGmsh(topology, "Crystal", entityKind="volume")
+        pumpInput = Domain.fromGmsh(topology, "PumpInput", entityKind="surface")
 
-        topology = MeshTopology.fromFile(gmsh_file, format="gmsh", numberOfLevels=6, thickness=0.25)
-        medium = GainMedium(topology=topology)
-
-        print(medium.get("betaVolume").expectedShape)
-        print("gmsh claddingCellTypes:", medium.get("claddingCellTypes").value)
-
-        medium.get("betaVolume").value = np.zeros(medium.get("betaVolume").expectedShape)
-        medium.get("claddingCellTypes").value = np.asarray(
-            medium.get("claddingCellTypes").value, dtype=np.uint32
-        ).reshape(medium.get("claddingCellTypes").expectedShape)
-        medium.get("nTot").value = 1.388e20 * 2.0  # Doping density [1/cm^3]
-        medium.get("crystalTFluo").value = 9.41e-4  # Fluorescence lifetime [s]
-        medium.get("claddingNumber").value = 21  # Physical surface tag of "CladdingShell" in the gmsh file.
-        medium.get("claddingAbsorption").value = 5.5  # [1/cm]
-
-        cross_sections_data = SpectralDecomposition(
-            wavelengthsAbsorption=[900.0, 910.0],
-            crossSectionAbsorption=[1.1e-21, 1.2e-21],
-            wavelengthsEmission=[1020.0, 1030.0],
-            crossSectionEmission=[2.0e-20, 2.48e-20],
-            resolution=2,
+        material = Material(
+            materialName="example gain material",
+            temperature=293.15 * units.K,
+            refractiveIndex=1.83,
+            fluorescenceLifetime=0.941 * units.ms,
+            crossSections=CrossSectionTable.monochromatic(
+                wavelength=940 * units.nm,
+                absorption=7.8e-21 * units.cm**2,
+                emission=1.9e-21 * units.cm**2,
+            ),
+            activeIonDensity=2.776e20 / units.cm**3,
         )
-        pump_profile = SuperGaussianPumpProfile(radius_u=1.5, radius_v=1.5, exponent=40)
+        crystal = OpticalComponent(domain=crystalDomain, material=material)
+        gainMedium = GainMedium([crystal])
         pump = Pump(
-            total_power=16e3 * 16.0,
+            total_power=100.0,
             spectrum=PumpSpectrum.monochromatic(940e-9),
-            cross_sections=cross_sections_data,
-            ray_count=100000,
+            ray_count=10_000,
             pump_steps=3,
-            profile=pump_profile,
         )
-
-        phi_ase = PhiASE(
-            spectralProperties=cross_sections_data,
-            forwardRayCount=1000,
-            repetitions=1,
-            relativeStandardErrorThreshold=0.1,
-            useReflections=True,
-            backend="Host_Cpu_CpuSerial",
-            parallelMode="single",
-            numDevices=1,
-            ase_steps=3,
-        )
-
         simulation = Simulation(
-            gain_medium=medium,
-            phi_ase=phi_ase,
-            time_integrator=RungeKutta4(),
-            time_step_size=1e-5,
-            max_time=1e-3,
-        ).add_pump(
-            pump,
-            injection_method=SurfacePumpInjector(surface_domains=(1,)),
-            relays=(PlanarPumpRelay.retroreflect((2,)),),
-        )
-        simulation.on_init(initFunc)
-        simulation.on_step(printState)
-        simulation.on_step(writeVtkState, "gmsh_minimal_phi_ase_{step:03d}.vtk")
-        simulation.step(3)
-
-        last_state = simulation.get_last_state()
-        print(f"last completed step: {last_state.step}")
+            opticalComponents=[crystal],
+            gainMedium=gainMedium,
+            phiASE=PhiASE(
+                forwardRayCount=1000,
+                repetitions=1,
+                backend="Host_Cpu_CpuSerial",
+                ase_steps=3,
+            ),
+            timeIntegrator=RungeKutta4(),
+            timeStepSize=1e-5,
+            simulationSteps=3,
+        ).addPump(pump, SurfacePumpInjector(pumpInput))
+        print(f"Gmsh cells: {topology.numberOfCells}")
+        simulation.step()
+        print(f"last completed step: {simulation.getLastState().step}")
 
 
 if __name__ == "__main__":

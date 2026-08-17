@@ -9,7 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from HASEonGPU import GainMedium, MeshTopology, SurfaceOptics, VolumeTopology
+from HASEonGPU import MeshTopology, SurfaceOptics, VolumeTopology
+from pyInclude.geometry.core import GainMedium
 
 
 repoRoot = Path(__file__).resolve().parents[3]

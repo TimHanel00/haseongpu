@@ -321,7 +321,7 @@ def test_mainWritesDefaultYamlUnderConfig(tmp_path, monkeypatch, capsys):
     output_path = tmp_path / configure_module.DEFAULT_PHI_ASE_CONFIG_PATH
     assert output_path.is_file()
     generated = yaml.safe_load(output_path.read_text(encoding="utf-8"))
-    assert generated["schema_version"] == 2
+    assert generated["schema_version"] == 3
     assert generated["simulation"]["phi_ase"]["backend"] == "Host_Cpu_CpuSerial"
     assert generated["simulation"]["phi_ase"]["openpmd_backend"] == "adios"
     assert generated["simulation"]["phi_ase"]["ase_steps"] == 0
@@ -562,7 +562,7 @@ def test_runtimeDirOptionReachesAutoinstallSelection(tmp_path, monkeypatch):
     assert seen["break_system_packages"] is False
 
 
-def test_generatedYamlLoadsAsPhiAseConfig():
+def test_generatedYamlLoadsAsPhiAseConfig(tmp_path):
     selection = WizardSelection(
         provider=PROVIDER_BUNDLED,
         openpmd_backend="adios",
@@ -573,7 +573,7 @@ def test_generatedYamlLoadsAsPhiAseConfig():
     )
 
     config = yaml.safe_load(yaml_config(selection))
-    assert config["schema_version"] == 2
+    assert config["schema_version"] == 3
     assert config["simulation"]["phi_ase"] == {
         "min_rays": 100000,
         "max_rays": 100000,
@@ -585,7 +585,9 @@ def test_generatedYamlLoadsAsPhiAseConfig():
         "num_devices": 2,
         "n_per_node": 2,
     }
-    phi_ase = PhiASE(config)
+    path = tmp_path / "phiase.yaml"
+    path.write_text(yaml_config(selection), encoding="utf-8")
+    phi_ase = PhiASE.fromYaml(path)
 
     assert phi_ase.minRays == 100000
     assert phi_ase.maxRays == 100000

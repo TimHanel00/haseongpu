@@ -97,7 +97,9 @@ The script writes a small PhiASE YAML run-control file to
 finishes with guidance for the selected openPMD backend, MPI setting, and
 available compute backends.  The generated YAML contains the default ray range,
 relative-standard-error threshold, and compute settings; geometry, spectra,
-pump settings, and material state are still constructed in Python.
+pump settings, and material state are not added to this small configurator
+output. A complete schema-v3 simulation can define them in YAML, as shown by
+``config/laserPumpCladding.yaml``.
 
 Useful non-interactive options include ``--autoinstall``, ``--reinstall``,
 ``--use-ccache``, ``--provider``, ``--openpmd-backend``, ``--runtime-dir``, and
@@ -158,7 +160,7 @@ Check that the package imports:
 For the recommended user workflow, continue with the
 :doc:`laserPumpCladding tutorial <laserPumpCladding>`. Use the
 :doc:`Python Interface Guide <pythonInterface>` when adapting that workflow to
-another geometry or pump. Use
+another material, geometry, or pump. Use
 :doc:`Binary Interface <binaryInterface>` only when running ``calcPhiASE``
 directly, and :doc:`CMake Build Options <compilation>` when you need manual
 CMake configuration.

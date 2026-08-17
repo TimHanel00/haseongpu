@@ -28,16 +28,16 @@ from .openpmd import (
 )
 from .geometry import (
     DomainMap,
-    GainMedium,
-    GainMediumGeometry,
     Gmsh,
     Grid,
     MeshTopology,
     SurfaceDomainMap,
     SurfaceOptics,
     VolumeTopology,
-    writeGainMediumVtk,
 )
+from .physical import Domain, GainMedium, OpticalComponent
+from material_library import CrossSectionTable, Material, MaterialLibrary
+from hase_units import Quantity, Unit, units
 from .laser import (
     CrossSectionData,
     GaussianPump,
@@ -56,7 +56,6 @@ from .simulation import (
     PhiASE,
     Simulation,
     TimeStepState,
-    TimeSteppedSimulation,
     autonomous_final,
 )
 from .structures import Result as TransportResult

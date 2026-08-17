@@ -12,20 +12,24 @@ Public API
 
 .. currentmodule:: HASEonGPU
 
-Geometry and gain media
-^^^^^^^^^^^^^^^^^^^^^^^
+Materials and physical graph
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autosummary::
    :toctree: generated
    :nosignatures:
 
+   Material
+   MaterialLibrary
+   CrossSectionTable
+   OpticalComponent
+   Domain
    VolumeTopology
    GainMedium
    Gmsh
    DomainMap
    SurfaceDomainMap
    SurfaceOptics
-   writeGainMediumVtk
 
 Legacy planar geometry
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -36,7 +40,6 @@ Legacy planar geometry
 
    Grid
    MeshTopology
-   GainMediumGeometry
    vtkWedge
 
 Spectra, pump, and ASE
@@ -69,7 +72,6 @@ Simulation and time integration
 
    Simulation
    TimeStepState
-   TimeSteppedSimulation
    TransportResult
    ExplicitEuler
    ExponentialEuler
@@ -89,6 +91,8 @@ Utilities
 
    AlpakaBackends
    OpenPmdBackends
+   Quantity
+   Unit
    backendFlat
    calcGainFromState
    writeParaviewState
@@ -108,6 +112,6 @@ Low-level transport schemas
    PrismSchema
    PrimitiveFieldSpec
 
-The ``unitDimension`` namespace is exported from ``HASEonGPU`` and contains
-predefined openPMD unit-dimension tuples for HASE transport variables and common
-dimensions.
+The ``units`` namespace contains unit values used to construct ``Quantity``
+objects. The ``unitDimension`` namespace contains predefined openPMD
+unit-dimension tuples for HASE transport variables and common dimensions.

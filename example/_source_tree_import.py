@@ -37,7 +37,8 @@ def ensure_hase_importable():
     ]
     try:
         module = importlib.import_module("HASEonGPU")
-        if hasattr(module, "VolumeTopology"):
+        required = ("Domain", "Material", "OpticalComponent", "Simulation", "VolumeTopology")
+        if all(hasattr(module, name) for name in required):
             return
     except ModuleNotFoundError as err:
         if err.name != "HASEonGPU":

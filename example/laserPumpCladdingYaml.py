@@ -19,14 +19,14 @@ defaultConfigPath = scriptDir.parent / "config" / "laserPumpCladding.yaml"
 
 ensure_hase_importable()
 
-from HASEonGPU import Simulation  # noqa: E402
+from HASEonGPU import Simulation, units  # noqa: E402
 from laserPumpCladdingApi import printState, writeVtkFields  # noqa: E402
 from pyInclude.openpmd.paraview import writeParaviewState  # noqa: E402
 
 
 def buildSimulation(configPath=defaultConfigPath):
     """Construct the complete example without executing it."""
-    return Simulation.from_yaml(configPath)
+    return Simulation.fromYaml(configPath)
 
 
 def runExample(
@@ -36,23 +36,23 @@ def runExample(
 ):
     """Run the YAML-defined simulation and return its final state."""
     simulation = buildSimulation(configPath)
-    medium = simulation.gain_medium
-    absorption = medium.get("claddingAbsorption").value
+    material = simulation.gainMedium.components[0].material
+    absorption = 5.5
 
-    print(f"Running simulation with backend {simulation.phi_ase.backend}")
-    print(f"Using openPMD backend {simulation.phi_ase.openpmdBackend}")
-    simulation.on_step(printState)
-    simulation.on_step(
+    print(f"Running simulation with backend {simulation.phiASE.backend}")
+    print(f"Using openPMD backend {simulation.phiASE.openpmdBackend}")
+    simulation.onStep(printState)
+    simulation.onStep(
         writeVtkFields,
         Path(vtkOutputDir),
         absorption,
-        simulation.cross_sections,
-        medium.get("nTot").value,
+        simulation.crossSections,
+        material.activeIonDensity.toValue(units.cm**-3),
     )
     if openPmdOutputDir is not None:
-        simulation.on_step(writeParaviewState, Path(openPmdOutputDir), absorption)
+        simulation.onStep(writeParaviewState, Path(openPmdOutputDir), absorption)
     simulation.step()
-    return simulation.get_last_state()
+    return simulation.getLastState()
 
 
 def main(argv=None):
@@ -72,8 +72,8 @@ def main(argv=None):
         vtkOutputDir=args.vtk_output_dir,
         openPmdOutputDir=args.openpmd_output_dir,
     )
-    print(f"phiAse shape: {state.phi_ase.shape}")
-    print(f"betaVolume shape: {state.beta_volume.shape}")
+    print(f"phiAse shape: {state.phiAse.shape}")
+    print(f"betaVolume shape: {state.betaVolume.shape}")
 
 
 if __name__ == "__main__":

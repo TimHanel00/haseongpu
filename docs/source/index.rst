@@ -15,9 +15,11 @@ where ASE is an important limiting effect for stored energy, gain distribution,
 and overall amplifier performance.
 
 Start with :doc:`Getting Started <gettingStarted>` to install HASEonGPU, then
-follow the :doc:`laserPumpCladding tutorial <laserPumpCladding>` for a complete
-Tet4 pump-and-ASE simulation. The remaining pages separate reusable modeling
-concepts, execution and transport details, and reference material.
+follow the :doc:`laserPumpCladding tutorial <laserPumpCladding>` to construct a
+complete Tet4 pump-and-ASE simulation. The :doc:`Python Interface Guide
+<pythonInterface>` separates material, geometry, physical-composition, and
+solver concepts. Generated signatures remain in the :doc:`Python API Reference
+<pythonAPI>`.
 
 Contents
 --------

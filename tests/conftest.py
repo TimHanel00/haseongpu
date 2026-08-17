@@ -21,9 +21,10 @@ pythonTestPhiAseConfig = Path(
 legacyPhiAseConfigFile = Path(__file__).parent / "data" / "cfg" / "legacy_config.yaml"
 requiredHaseApi = (
     "AlpakaBackends",
+    "Domain",
     "GainMedium",
-    "Grid",
-    "MeshTopology",
+    "Material",
+    "OpticalComponent",
     "OpenPmdBackends",
     "PhiASE",
     "Pump",
@@ -216,7 +217,9 @@ def smallTopology():
 
 @pytest.fixture
 def smallGainMedium(smallTopology):
-    return GainMedium(topology=smallTopology).withPhysicalProperties(
+    from pyInclude.geometry.core import GainMedium as BackendGainMedium
+
+    return BackendGainMedium(topology=smallTopology).withPhysicalProperties(
         betaVolume=np.zeros((smallTopology.numberOfTriangles, smallTopology.levels - 1)),
         claddingCellTypes=np.zeros(2, dtype=np.uint32),
         nTot=2.76e20,
@@ -232,7 +235,6 @@ def pumpProperties(crossSections):
         physical=Pump(
             total_power=1.0,
             spectrum=PumpSpectrum.monochromatic(940e-9),
-            cross_sections=crossSections,
             ray_count=256,
             pump_steps=1,
             rng_seed=17,

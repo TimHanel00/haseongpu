@@ -1,103 +1,47 @@
-Cross-section data
-==================
+Material spectra
+================
 
-``CrossSectionData`` stores the wavelength-dependent absorption and emission
-cross sections :math:`\sigma_a(\lambda)` and :math:`\sigma_e(\lambda)` used by
-ASE and pump transport. ``SpectralDecomposition`` is a compatibility alias for
-the same class; new examples use ``CrossSectionData``.
-
-The cross sections are stored in ``cm^2``. Wavelength values retain the unit in
-which they are supplied, so each wavelength table must be internally
-consistent.
-
-Load a measured spectrum
-------------------------
-
-``fromDirectory`` loads the four text files used by the
-:doc:`laserPumpCladding tutorial <../laserPumpCladding>`:
+Absorption and emission spectra are physical ``Material`` properties.
+``CrossSectionTable`` stores unit-bearing wavelength, absorption, and emission
+arrays in the HDF5 material database:
 
 .. code-block:: python
 
-   from HASEonGPU import CrossSectionData
+   from HASEonGPU import CrossSectionTable, units
 
-   ase_spectra = CrossSectionData.fromDirectory(
-       "spectra",
-       resolution=1000,
+   table = CrossSectionTable(
+       wavelengths=[930, 940, 950] * units.nm,
+       absorption=[6.7e-21, 7.8e-21, 8.1e-21] * units.cm**2,
+       emission=[1.5e-21, 1.9e-21, 2.4e-21] * units.cm**2,
    )
 
-The directory must contain:
+``Material.fromHdf5`` resolves the table along with the material's other
+temperature-dependent properties. ``spectralResolution`` optionally creates an
+endpoint-inclusive linear grid without downsampling the source data.
 
-* ``lambda_a.txt`` and ``sigma_a.txt`` for absorption;
-* ``lambda_e.txt`` and ``sigma_e.txt`` for emission.
+Both curves share one wavelength grid. Wavelengths must be positive and
+strictly increasing, except for the repeated constant grid produced when
+explicitly resampling monochromatic data. Absorption and emission cross
+sections must be finite, non-negative area quantities. ``absorptionAt`` and
+``emissionAt`` perform linear interpolation at a unit-bearing wavelength.
 
-The wavelength and cross-section arrays in each pair must have equal lengths.
-``resolution`` controls the numerical spectral table passed to the ASE backend;
-it does not resample the input files or create additional measured information.
+Legacy four-file data
+---------------------
 
-Explicit and monochromatic construction
----------------------------------------
+``CrossSectionTable.fromTextDirectory`` imports ``lambda_a.txt``,
+``lambda_e.txt``, ``sigma_a.txt``, and ``sigma_e.txt``. It assumes the
+historical units of nanometres and square centimetres, forms the union
+wavelength grid, and interpolates each curve to that grid.
 
-Construct the same object directly from arrays when the data does not use the
-four-file layout:
+The importer always emits ``LegacyMaterialTextWarning`` because the text files
+do not encode units, temperature, or provenance. Convert retained datasets to
+the versioned material-library HDF5 format and record their source in metadata.
 
-.. code-block:: python
+``Simulation`` converts the executable gain material to the current backend's
+``CrossSectionData`` representation once. The same converted spectrum is used
+by ASE and every pump, so schema version 3 does not contain a separate
+cross-section registry.
 
-   spectra = CrossSectionData(
-       wavelengthsAbsorption=[930.0, 940.0, 950.0],
-       crossSectionAbsorption=[6.7e-21, 7.8e-21, 8.1e-21],
-       wavelengthsEmission=[930.0, 940.0, 950.0],
-       crossSectionEmission=[1.5e-21, 1.9e-21, 2.4e-21],
-       resolution=1000,
-   )
-
-A monochromatic physical pump needs one wavelength and the two material cross
-sections at that wavelength:
-
-.. code-block:: python
-
-   wavelength = 940e-9
-   pump_cross_sections = CrossSectionData.monochromatic(
-       wavelength=wavelength,
-       crossSectionAbsorption=spectra.absorptionAt(wavelength),
-       crossSectionEmission=spectra.emissionAt(wavelength),
-   )
-
-``absorptionAt`` and ``emissionAt`` linearly interpolate sorted wavelength
-samples. They also recognize the common case in which a material table is in
-nanometers but the query is in meters. Outside that clear magnitude-based
-conversion, pass the query in the same unit as the stored wavelengths.
-
-Role in a simulation
---------------------
-
-The full spectrum and the pump-specific data have different purposes:
-
-.. code-block:: python
-
-   phi_ase = PhiASE(spectralProperties=ase_spectra)
-   pump = Pump(
-       total_power=16_000.0,
-       spectrum=PumpSpectrum.monochromatic(wavelength),
-       cross_sections=pump_cross_sections,
-   )
-   simulation = Simulation(
-       gain_medium=medium,
-       phi_ase=phi_ase,
-       time_integrator=FrozenPhiAseRungeKutta4(),
-       time_step_size=2e-5,
-       cross_sections=ase_spectra,
-   )
-
-``PhiASE`` samples the complete absorption/emission spectrum. ``Pump`` uses its
-own spectrum to choose pump wavelengths and its own ``cross_sections`` to
-evaluate material interaction at those wavelengths. Passing ``ase_spectra`` to
-``Simulation`` supplies the spectral data used by ASE throughout the compiled
-time loop.
-
-Low-level compatibility
------------------------
-
-``toDict`` exposes the historical ``l_abs``, ``s_abs``, ``l_ems``, ``s_ems``,
-and ``l_res`` names, and ``toLaserProperties`` wraps the same arrays in the
-legacy ``LaserProperties`` store. They are compatibility interfaces; normal
-composed simulations use ``CrossSectionData`` directly.
+``CrossSectionData`` and ``LaserProperties`` remain supporting low-level APIs
+for direct backend transport and result analysis. They are not separate
+physical objects in the five-type frontend graph.
