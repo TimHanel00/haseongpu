@@ -1746,9 +1746,9 @@ def _simulation_run_control(simulation, *, steps):
     control = {
         "timeStep": float(simulation.timeStep),
         "numberOfSteps": int(steps),
-        "firstSimulationStep": int(simulation.current_step),
+        "firstSimulationStep": int(simulation.currentStep),
         "aseSteps": ase_steps,
-        "prePump": bool(simulation.pre_pump),
+        "prePump": bool(simulation.prePump),
         "executionMode": getattr(simulation, "executionMode", "autonomous"),
         "timeIntegrator": _time_integrator_name(solver),
         "pumpSchemaVersion": 2,
@@ -1784,7 +1784,7 @@ def _append_offset(values, offsets, additions):
 
 def _general_pump_attributes(simulation):
     """Flatten the general pump graph into openPMD iteration attributes."""
-    topology = simulation.gainMedium.topology
+    topology = simulation._backendGainMedium.topology
     pump = simulation.pump
     source_surfaces, source_surface_offsets = [], [0]
     spectrum_wavelengths, spectrum_weights, spectrum_sigma_a, spectrum_sigma_e = [], [], [], []
@@ -1907,7 +1907,7 @@ def _write_simulation_input(input_path, spec, simulation, run_control, *, close_
     with OpenPmdInputSeries(input_path, backend=spec.name) as writer:
         writer.write(
             simulation.phiASE,
-            simulation.gainMedium,
+            simulation._backendGainMedium,
             simulation.crossSections,
             iteration_index=0,
             include_static=True,
@@ -1981,7 +1981,7 @@ def _run_streaming_simulation(
                 with OpenPmdInputSeries(input_path, backend=spec.name) as writer:
                     writer.write(
                         simulation.phiASE,
-                        simulation.gainMedium,
+                        simulation._backendGainMedium,
                         simulation.crossSections,
                         iteration_index=0,
                         include_static=True,
@@ -2001,7 +2001,7 @@ def _run_streaming_simulation(
                             )
                         writer.write(
                             simulation.phiASE,
-                            simulation.gainMedium,
+                            simulation._backendGainMedium,
                             simulation.crossSections,
                             iteration_index=completed_step,
                             include_static=False,

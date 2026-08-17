@@ -15,8 +15,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from HASEonGPU import CrossSectionData, PhiASE
+from HASEonGPU import (
+    CrossSectionTable,
+    Domain,
+    GainMedium,
+    Material,
+    OpticalComponent,
+    PhiASE,
+    units,
+)
 from alpaka_backend_matrix import alpaka_runtime_backend
+from pyInclude.lowering import lowerGainMedium
 
 
 repoRoot = Path(__file__).resolve().parents[3]
@@ -118,17 +127,45 @@ def _tet_types(reference):
 
 
 def _make_current_medium(reference, cladding_absorption):
-    medium = laserPumpCladding.laserPumpCladdingMedium(cladAbsorption=cladding_absorption)
-    topology = medium.topology
+    metadata = reference["metadata"]["material"]
+    topology = laserPumpCladding.laserPumpCladdingComponent()[0].domain.topologies[0]
     tet_types = _tet_types(reference)
     cladding_cells = np.flatnonzero(tet_types == CLADDING_NUMBER)
-    topology = topology.withCellDomains(
-        [
-            {"domain": 1, "name": "gain_medium", "where": "all"},
-            {"domain": 2, "name": "cladding_volume", "cellIndices": cladding_cells},
-        ]
+    active = Material(
+        materialName="Yb:YAG regression material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.83,
+        fluorescenceLifetime=0.941 * units.ms,
+        crossSections=CrossSectionTable.monochromatic(
+            wavelength=metadata["wavelength"] * units.m,
+            absorption=metadata["crossSectionAbsorption"] * units.cm**2,
+            emission=metadata["crossSectionEmission"] * units.cm**2,
+        ),
+        activeIonDensity=2.776e20 / units.cm**3,
     )
-    medium.topology = topology
+    claddingMask = np.zeros(topology.numberOfCells, dtype=bool)
+    claddingMask[cladding_cells] = True
+    gainDomain = Domain(
+        entityKind="volume",
+        topology=topology,
+        mask=~claddingMask,
+    )
+    claddingDomain = Domain(
+        entityKind="volume",
+        topology=topology,
+        mask=claddingMask,
+    )
+    component = OpticalComponent(domain=gainDomain, material=active)
+    medium = GainMedium([component])
+    passive = Material(
+        materialName="cladding",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.0,
+        fluorescenceLifetime=None,
+        crossSections=None,
+        bulkAttenuation=cladding_absorption / units.cm,
+    )
+    claddingComponent = OpticalComponent(domain=claddingDomain, material=passive)
 
     gain_beta = float(reference["metadata"]["material"]["gainBetaVolume"])
     beta_volume = np.full(topology.numberOfCells, gain_beta, dtype=np.float64)
@@ -136,11 +173,12 @@ def _make_current_medium(reference, cladding_absorption):
 
     # PhiASE source selection and propagation use only per-cell betaVolume;
     # cladding cells have exactly zero source.
-    medium.get("betaVolume").value = beta_volume
-    medium.get("claddingCellTypes").value = tet_types
-    medium.get("claddingNumber").value = CLADDING_NUMBER
-    medium.get("claddingAbsorption").value = cladding_absorption
-    return medium
+    backend, crossSections = lowerGainMedium(
+        medium,
+        {component.domain: beta_volume[~claddingMask]},
+        opticalComponents=[component, claddingComponent],
+    )
+    return backend, crossSections, claddingDomain
 
 
 def testTrueCladdingReferenceDocumentsStaticLegacyContract(trueCladdingReference):
@@ -194,7 +232,7 @@ def testTrueCladdingReferenceDocumentsStaticLegacyContract(trueCladdingReference
 
 def testTrueCladdingShellMapsEveryLegacyWedgeToThreeTetChildren(trueCladdingReference):
     reference = trueCladdingReference
-    medium = _make_current_medium(reference, PHYSICAL_CLADDING_ABSORPTION)
+    medium, _crossSections, claddingDomain = _make_current_medium(reference, PHYSICAL_CLADDING_ABSORPTION)
     topology = medium.topology
     tet_types = np.asarray(medium.get("claddingCellTypes").value, dtype=np.uint32)
     tet_cells = np.asarray(topology.cellPointIndices, dtype=np.uint32)
@@ -210,11 +248,19 @@ def testTrueCladdingShellMapsEveryLegacyWedgeToThreeTetChildren(trueCladdingRefe
         np.broadcast_to(reference["baseCladdingCellTypes"], (9, 812)),
     )
     assert np.count_nonzero(tet_types == CLADDING_NUMBER) == 648
-    assert topology.cellDomainNames == {1: "gain_medium", 2: "cladding_volume"}
-    np.testing.assert_array_equal(topology.cellDomains == 2, tet_types == CLADDING_NUMBER)
+    assert np.count_nonzero(claddingDomain.maskFor(claddingDomain.topologies[0])) == 648
 
     for wedge, children in zip(reference["cells"], tet_cells.reshape((-1, 3, 4)), strict=True):
-        np.testing.assert_array_equal(np.unique(children), np.sort(wedge))
+        childPoints = np.unique(np.asarray(topology.points)[children.reshape(-1)], axis=0)
+        wedgePoints = np.asarray(reference["points"])[wedge]
+        childOrder = np.lexsort(childPoints.T[::-1])
+        wedgeOrder = np.lexsort(wedgePoints.T[::-1])
+        np.testing.assert_allclose(
+            childPoints[childOrder],
+            wedgePoints[wedgeOrder],
+            rtol=0.0,
+            atol=0.0,
+        )
 
     tet_volumes = np.asarray(
         [_tet_volume(topology.points, cell) for cell in tet_cells],
@@ -239,14 +285,9 @@ def testTrueCladdingShellMapsEveryLegacyWedgeToThreeTetChildren(trueCladdingRefe
 def currentTrueCladdingResults(trueCladdingReference, openPmdFileBackend):
     reference = trueCladdingReference
     material = reference["metadata"]["material"]
-    cross_sections = CrossSectionData.monochromatic(
-        wavelength=material["wavelength"],
-        crossSectionAbsorption=material["crossSectionAbsorption"],
-        crossSectionEmission=material["crossSectionEmission"],
-    )
     results = []
     for cladding_absorption in material["claddingAbsorptions"]:
-        medium = _make_current_medium(reference, cladding_absorption)
+        medium, cross_sections, _claddingDomain = _make_current_medium(reference, cladding_absorption)
         phi_ase = PhiASE(
             crossSections=cross_sections,
             minRays=CURRENT_FORWARD_RAYS,

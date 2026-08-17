@@ -17,7 +17,8 @@ from time import perf_counter
 import numpy as np
 
 from .alpakaUtils import AlpakaBackends
-from .geometry import GainMedium
+from .physical import Domain, GainMedium, OpticalComponent
+from .lowering import lowerGainMedium, lowerSurfaceDomain
 from .laser import (
     CrossSectionData,
     LaserProperties,
@@ -116,8 +117,6 @@ class PhiASE:
     directly with a ``GainMedium`` and ``CrossSectionData`` object.
     """
 
-    config: object | None = None
-    """Optional YAML filename or mapping with PhiASE run-control settings."""
     crossSections: CrossSectionData | None = None
     """Absorption/emission spectra used by the ASE calculation."""
     spectralProperties: SpectralDecomposition | None = None
@@ -179,11 +178,6 @@ class PhiASE:
     _openpmdSession: object | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
-        if isinstance(self.config, (str, Path)):
-            self._applyConfig(self._loadConfig(self.config))
-        elif isinstance(self.config, dict):
-            self._applyConfig(self.config)
-
         if self.ase_steps is not None:
             if isinstance(self.ase_steps, bool) or not isinstance(self.ase_steps, (int, np.integer)):
                 raise TypeError("PhiASE.ase_steps must be an integer or None")
@@ -210,8 +204,14 @@ class PhiASE:
 
     @classmethod
     def fromYaml(cls, filename, **overrides):
-        """Create a ``PhiASE`` configuration from YAML plus Python overrides."""
-        obj = cls(filename)
+        """Read ``simulation.phi_ase`` from a schema-v3 configuration."""
+        from .configuration import _loadYaml, _phiAse
+
+        _path, data = _loadYaml(filename)
+        simulation = data.get("simulation")
+        if not isinstance(simulation, dict) or not isinstance(simulation.get("phi_ase"), dict):
+            raise ValueError("schema-v3 PhiASE YAML requires simulation.phi_ase")
+        obj = _phiAse(simulation["phi_ase"], None)
         for name, value in overrides.items():
             setattr(obj, name, value)
         return obj._syncCrossSections()
@@ -242,7 +242,7 @@ class PhiASE:
     def fromArgs(cls, args, **overrides):
         """Create a ``PhiASE`` configuration from parsed argparse results."""
         config = getattr(args, "phi_ase_config", None)
-        obj = cls(config) if config else cls()
+        obj = cls.fromYaml(config) if config else cls()
         mapping = {
             "min_rays": "minRays",
             "max_rays": "maxRays",
@@ -270,105 +270,6 @@ class PhiASE:
         for name, value in overrides.items():
             setattr(obj, name, value)
         return obj
-
-    @staticmethod
-    def _loadConfig(filename):
-        path = Path(filename)
-        try:
-            import yaml
-        except ImportError as exc:
-            raise ImportError("PhiASE YAML configuration requires PyYAML") from exc
-        with path.open("r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle) or {}
-        if not isinstance(data, dict):
-            raise ValueError(f"PhiASE config '{filename}' must contain a mapping")
-        return data
-
-    def _applyConfig(self, config):
-        if config.get("schema_version") == 2:
-            simulation = config.get("simulation")
-            if not isinstance(simulation, dict) or not isinstance(simulation.get("phi_ase"), dict):
-                raise ValueError("schema-v2 PhiASE YAML requires simulation.phi_ase")
-            section = simulation["phi_ase"]
-            aliases = {
-                "min_rays": "minRays",
-                "max_rays": "maxRays",
-                "propagation_mode": "propagationMode",
-                "forward_ray_count": "forwardRayCount",
-                "relative_standard_error_threshold": "relativeStandardErrorThreshold",
-                "reflection_max_iterations": "reflectionMaxIterations",
-                "reflection_tolerance": "reflectionTolerance",
-                "surface_reservoir_size": "surfaceReservoirSize",
-                "adaptive_steps": "adaptiveSteps",
-                "use_reflections": "useReflections",
-                "openpmd_backend": "openpmdBackend",
-                "parallel_mode": "parallelMode",
-                "num_devices": "numDevices",
-                "n_per_node": "nPerNode",
-                "min_sample_range": "minSampleRange",
-                "max_sample_range": "maxSampleRange",
-                "rng_seed": "rngSeed",
-            }
-            unchanged = {"repetitions", "monochromatic", "backend", "ase_steps"}
-            unknown = sorted(set(section) - set(aliases) - unchanged - {"cross_sections"})
-            if unknown:
-                raise ValueError(f"unsupported simulation.phi_ase options: {unknown}")
-            for name, value in section.items():
-                if name != "cross_sections":
-                    setattr(self, aliases.get(name, name), value)
-            return self
-
-        sections = []
-        for key in ("phiASE", "phi_ase", "experiment", "compute"):
-            value = config.get(key)
-            if isinstance(value, dict):
-                sections.append(value)
-        sections.append(config)
-        aliases = {
-            "minRaysPerSample": "minRays",
-            "maxRaysPerSample": "maxRays",
-            "min_rays": "minRays",
-            "max_rays": "maxRays",
-            "min_rays_per_sample": "minRays",
-            "max_rays_per_sample": "maxRays",
-            "propagation_mode": "propagationMode",
-            "forward_ray_count": "forwardRayCount",
-            "relative_standard_error_threshold": "relativeStandardErrorThreshold",
-            "reflection_max_iterations": "reflectionMaxIterations",
-            "reflection_tolerance": "reflectionTolerance",
-            "surface_reservoir_size": "surfaceReservoirSize",
-            "adaptive_steps": "adaptiveSteps",
-            "use_reflections": "useReflections",
-            "openpmd_backend": "openpmdBackend",
-            "parallel_mode": "parallelMode",
-            "max_gpus": "numDevices",
-            "n_per_node": "nPerNode",
-            "write_vtk": "writeVtk",
-            "min_sample_range": "minSampleRange",
-            "max_sample_range": "maxSampleRange",
-            "rng_seed": "rngSeed",
-        }
-        allowed = {
-            "minRays", "maxRays", "propagationMode", "forwardRayCount",
-            "relativeStandardErrorThreshold", "reflectionMaxIterations", "reflectionTolerance",
-            "surfaceReservoirSize", "repetitions", "adaptiveSteps", "useReflections", "monochromatic",
-            "backend", "openpmdBackend", "parallelMode", "numDevices", "nPerNode", "writeVtk", "devices",
-            "minSampleRange", "maxSampleRange", "rngSeed",
-        }
-        for section in sections:
-            for name, value in section.items():
-                if name in {"forwardRayLength", "forward_ray_length"}:
-                    raise ValueError(
-                        "forward_ray_length is retired; forward rays now propagate to their physical boundary"
-                    )
-                if name in {"mseThreshold", "mse_threshold"}:
-                    raise ValueError(
-                        "mse_threshold is retired; configure relative_standard_error_threshold instead"
-                    )
-                attr = aliases.get(name, name)
-                if attr in allowed:
-                    setattr(self, attr, value)
-        return self
 
     def openPmdAttributes(self, *, numberOfSamples):
         if str(self.propagationMode).strip().lower() != "forward":
@@ -492,7 +393,7 @@ class PhiASE:
 
 @dataclass
 class TimeStepState:
-    """Snapshot handed to ``on_step`` callbacks after a completed time step.
+    """Snapshot handed to ``onStep`` callbacks after a completed time step.
 
     The arrays are copies of the simulation outputs at ``step``/``time`` and
     contain exactly one value per Tet4 cell. The compiled simulation has no
@@ -521,40 +422,40 @@ class TimeStepState:
     """Ray visit count for each cell, when selected."""
     topology: object | None = None
     """Static mesh topology used by geometry-aware state callbacks."""
-    @property
-    def beta_volume(self):
-        return self.betaVolume
-
-    @property
-    def phi_ase(self):
-        return self.phiAse
-
-    @property
-    def dndt_ase(self):
-        return self.dndtAse
-
-    @property
-    def dndt_pump(self):
-        return self.dndtPump
-
-    @property
-    def ase_result(self):
-        return self.aseResult
 
 @dataclass(init=False)
 class Simulation:
     """High-level Python wrapper for compiled C++/Alpaka simulation runs.
 
     Python sends the initial setup to the compiled backend and receives
-    ``TimeStepState`` snapshots after completed steps. ``on_init`` prepares the
-    initial state before step 1, ``on_step`` consumes selected completed-step
-    snapshots, and ``before_step`` updates selected control fields between two
+    ``TimeStepState`` snapshots after completed steps. ``onInit`` prepares the
+    initial state before step 1, ``onStep`` consumes selected completed-step
+    snapshots, and ``beforeStep`` updates selected control fields between two
     steps. Autonomous runs never call Python between backend steps.
-    Synchronized-debug runs call ``before_step`` after each nonfinal
-    ``on_step`` callback and before allowing the next backend step to begin.
+    Synchronized-debug runs call ``beforeStep`` after each nonfinal
+    ``onStep`` callback and before allowing the next backend step to begin.
+
+    Parameters
+    ----------
+    opticalComponents
+        Complete set of disjoint optical volume components traversed by rays.
+        Their domains provide all executable geometry; ``Simulation`` owns no
+        separate topology collection or aggregate optical domain.
+    gainMedium
+        Active subset of ``opticalComponents`` participating in population and
+        stimulated-emission dynamics.
+    exteriorSurface
+        Optional user-declared surface :class:`Domain`. When omitted or
+        ``None``, it is inferred as the boundary of the union of all component
+        domains.
+    initialExcitation
+        Scalar active-region excitation or an exact mapping from volume domains
+        to scalar/array values. Passive cells are initialized to zero.
     """
 
     gainMedium: GainMedium
+    exteriorSurface: Domain
+    """Exterior surface, inferred from all component domains unless supplied."""
     pump: _PumpProperties | None
     phiASE: PhiASE
     timeIntegrationSolver: TimeIntegrationSolver | str
@@ -580,36 +481,72 @@ class Simulation:
     def __init__(
         self,
         *,
-        gain_medium,
-        phi_ase,
-        time_integrator,
-        time_step_size,
-        cross_sections=None,
-        simulation_steps=None,
-        max_time=None,
-        pre_pump=False,
-        report_timings=False,
-        execution_mode="autonomous",
-        output_steps=None,
-        output_fields=None,
-        control_fields=(),
+        opticalComponents,
+        gainMedium,
+        phiASE,
+        timeIntegrator,
+        timeStepSize,
+        initialExcitation=0.0,
+        exteriorSurface=None,
+        simulationSteps=None,
+        maxTime=None,
+        prePump=False,
+        reportTimings=False,
+        executionMode="autonomous",
+        outputSteps=None,
+        outputFields=None,
+        controlFields=(),
     ):
-        self.gainMedium = gain_medium
+        if not isinstance(gainMedium, GainMedium):
+            raise TypeError("gainMedium must be GainMedium")
+        self.opticalComponents = tuple(opticalComponents)
+        if not all(
+            isinstance(component, OpticalComponent)
+            for component in self.opticalComponents
+        ):
+            raise TypeError("opticalComponents must contain OpticalComponent values")
+        if any(component not in self.opticalComponents for component in gainMedium.components):
+            raise ValueError("every GainMedium component must be owned by Simulation")
+        occupied = {}
+        for component in self.opticalComponents:
+            for topology, mask in component.domain._shards:
+                previous = occupied.setdefault(id(topology), np.zeros_like(mask, dtype=bool))
+                if np.any(previous & mask):
+                    raise ValueError(
+                        "OpticalComponent volume domains must not overlap in one Simulation"
+                    )
+                previous |= mask
+        if exteriorSurface is None:
+            occupiedDomain = Domain(entityKind="volume")
+            for component in self.opticalComponents:
+                occupiedDomain += component.domain
+            selectedSurface = occupiedDomain.boundary()
+        else:
+            selectedSurface = (
+                exteriorSurface
+                if isinstance(exteriorSurface, Domain)
+                else Domain(exteriorSurface)
+            )
+        if selectedSurface.entityKind != "surface" or selectedSurface.isEmpty:
+            raise ValueError("exteriorSurface must resolve to a non-empty surface Domain")
+        self.exteriorSurface = selectedSurface
+        self.gainMedium = gainMedium
+        self.initialExcitation = initialExcitation
         self.pump = None
-        self.phiASE = phi_ase
-        self.timeIntegrationSolver = time_integrator
-        self.timeStep = float(time_step_size)
-        self.crossSections = cross_sections
-        self.endTime = max_time
-        self.simulationSteps = None if simulation_steps is None else int(simulation_steps)
-        self.prePump = bool(pre_pump)
-        self.reportTimings = bool(report_timings)
-        self.executionMode = str(execution_mode)
-        self.outputSteps = None if output_steps is None else tuple(int(step) for step in output_steps)
+        self.phiASE = phiASE
+        self.timeIntegrationSolver = timeIntegrator
+        self.timeStep = float(timeStepSize)
+        self.crossSections = None
+        self.endTime = maxTime
+        self.simulationSteps = None if simulationSteps is None else int(simulationSteps)
+        self.prePump = bool(prePump)
+        self.reportTimings = bool(reportTimings)
+        self.executionMode = str(executionMode)
+        self.outputSteps = None if outputSteps is None else tuple(int(step) for step in outputSteps)
         self.outputFields = tuple(
-            SIMULATION_OUTPUT_FIELDS if output_fields is None else (str(field) for field in output_fields)
+            SIMULATION_OUTPUT_FIELDS if outputFields is None else (str(field) for field in outputFields)
         )
-        self.controlFields = tuple(str(field) for field in control_fields)
+        self.controlFields = tuple(str(field) for field in controlFields)
         self._pumpRegistrations = []
         self._time = 0.0
         self._step = 0
@@ -621,11 +558,11 @@ class Simulation:
         self.__post_init__()
 
     @classmethod
-    def from_yaml(cls, filename):
-        """Construct a simulation object graph from schema-v2 YAML."""
-        from .configuration import simulation_from_yaml
+    def fromYaml(cls, filename, **objects):
+        """Construct a schema-v3 simulation, resolving missing named objects."""
+        from .configuration import simulationFromYaml
 
-        return simulation_from_yaml(filename, simulation_cls=cls)
+        return simulationFromYaml(filename, simulationCls=cls, **objects)
 
     def __post_init__(self):
         if self.timeIntegrationSolver is None:
@@ -662,14 +599,14 @@ class Simulation:
             raise ValueError(f"unsupported control_fields: {unknown_control_fields}")
         if len(set(self.controlFields)) != len(self.controlFields):
             raise ValueError("control_fields must be unique")
-        if self.crossSections is None and (
-            self.phiASE.spectralProperties is not None or self.phiASE.crossSections is not None
-        ):
-            self.crossSections = self._resolveSpectralProperties()
-        if self.phiASE.crossSections is None and self.crossSections is not None:
-            self.phiASE.crossSections = self.crossSections
-        if self.phiASE.spectralProperties is None and self.crossSections is not None:
-            self.phiASE.spectralProperties = self.crossSections
+        self._backendGainMedium, self.crossSections = lowerGainMedium(
+            self.gainMedium,
+            self.initialExcitation,
+            opticalComponents=self.opticalComponents,
+        )
+        self.phiASE.gainMedium = self._backendGainMedium
+        self.phiASE.crossSections = self.crossSections
+        self.phiASE.spectralProperties = self.crossSections
         self._ensureStateArrays()
 
     def _resolveSpectralProperties(self):
@@ -681,25 +618,48 @@ class Simulation:
             return self.pump.sources[0].crossSections
         raise ValueError("Simulation requires spectral properties via Simulation.crossSections, phiASE, or pump")
 
-    def add_pump(self, pump, injection_method, *, relays=()):
+    def addPump(self, pump, injectionMethod, *, relays=()):
         """Register a physical pump and its numerical injection method."""
         if self._initialized:
             raise RuntimeError("pumps must be added before the simulation is initialized")
         if not isinstance(pump, Pump):
             raise TypeError("pump must be a Pump")
-        if not isinstance(injection_method, SurfacePumpInjector):
-            raise TypeError("injection_method must be SurfacePumpInjector")
+        if not isinstance(injectionMethod, SurfacePumpInjector):
+            raise TypeError("injectionMethod must be SurfacePumpInjector")
         relays = tuple(relays)
         if not all(isinstance(relay, PlanarPumpRelay) for relay in relays):
             raise TypeError("relays must contain PlanarPumpRelay values")
-        self._pumpRegistrations.append((pump, injection_method, relays))
+        def lowerDomains(values):
+            return tuple(
+                lowerSurfaceDomain(self._backendGainMedium, value)
+                if hasattr(value, "entityKind")
+                else value
+                for value in values
+            )
+
+        backendInjection = SurfacePumpInjector(lowerDomains(injectionMethod.surface_domains))
+        backendRelays = tuple(
+            PlanarPumpRelay(
+                lowerDomains(relay.exit_domains),
+                lowerDomains(relay.entry_domains),
+                flip_u=relay.flip_u,
+                flip_v=relay.flip_v,
+                rotation=relay.rotation,
+                offset=relay.offset,
+                tilt=relay.tilt,
+                magnification=relay.magnification,
+                transmission=relay.transmission,
+            )
+            for relay in relays
+        )
+        self._pumpRegistrations.append((pump, backendInjection, backendRelays))
         self.pump = _PumpProperties(
             sources=tuple(
                 _PumpSource(
                     surfaceDomains=injector.surface_domains,
                     totalPower=physical.total_power,
                     spectrum=physical.spectrum,
-                    crossSections=physical.cross_sections,
+                    crossSections=self.crossSections,
                     angularDistribution=physical.angular_distribution,
                     profile=physical.profile,
                     relays=registered_relays,
@@ -718,7 +678,7 @@ class Simulation:
             self.phiASE.spectralProperties = self.crossSections
         return self
 
-    def on_step(self, callback, *args, **kwargs):
+    def onStep(self, callback, *args, **kwargs):
         """Register a post-snapshot callback.
 
         The callback signature is ``callback(state, *args, **kwargs)``.
@@ -737,12 +697,12 @@ class Simulation:
         self._step_callbacks.append((callback, args, kwargs))
         return self
 
-    def on_init(self, callback, *args, **kwargs):
+    def onInit(self, callback, *args, **kwargs):
         """Register a one-time initialization callback.
 
         The callback signature is ``callback(simulation, *args, **kwargs)``.
         ``Simulation`` supplies the live simulation object as the first
-        argument, then appends the user arguments passed to ``on_init``. The
+        argument, then appends the user arguments passed to ``onInit``. The
         hook runs once, immediately before the first compiled run. Use it to
         modify the initial state consumed by step 1; it does not run again for
         later calls to ``step`` on the same object.
@@ -753,14 +713,14 @@ class Simulation:
         self._init_callbacks.append((callback, args, kwargs))
         return self
 
-    def before_step(self, callback, *args, **kwargs):
+    def beforeStep(self, callback, *args, **kwargs):
         """Register a synchronized-debug callback that runs between steps.
 
         The callback signature is ``callback(simulation, *args, **kwargs)``.
-        It first runs after step 1: Python has called ``on_step`` for the
-        completed snapshot, then calls ``before_step`` to prepare selected
+        It first runs after step 1: Python has called ``onStep`` for the
+        completed snapshot, then calls ``beforeStep`` to prepare selected
         ``control_fields`` before step 2 starts. It repeats after every
-        nonfinal step and is not called after the final step. Use ``on_init``
+        nonfinal step and is not called after the final step. Use ``onInit``
         to modify state before step 1.
 
         This hook requires ``execution_mode="synchronized-debug"`` and a
@@ -772,11 +732,11 @@ class Simulation:
         self._before_step_callbacks.append((callback, args, kwargs))
         return self
 
-    def run_until(self, max_time=None):
+    def runUntil(self, maxTime=None):
         """Advance to ``max_time`` or the constructor's configured maximum."""
-        target = self.endTime if max_time is None else max_time
+        target = self.endTime if maxTime is None else maxTime
         if target is None:
-            raise ValueError("run_until requires max_time or a configured max_time")
+            raise ValueError("runUntil requires maxTime or a configured maxTime")
         steps = 0
         while self._time + steps * self.timeStep < float(target) - 0.5 * self.timeStep:
             steps += 1
@@ -798,11 +758,11 @@ class Simulation:
             raise ValueError("steps must be positive")
         if self._before_step_callbacks and self.executionMode != "synchronized-debug":
             raise ValueError(
-                "before_step callbacks require execution_mode='synchronized-debug'; "
+                "beforeStep callbacks require executionMode='synchronized-debug'; "
                 "autonomous runs do not contact Python between steps"
             )
         if self.pump is None:
-            raise ValueError("Simulation requires at least one pump registered with add_pump")
+            raise ValueError("Simulation requires at least one pump registered with addPump")
         self._run_init_callbacks()
         _validate_launch_backends(self.phiASE)
 
@@ -830,11 +790,11 @@ class Simulation:
                 dndtAse=_optional_state_array(raw_state.dndtAse, np.float64),
                 dndtPump=_optional_state_array(raw_state.dndtPump, np.float64),
                 aseResult=raw_state.aseResult,
-                topology=self.gainMedium.topology,
+                topology=self._backendGainMedium.topology,
             )
-            explicit_topology = hasattr(self.gainMedium.topology, "cellPointIndices")
+            explicit_topology = hasattr(self._backendGainMedium.topology, "cellPointIndices")
             if state.betaVolume is not None:
-                self.gainMedium.get("betaVolume").value = (
+                self._backendGainMedium.get("betaVolume").value = (
                     backendFlat(state.betaVolume.reshape(-1, order="F"))
                     if explicit_topology
                     else state.betaVolume
@@ -903,7 +863,7 @@ class Simulation:
             if self.simulationSteps is not None:
                 nsteps = self.simulationSteps
             elif self.endTime is not None:
-                return self.run_until()
+                return self.runUntil()
             else:
                 nsteps = self._derived_simulation_steps()
         if int(nsteps) <= 0:
@@ -911,48 +871,13 @@ class Simulation:
         self.runSteps(int(nsteps))
         return self
 
-    def get_last_state(self):
-        return self.getLastState()
-
     @property
-    def current_step(self):
+    def currentStep(self):
         return self._step
 
     @property
-    def current_time(self):
+    def currentTime(self):
         return self._time
-
-    @property
-    def gain_medium(self):
-        return self.gainMedium
-
-    @property
-    def phi_ase(self):
-        return self.phiASE
-
-    @property
-    def time_integrator(self):
-        return self.timeIntegrationSolver
-
-    @property
-    def time_step_size(self):
-        return self.timeStep
-
-    @property
-    def cross_sections(self):
-        return self.crossSections
-
-    @property
-    def simulation_steps(self):
-        return self.simulationSteps
-
-    @property
-    def pre_pump(self):
-        return self.prePump
-
-    @property
-    def max_time(self):
-        return self.endTime
 
     @property
     def pumps(self):
@@ -968,7 +893,7 @@ class Simulation:
         """Return the most recent completed ``TimeStepState`` snapshot.
 
         ``Simulation`` does not retain a full time-step history. Register an
-        ``on_step`` callback to write or store per-step state explicitly.
+        ``onStep`` callback to write or store per-step state explicitly.
         """
         return self.getLastState()
 
@@ -988,9 +913,9 @@ class Simulation:
         return self._step
 
     def _ensureStateArrays(self):
-        if "betaVolume" not in self.gainMedium.physical:
-            self.gainMedium.get("betaVolume").value = np.zeros(
-                self.gainMedium.get("betaVolume").expectedShape,
+        if "betaVolume" not in self._backendGainMedium.physical:
+            self._backendGainMedium.get("betaVolume").value = np.zeros(
+                self._backendGainMedium.get("betaVolume").expectedShape,
                 dtype=np.float64,
             )
 
@@ -1000,5 +925,3 @@ class Simulation:
         self._initialized = True
         for callback, args, kwargs in self._init_callbacks:
             callback(self, *args, **kwargs)
-
-TimeSteppedSimulation = Simulation

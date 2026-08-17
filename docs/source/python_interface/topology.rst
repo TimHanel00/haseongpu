@@ -1,10 +1,17 @@
 Volume topology
 ===============
 
-``VolumeTopology`` is the geometry contract for current HASEonGPU transport.
-It stores an explicit unstructured Tet4 mesh; ASE, pump, and time-dependent
-state are cell-centered. It does not store excitation, material constants,
-spectra, or boundary optics. Only VTK cell type ``10`` (Tet4) is supported.
+``VolumeTopology`` is the concrete geometry accepted by the current HASEonGPU
+backend. It stores an explicit unstructured Tet4 mesh; ASE, pump, and
+time-dependent state are cell-centered. It does not store excitation, material
+constants, spectra, or boundary optics. Only VTK cell type ``10`` (Tet4) is
+supported by this implementation.
+
+The public ``Domain`` contract is broader. It represents typed mesh regions
+through generic cell, face, and neighbor information and does not require a
+``VolumeTopology`` instance. This permits frontend composition over other cell
+structures. Backend lowering is the point at which unsupported discretizations
+are rejected.
 
 Construction
 ------------
@@ -61,14 +68,15 @@ The main size queries are ``numberOfPoints``, ``numberOfCells``,
 ``numberOfFacesPerCell``, and ``numberOfSamplePoints``. ``samplePoints`` equals
 the cell centers in an explicit volume topology.
 
-Named domains
--------------
+Geometry labels and physical domains
+------------------------------------
 
 Domains are positive integer labels. Cell domains identify volume regions;
 surface domains identify faces used by pump injection, relays, or optical
 boundaries. gmsh physical names are retained and can be used instead of numeric
-tags. A domain label is geometry metadata: it acquires physical meaning when a
-``GainMedium``, pump injector, or relay refers to it.
+tags. A label is geometry metadata. ``Domain.fromGmsh`` turns a label into a
+typed volume or surface selection before a component, pump injector, relay, or
+boundary model gives it physical meaning.
 
 .. code-block:: python
 
@@ -87,43 +95,67 @@ names or tags. ``withSurfaceDomains`` additionally accepts face indices,
 ``allowInternal=True`` is explicit. Both methods return a copied topology, so
 the input object remains unchanged.
 
-Resolve names with ``cellDomainMap()`` or ``surfaceDomainMap()``:
+The low-level maps remain available for inspecting imported labels:
 
 .. code-block:: python
 
-   entry_id = topology.surfaceDomainMap().resolve("pump_input")
+   entryId = topology.surfaceDomainMap().resolve("pump_input")
 
-Boundary optics belong to ``GainMedium`` because they are physical fields, not
-connectivity. The topology supplies only the name that connects an optical
-assignment to a set of faces:
+For physical construction, resolve a typed domain and assign boundary optics
+to its component:
 
 .. code-block:: python
 
-   from HASEonGPU import GainMedium, SurfaceOptics
+   from HASEonGPU import Domain, OpticalComponent, SurfaceOptics
 
-   medium = GainMedium(topology).with_surface_optics({
-       "pump_input": SurfaceOptics(
-           reflectivity=0.0, n_inside=1.83, n_outside=1.0
-       )
-   })
+   crystalVolume = Domain.fromGmsh(topology, "gain", entityKind="volume")
+   pumpInput = Domain.fromGmsh(topology, "pump_input", entityKind="surface")
+   crystal = OpticalComponent(domain=crystalVolume, material=material)
+   crystal.assignSurfaceOptics(
+       pumpInput,
+       SurfaceOptics(
+           reflectivity=0.0,
+           n_inside=material.refractiveIndex,
+           n_outside=1.0,
+       ),
+   )
+
+When several materials partition one topology, form the occupied volume before
+extracting its surface:
+
+.. code-block:: python
+
+   occupiedVolume = gainDomain + claddingDomain
+   exposedSurface = occupiedVolume.boundary()
+
+``boundary()`` retains a selected cell face only when its neighbor is outside
+the volume union. Gain--cladding and cladding--cladding interfaces are therefore
+not mistaken for exposed faces. This calculation uses topological adjacency,
+not coordinate proximity; independently meshed touching components must be
+remeshed or composed into a conforming topology first.
+
+``Simulation`` performs this union-and-boundary operation over all optical
+components when ``exteriorSurface`` is omitted or ``None``. Pass an explicit
+surface when the model requires a different exterior selection. The temporary
+occupied volume is not exposed as ``Simulation.opticalDomain``.
 
 See :doc:`gain_medium` for ``SurfaceOptics`` syntax and
 :ref:`ase-surface-reflections` for the implemented boundary physics.
 
-VTK state input
----------------
+VTK geometry input
+------------------
 
-``VolumeTopology.fromVtk`` reads geometry only. Use ``GainMedium.fromVtk``
-when a Tet4 VTK file also contains ``betaVolume`` and supported physical
-fields:
+``VolumeTopology.fromVtk`` reads an ASCII VTK unstructured grid and constructs
+the Tet4 topology. Physical arrays in a legacy VTK file are not converted into
+the redesigned ``Material`` or ``GainMedium`` automatically:
 
 .. code-block:: python
 
    topology = VolumeTopology.fromVtk("geometry.vtk")
-   medium = GainMedium.fromVtk("prepared-state.vtk")
 
-This distinction prevents a geometry loader from silently becoming a material
-or initial-state loader.
+Assign materials, excitation, and boundary optics explicitly after loading the
+topology. This prevents a geometry file from silently becoming the authority
+for run-specific material state.
 
 Legacy extruded topology
 ------------------------

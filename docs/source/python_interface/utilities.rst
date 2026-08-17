@@ -25,16 +25,8 @@ equation.
 Tet4 VTK
 --------
 
-Write a static explicit-volume medium, including supported physical fields,
-with either form:
-
-.. code-block:: python
-
-   medium.toVtk("prepared-state.vtk")
-   writeGainMediumVtk("prepared-state.vtk", medium)
-
-``GainMedium.fromVtk`` restores that prepared state. For dynamic
-``TimeStepState`` output, use a cell-data writer in an ``on_step`` callback; the
+Load static Tet4 geometry with ``VolumeTopology.fromFile``. For dynamic
+``TimeStepState`` output, use a cell-data writer in an ``onStep`` callback; the
 :doc:`laserPumpCladding tutorial <../laserPumpCladding>` contains the current
 Tet4 VTK callback used by the complete example.
 
@@ -64,11 +56,13 @@ openPMD/ParaView output
 
 ``writeParaviewState`` appends callback snapshots to an openPMD series and
 writes a small ``.pmd`` handle for ParaView. Pass an output directory and,
-optionally, the cladding absorption used for the derived field:
+optionally, the passive material's attenuation in ``cm^-1`` for the derived
+field:
 
 .. code-block:: python
 
-   simulation.on_step(writeParaviewState, "openpmd-output", 5.5)
+   attenuation = cladding.material.bulkAttenuation.toValue(units.cm**-1)
+   simulation.onStep(writeParaviewState, "openpmd-output", attenuation)
 
 The output contains beta, PhiASE, pump/ASE derivatives, and topology records.
 Its storage engine comes from the installed ``openpmd_api`` provider. See

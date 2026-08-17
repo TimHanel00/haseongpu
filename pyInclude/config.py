@@ -397,7 +397,7 @@ def run_reinstall(*, break_system_packages=False, use_ccache=False):
 def yaml_config(selection: WizardSelection):
     """Render a PhiASE-compatible YAML run-control snippet."""
     lines = [
-        "schema_version: 2",
+        "schema_version: 3",
         "",
         "simulation:",
         "  phi_ase:",

@@ -9,18 +9,6 @@ sys.path.insert(0, str(Path(__file__).parents[3] / "example"))
 import numpy as np
 import pytest
 
-from HASEonGPU import (
-    CrossSectionData,
-    FrozenPhiAseRungeKutta4,
-    PhiASE,
-    PlanarPumpRelay,
-    Pump,
-    PumpSpectrum,
-    Simulation,
-    SuperGaussianPumpProfile,
-    SurfacePumpInjector,
-    integrate_pump_profile,
-)
 import laserPumpCladdingApi as example
 
 
@@ -55,7 +43,7 @@ def _deposition_diagnostics(topology, states, reference, legacy_lumped_volume):
     cell_radius = np.linalg.norm(cell_coordinates[:, :2], axis=1)
     diagnostics = []
     for step, (state, legacy_rate) in enumerate(zip(states, reference["dndtPump"], strict=True), start=1):
-        cell_measure = np.asarray(state.dndt_pump, dtype=np.float64).reshape(-1) * cell_volumes
+        cell_measure = np.asarray(state.dndtPump, dtype=np.float64).reshape(-1) * cell_volumes
         point_measure = np.asarray(legacy_rate, dtype=np.float64).reshape(-1, order="F") * point_volumes
         cell_total = np.sum(cell_measure)
         point_total = np.sum(point_measure)
@@ -83,61 +71,35 @@ def test_general_pump_reproduces_legacy_crystal_inversion(openPmdFileBackend, al
     reference = np.load(
         Path(__file__).parents[2] / "data" / "pump" / "legacy_one_dimensional_reference.npz"
     )
-    wavelength = 940e-9
-    lambda_a, sigma_a, lambda_e, sigma_e = example._loadLaserPumpCladdingRawSpectra()
-    pump_cross_sections = CrossSectionData.monochromatic(
-        wavelength=wavelength,
-        crossSectionAbsorption=np.interp(wavelength * 1e9, lambda_a, sigma_a),
-        crossSectionEmission=np.interp(wavelength * 1e9, lambda_e, sigma_e),
-    )
-    medium = example.laserPumpCladdingMedium(cladAbsorption=5.5)
-    profile = SuperGaussianPumpProfile(radius_u=1.5, radius_v=1.5, exponent=40)
-    pump = Pump(
-        total_power=16e3 * integrate_pump_profile(medium.topology, "ase_bottom", profile),
-        spectrum=PumpSpectrum.monochromatic(wavelength),
-        cross_sections=pump_cross_sections,
-        ray_count=50_000,
-        pump_steps=3,
-        rng_seed=5489,
-        profile=profile,
-    )
-    spectral = example.laserPumpCladdingSpectralProperties(191)
-    phi_ase = PhiASE(
-        spectralProperties=spectral,
+    simulation = example.buildSimulation(
         backend=alpakaRuntimeBackend,
         openpmdBackend=openPmdFileBackend,
-        ase_steps=0,
-    )
-    simulation = Simulation(
-        gain_medium=medium,
-        phi_ase=phi_ase,
-        time_integrator=FrozenPhiAseRungeKutta4(),
-        time_step_size=2e-5,
-        simulation_steps=3,
-        cross_sections=spectral,
-    ).add_pump(
-        pump,
-        injection_method=SurfacePumpInjector(surface_domains="ase_bottom"),
-        relays=(PlanarPumpRelay.retroreflect("ase_top"),),
+        simulationSteps=3,
+        pumpSteps=3,
+        aseSteps=0,
+        spectralResolution=191,
+        pumpRayCount=50_000,
+        pumpRngSeed=5489,
     )
     states = []
-    simulation.on_step(states.append).step(3)
+    simulation.onStep(states.append).step(3)
+    topology = simulation._backendGainMedium.topology
 
-    beta_volume = np.stack([np.asarray(state.beta_volume) for state in states])
+    beta_volume = np.stack([np.asarray(state.betaVolume) for state in states])
     relative_field_error = np.linalg.norm(beta_volume - reference["betaVolume"]) / np.linalg.norm(
         reference["betaVolume"]
     )
 
-    cell_volumes = np.asarray(medium.topology.cellVolumes)
+    cell_volumes = np.asarray(topology.cellVolumes)
     legacy_lumped_volume = np.bincount(
-        np.asarray(medium.topology.cellPointIndices).reshape(-1),
+        np.asarray(topology.cellPointIndices).reshape(-1),
         weights=np.repeat(cell_volumes / 4.0, 4),
-        minlength=medium.topology.numberOfPoints,
+        minlength=topology.numberOfPoints,
     ).reshape(reference["dndtPump"].shape[1:], order="F")
-    new_total = np.asarray([np.sum(np.asarray(state.dndt_pump) * cell_volumes) for state in states])
+    new_total = np.asarray([np.sum(np.asarray(state.dndtPump) * cell_volumes) for state in states])
     old_total = np.asarray(
         [np.sum(values * legacy_lumped_volume) for values in reference["dndtPump"]]
     )
     np.testing.assert_allclose(new_total, old_total, rtol=0.01, atol=1e-12)
-    diagnostics = _deposition_diagnostics(medium.topology, states, reference, legacy_lumped_volume)
+    diagnostics = _deposition_diagnostics(topology, states, reference, legacy_lumped_volume)
     assert relative_field_error < 0.05, f"deposition diagnostics: {diagnostics}"

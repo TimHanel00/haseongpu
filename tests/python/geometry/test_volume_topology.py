@@ -14,7 +14,8 @@ repoRoot = Path(__file__).resolve().parents[3]
 
 
 from HASEonGPU import PhiASE, SpectralDecomposition
-from pyInclude.geometry import GainMedium, Gmsh, GmshElement, SurfaceOptics, VolumeTopology
+from pyInclude.geometry import Gmsh, GmshElement, SurfaceOptics, VolumeTopology
+from pyInclude.geometry.core import GainMedium
 import pyInclude.geometry.volume as volume_module
 import pyInclude.openpmd.transport as transport
 from alpaka_backend_matrix import alpaka_runtime_backend
@@ -521,7 +522,7 @@ def testExplicitOpenPmdStaticTopologyWriterStoresFaceLookupTables(tmp_path, open
 
 
 def testForwardOpenPmdInputWritesVolumeRecords(tmp_path, openPmdFileBackend):
-    from HASEonGPU import GainMedium, PhiASE, SpectralDecomposition
+    from HASEonGPU import PhiASE, SpectralDecomposition
 
     topology = _oneTetTopology()
     medium = GainMedium(topology=topology)

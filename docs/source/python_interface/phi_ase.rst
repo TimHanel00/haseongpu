@@ -1,16 +1,16 @@
 PhiASE
 ======
 
-``PhiASE`` configures the forward, source-driven ASE estimator. It consumes a
-Tet4 ``GainMedium`` and cross-section data and returns one flux estimate per
-cell. It owns numerical sampling, reflection, compute, transport, and parallel
-controls; it does not own geometry or the evolving excitation state.
+``PhiASE`` configures the forward, source-driven ASE estimator. ``Simulation``
+supplies its lowered gain domain and the authoritative spectra from the shared
+gain ``Material``. ``PhiASE`` owns numerical sampling, reflection, compute,
+transport, and parallel controls; it does not own geometry, material, or the
+evolving excitation state.
 ``propagationMode="forward"`` is the only supported mode.
 
 .. code-block:: python
 
    phi_ase = PhiASE(
-       spectralProperties=spectra,
        minRays=100_000,
        maxRays=1_000_000,
        adaptiveSteps=4,
@@ -22,7 +22,9 @@ controls; it does not own geometry or the evolving excitation state.
        ase_steps=150,
    )
 
-Call it directly for one state or pass it to ``Simulation``:
+Normal applications pass it to ``Simulation``. The direct ``run`` entry point
+is a low-level backend interface and accepts an already lowered medium plus
+``CrossSectionData``:
 
 .. code-block:: python
 
@@ -34,7 +36,7 @@ Call it directly for one state or pass it to ``Simulation``:
 The result includes ``phiAse``, ``standardError``,
 ``relativeStandardError``, ``totalRays``, and ``dndtAse`` plus surface-reservoir
 termination information when reflections are enabled. A time-stepped
-``Simulation`` exposes the same raw object as ``TimeStepState.ase_result``.
+``Simulation`` exposes the same raw object as ``TimeStepState.aseResult``.
 
 Sampling controls
 -----------------
@@ -122,11 +124,11 @@ flattened cell range. Normal full-volume runs leave them unset.
 YAML and CLI helpers
 --------------------
 
-``fromYaml`` accepts schema-v2 PhiASE settings under ``simulation.phi_ase``:
+``fromYaml`` accepts schema-v3 PhiASE settings under ``simulation.phi_ase``:
 
 .. code-block:: yaml
 
-   schema_version: 2
+   schema_version: 3
    simulation:
      phi_ase:
        min_rays: 100000
@@ -145,10 +147,9 @@ YAML and CLI helpers
 
    phi_ase = PhiASE.fromYaml(
        "config/hase-phiase.yaml",
-       spectralProperties=spectra,
        maxRays=2_000_000,
    )
 
-Keyword arguments override file values. ``addArguments`` and ``fromArgs`` add
-the same controls to an ``argparse`` command. Geometry, state, spectra, and pump
-objects remain Python inputs and are not YAML run-control data.
+Keyword arguments override file values. Material spectra are attached later by
+``Simulation``. ``addArguments`` and ``fromArgs`` add the same controls to an
+``argparse`` command.

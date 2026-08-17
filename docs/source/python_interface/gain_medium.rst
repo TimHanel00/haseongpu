@@ -1,129 +1,148 @@
-GainMedium
-==========
+Domains, components, and gain media
+===================================
 
-``GainMedium`` attaches physical fields and evolving excitation to a topology.
-For ``VolumeTopology``, all transport state has exactly one value per Tet4 cell.
-Geometry remains in ``medium.topology`` and is not duplicated in the fields.
-Spectra and solver controls are separate objects because they describe material
-response and numerical execution rather than mesh state.
+Materials describe optical response; mesh implementations provide discrete
+connectivity. A ``Domain`` presents a cell-type-independent region interface,
+an ``OpticalComponent`` assigns material to a volume domain, and
+``GainMedium`` selects the components whose population state participates in
+gain transport. See :doc:`materials` for material construction and
+persistence.
+
+Domain
+------
+
+A ``Domain`` contains either volume cells or local cell faces. Entity kinds
+cannot be mixed in arithmetic:
 
 .. code-block:: python
 
-   import numpy as np
+   crystal = Domain.fromGmsh(topology, "crystal", entityKind="volume")
+   doped = Domain.fromGmsh(topology, "doped", entityKind="volume")
+   passive = crystal - doped
+   assembly = doped + passive
+   exposedSurface = assembly.boundary()
+
+``Domain.fromTopology(topology)`` selects the complete volume.
+``Domain.fromTopology(topology, entityKind="surface")`` selects all exterior
+faces. ``Domain.where`` provides the simple ``all_exterior``, ``x_min``,
+``x_max``, ``y_min``, ``y_max``, ``z_min``, and ``z_max`` geometric selectors.
+Gmsh physical names that occur in more than one dimension require an explicit
+entity kind.
+
+Domains may combine several regions and independent mesh bindings. Their set
+operations depend on the generic entity and neighbor interface, not on a
+particular cell shape. A Hex8 topology can therefore participate in frontend
+domain algebra even though the current executable backend accepts Tet4 only.
+Empty results remain valid for further set algebra, although physical
+consumers reject empty required regions.
+
+``boundary()`` converts a volume-domain union into the oriented surface that
+bounds it. Faces between two selected cells are removed, including faces
+between separately constructed domains after their union. This is the correct
+operation for obtaining the exposed surface of an assembly. Adjacency is known
+only within each source topology; independent meshes remain separate optical
+bodies and are not welded by coincident coordinates.
+
+OpticalComponent
+----------------
+
+An ``OpticalComponent`` accepts one non-empty volume domain and one material:
+
+.. code-block:: python
+
+   from HASEonGPU import OpticalComponent, SurfaceOptics
+
+   gainComponent = OpticalComponent(
+       domain=doped,
+       material=ybYag,
+       name="crystal",
+   )
+   claddingComponent = OpticalComponent(
+       domain=passive,
+       material=claddingMaterial,
+       name="cladding",
+   )
+   gainComponent.assignSurfaceOptics(
+       pumpFace,
+       SurfaceOptics(reflectivity=0.0, n_inside=1.83, n_outside=1.0),
+   )
+
+``component.domain`` is the component's volume selection. ``getDomain()`` is a
+compatibility alias. ``exteriorCells`` returns selected cells touching the
+component boundary, including an interface produced by selecting only part of
+a shared topology; ``exteriorTets`` remains as a compatibility alias. Surface
+optics must target a surface domain on the component boundary.
+
+Components in one simulation must not overlap. Gain and cladding therefore
+partition the mesh: the gain component selects the active cells and the
+cladding component selects different cells. Their domain union reconstructs
+the occupied volume without overlaying two materials on the same cell.
+
+The refractive indices in ``SurfaceOptics`` describe the two sides of the
+selected boundary. They can be taken from the component material, but remain
+an explicit boundary-model input because the exterior medium may not be part
+of the executable graph.
+
+A mirror coating is a surface assignment rather than a bulk material loss:
+
+.. code-block:: python
+
+   mirrorSubstrate.assignSurfaceOptics(
+       mirrorSurface,
+       SurfaceOptics(reflectivity=0.98, n_inside=1.45, n_outside=1.0),
+   )
+
+The substrate may omit ``bulkAttenuation`` when it contributes no volumetric
+loss. Rays still traverse its cells, while reflection is applied only at the
+selected surface.
+
+GainMedium
+----------
+
+``GainMedium`` contains the components executed as gain elements:
+
+.. code-block:: python
+
    from HASEonGPU import GainMedium
 
-   medium = GainMedium(topology).withPhysicalProperties(
-       betaVolume=np.zeros(topology.numberOfCells),
-       claddingCellTypes=np.zeros(topology.numberOfCells, dtype=np.uint32),
-       nTot=2.776e20,
-       crystalTFluo=9.41e-4,
-       claddingNumber=1,
-       claddingAbsorption=5.5,
+   gainMedium = GainMedium([gainComponent])
+   completeGainDomain = gainMedium.domain
+
+Adding a component sets ``component.opticalRole`` to ``"gainElement"``.
+Passive cladding is an ``OpticalComponent`` owned by ``Simulation``, not by
+``GainMedium``:
+
+.. code-block:: python
+
+   simulation = Simulation(
+       opticalComponents=[gainComponent, claddingComponent],
+       gainMedium=gainMedium,
+       exteriorSurface=exposedSurface,  # optional
+       # solver configuration omitted
    )
 
-Built-in fields
----------------
+``Simulation`` does not expose an aggregate optical domain. If
+``exteriorSurface`` is omitted or ``None``, it temporarily unions all component
+domains and stores the resulting ``boundary()`` as the exterior surface. This
+removes gain--cladding and cladding--cladding interfaces on a shared topology.
+Pass an explicit surface to override that inference.
 
-``betaVolume``
-   Dimensionless, cell-centered excited-state fraction :math:`\beta_j`. This is
-   the authoritative state used by ASE, pump transport, and time integration.
+Excitation is defined only over ``GainMedium``; passive cells are initialized
+to zero during lowering. A passive material may define ``bulkAttenuation`` for
+volumetric loss. Omitting it selects zero bulk loss.
 
-``claddingCellTypes``
-   Unsigned cell type used to select the cells governed by
-   ``claddingAbsorption`` rather than the active-medium gain coefficient. A cell
-   is treated as cladding when its value equals ``claddingNumber``; other cells
-   use :math:`\beta_j`, ``nTot``, and the spectral cross sections.
-
-``nTot``
-   Total active-ion concentration :math:`N_{\mathrm{tot}}` in ``cm^-3``.
-
-``crystalTFluo``
-   Fluorescence lifetime :math:`\tau` in seconds.
-
-``claddingNumber`` and ``claddingAbsorption``
-   Selected cladding type and its absorption coefficient. The coefficient's
-   inverse-length unit must match the geometry length unit.
-
-The equations that consume these fields are collected in
-:doc:`../theoryAndModel`; the field-to-symbol table there maps the Python names
-to the ASE, pump, and population-rate equations.
-
-Inspect and set fields
-----------------------
-
-``get(name)`` returns a property handle with dtype, expected shape, value, and
-metadata:
-
-.. code-block:: python
-
-   beta = medium.get("betaVolume")
-   print(beta.dtype, beta.expectedShape, beta.value)
-   beta.value = np.zeros(beta.expectedShape)
-
-   medium.set("nTot", 2.776e20)
-   for item in medium.listProperties():
-       print(item["name"], item["expectedShape"], item["isSet"])
-
-Array input should use the reported primitive shape. Multi-dimensional arrays
-are flattened in Fortran order at the backend boundary. A one-dimensional
-array for a multi-dimensional legacy field is ambiguous; wrap an already
-canonical flat array with ``backendFlat(values)``.
-
-Surface optics
+Backend limits
 --------------
 
-.. code-block:: python
+Several components may select disjoint cells from one topology, and one
+component domain may span several regions. A shared topology retains
+gain--cladding adjacency. Independent meshes are concatenated as disconnected
+bodies without geometric welding; geometrically touching materials must
+therefore use a conforming shared topology.
 
-   from HASEonGPU import SurfaceOptics
-
-   medium.with_surface_optics({
-       "input": SurfaceOptics(
-           reflectivity=0.0, n_inside=1.83, n_outside=1.0
-       ),
-       "mirror": SurfaceOptics(
-           reflectivity=0.98, n_inside=1.83, n_outside=1.0
-       ),
-   })
-
-Names are resolved through ``topology.surfaceDomainMap()``. ``surface_optics``
-returns the configured ``SurfaceOptics`` values keyed by resolved positive
-domain id. Raw domain-indexed reflectivity and refractive-index arrays are
-private transport data and are not gain-medium properties. A configured
-reflectivity of zero still permits total internal reflection when ``n_inside``
-and ``n_outside`` make the incident angle supercritical. See
-:ref:`ase-surface-reflections` for the implemented model and its limits.
-
-Custom openPMD fields
----------------------
-
-``defineField`` writes application data next to HASE records. It does not make
-the current backend consume that field. Use ``entity="cell"`` for an explicit
-volume cell array and provide unit metadata:
-
-.. code-block:: python
-
-   medium.defineField(
-       "temperature",
-       entity="cell",
-       values=np.full(topology.numberOfCells, 300.0),
-       unit="K",
-       unitDimension=(0, 0, 0, 0, 1, 0, 0),
-   )
-
-Other supported entity axes include ``point``, ``("cell", "local_vertex")``,
-``("cell", "local_side")``, ``interface``, ``wavelength``, and ``domain``. Marking a
-custom field ``backendRequired=True`` causes transport validation to reject a
-backend that does not declare support instead of silently treating it as
-analysis-only metadata.
-
-VTK round trip
---------------
-
-.. code-block:: python
-
-   medium.toVtk("prepared-state.vtk")
-   restored = GainMedium.fromVtk("prepared-state.vtk")
-
-These methods use ASCII Tet4 VTK. ``GainMedium.fromVtk`` restores supported
-geometry and field records; use ``VolumeTopology.fromVtk`` when only geometry
-is wanted.
+All gain components currently must reference the same resolved ``Material``
+object. The current backend accepts Tet4 ``VolumeTopology`` bindings and
+represents all passive cells with one constant coefficient. It rejects both
+unsupported cell structures and heterogeneous passive attenuation before
+launch. These are backend limits, not restrictions of the domain/component
+model.

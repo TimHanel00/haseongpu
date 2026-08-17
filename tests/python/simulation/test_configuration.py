@@ -9,67 +9,73 @@ from pathlib import Path
 import pytest
 import yaml
 
-from HASEonGPU import ImplicitEuler, Simulation, SuperGaussianPumpProfile
+from HASEonGPU import (
+    CrossSectionTable,
+    ImplicitEuler,
+    Material,
+    Simulation,
+    SuperGaussianPumpProfile,
+    units,
+)
+
+
+def _material():
+    return Material(
+        materialName="test gain material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.8,
+        fluorescenceLifetime=9.5e-4 * units.s,
+        crossSections=CrossSectionTable.monochromatic(
+            wavelength=940 * units.nm,
+            absorption=1.2e-21 * units.cm**2,
+            emission=2.1e-20 * units.cm**2,
+        ),
+        activeIonDensity=2.76e20 / units.cm**3,
+    )
 
 
 def _config():
     return {
-        "schema_version": 2,
-        "cross_sections": {
-            "ase": {
-                "inline": {
-                    "wavelengths_absorption": [900e-9, 910e-9],
-                    "cross_section_absorption": [1.0e-21, 1.1e-21],
-                    "wavelengths_emission": [1020e-9, 1030e-9],
-                    "cross_section_emission": [2.0e-20, 2.1e-20],
-                    "resolution": 2,
+        "schema_version": 3,
+        "topologies": {
+            "crystal_mesh": {
+                "from_tetrahedra": {
+                    "points": [
+                        [0.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    "cell_point_indices": [[0, 1, 2, 3]],
                 }
-            },
-            "pump": {
-                "monochromatic": {
-                    "wavelength": 940e-9,
-                    "cross_section_absorption": 1.2e-21,
-                    "cross_section_emission": 0.0,
-                }
+            }
+        },
+        "domains": {
+            "crystal_volume": {"topology": "crystal_mesh"},
+            "pump_face": {
+                "topology": {"name": "crystal_mesh", "entity_kind": "surface"}
             },
         },
-        "simulation": {
-            "gain_medium": {
-                "topology": {
-                    "from_tetrahedra": {
-                        "points": [
-                            [0.0, 0.0, 0.0],
-                            [1.0, 0.0, 0.0],
-                            [0.0, 1.0, 0.0],
-                            [0.0, 0.0, 1.0],
-                        ],
-                        "cell_point_indices": [[0, 1, 2, 3]],
-                        "face_boundaries": [[1, 1, 1, 1]],
-                    }
-                },
-                "properties": {
-                    "beta_volume": [0.0],
-                    "cladding_cell_types": [0],
-                    "n_tot": 2.76e20,
-                    "fluorescence_lifetime": 9.5e-4,
-                    "cladding_number": 1,
-                    "cladding_absorption": 0.0,
-                },
-                "surface_optics": {
-                    1: {"reflectivity": 0.75, "n_inside": 1.8, "n_outside": 1.0}
-                },
-                "custom_fields": [
+        "optical_components": {
+            "crystal": {
+                "domain": "crystal_volume",
+                "material": "gain_material",
+                "surface_optics": [
                     {
-                        "name": "temperature",
-                        "entity": "cell",
-                        "values": [300.0],
-                        "dtype": "float64",
-                        "unit": "K",
+                        "domain": "pump_face",
+                        "reflectivity": 0.75,
+                        "exterior_refractive_index": 1.0,
                     }
                 ],
-            },
+            }
+        },
+        "gain_media": {"amplifier": {"components": ["crystal"]}},
+        "simulation": {
+            "optical_components": ["crystal"],
+            "gain_medium": "amplifier",
+            "exterior_surface": "pump_face",
+            "initial_excitation": {"value": 0.0},
             "phi_ase": {
-                "cross_sections": "ase",
                 "propagation_mode": "forward",
                 "min_rays": 10,
                 "max_rays": 100,
@@ -81,15 +87,7 @@ def _config():
                 "reflection_max_iterations": 7,
                 "reflection_tolerance": 1.0e-5,
                 "surface_reservoir_size": 9,
-                "monochromatic": False,
                 "backend": "Host_Cpu_CpuSerial",
-                "openpmd_backend": "auto",
-                "parallel_mode": "single",
-                "num_devices": 1,
-                "n_per_node": 1,
-                "min_sample_range": 0,
-                "max_sample_range": 0,
-                "rng_seed": 123,
                 "ase_steps": 3,
             },
             "pumps": [
@@ -99,7 +97,6 @@ def _config():
                     "ray_count": 1234,
                     "pump_steps": 2,
                     "rng_seed": 99,
-                    "cross_sections": "pump",
                     "spectrum": {"monochromatic": 940e-9},
                     "angular_distribution": {
                         "uniform_cone": {
@@ -113,24 +110,8 @@ def _config():
                         "radius_u": 1.5,
                         "radius_v": 1.25,
                         "exponent": 40.0,
-                        "center": [0.0, 0.0, 0.0],
-                        "axis_u": [1.0, 0.0, 0.0],
-                        "axis_v": [0.0, 1.0, 0.0],
                     },
-                    "injection": {"surface_domains": [1]},
-                    "relays": [
-                        {
-                            "exit_domains": [1],
-                            "entry_domains": [1],
-                            "flip_u": True,
-                            "flip_v": False,
-                            "rotation": 0.2,
-                            "offset": [0.1, 0.2],
-                            "tilt": [0.01, 0.02],
-                            "magnification": 1.5,
-                            "transmission": 0.8,
-                        }
-                    ],
+                    "injection": {"domain": "pump_face"},
                 }
             ],
             "time_integrator": {
@@ -142,10 +123,8 @@ def _config():
             "simulation_steps": 3,
             "pre_pump": True,
             "report_timings": True,
-            "execution_mode": "autonomous",
             "output_steps": [2, 3],
             "output_fields": ["beta_volume", "phi_ase", "dndt_pump"],
-            "control_fields": [],
         },
     }
 
@@ -155,72 +134,61 @@ def _write(path: Path, config):
     return path
 
 
-def testSimulationFromYamlBuildsPublicObjectGraph(tmp_path):
-    simulation = Simulation.from_yaml(_write(tmp_path / "simulation.yaml", _config()))
+def _load(tmp_path, config=None):
+    return Simulation.fromYaml(
+        _write(tmp_path / "simulation.yaml", _config() if config is None else config),
+        materials={"gain_material": _material()},
+    )
 
-    assert simulation.simulation_steps == 3
-    assert isinstance(simulation.time_integrator, ImplicitEuler)
-    assert simulation.time_integrator.iterations == 3
-    assert simulation.phi_ase.useReflections is True
-    assert simulation.phi_ase.forwardRayCount == 12
-    assert simulation.phi_ase.ase_steps == 3
-    assert simulation.pre_pump is True
-    assert simulation.gain_medium.surface_optics[1].reflectivity == pytest.approx(0.75)
-    assert simulation.gain_medium.getField("temperature").value[0] == pytest.approx(300.0)
+
+def testSimulationFromYamlBuildsPublicObjectGraph(tmp_path):
+    simulation = _load(tmp_path)
+
+    assert simulation.simulationSteps == 3
+    assert simulation.exteriorSurface.entityKind == "surface"
+    assert isinstance(simulation.timeIntegrationSolver, ImplicitEuler)
+    assert simulation.timeIntegrationSolver.iterations == 3
+    assert simulation.phiASE.useReflections is True
+    assert simulation.phiASE.forwardRayCount == 12
+    assert simulation.prePump is True
+    assert simulation.gainMedium.components[0].surfaceOptics[0][1].reflectivity == pytest.approx(0.75)
     assert len(simulation.pumps) == 1
     assert simulation.pumps[0].name == "main"
     assert simulation.pumps[0].ray_count == 1234
-    assert simulation.pumps[0].pump_steps == 2
-    assert simulation.pumps[0].rng_seed == 99
     assert isinstance(simulation.pumps[0].profile, SuperGaussianPumpProfile)
     assert simulation.outputSteps == (2, 3)
     assert simulation.outputFields == ("beta_volume", "phi_ase", "dndt_pump")
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "refractive_indices",
-        "reflectivities",
-        "surface_reflectivity",
-        "surface_refractive_index_inside",
-        "surface_refractive_index_outside",
-    ],
-)
-def testSchemaV2RejectsRawOpticsProperties(tmp_path, name):
-    config = _config()
-    config["simulation"]["gain_medium"]["properties"][name] = []
-
-    with pytest.raises(ValueError, match="raw optics fields are not public"):
-        Simulation.from_yaml(_write(tmp_path / "simulation.yaml", config))
-
-
-def testSchemaV2RejectsRemovedPumpSolverSection(tmp_path):
-    config = _config()
-    config["simulation"]["pump_solver"] = {"ray_count": 12}
-
-    with pytest.raises(ValueError, match="unsupported simulation options"):
-        Simulation.from_yaml(_write(tmp_path / "simulation.yaml", config))
-
-
-def testSchemaV2DerivesRunLimitWhenSimulationStepsIsOmitted(tmp_path):
+def testSchemaV3DerivesRunLimitWhenSimulationStepsIsOmitted(tmp_path):
     config = _config()
     config["simulation"].pop("simulation_steps")
-    simulation = Simulation.from_yaml(_write(tmp_path / "simulation.yaml", config))
-    assert simulation._derived_simulation_steps() == 3
+    assert _load(tmp_path, config)._derived_simulation_steps() == 3
 
 
-def testSchemaV2RejectsTwoRunLimits(tmp_path):
+def testSchemaV3RejectsTwoRunLimits(tmp_path):
     config = _config()
     config["simulation"]["max_time"] = 1.0
+    with pytest.raises(ValueError, match="at most one"):
+        _load(tmp_path, config)
 
-    with pytest.raises(ValueError, match="at most one of: simulation_steps, max_time"):
-        Simulation.from_yaml(_write(tmp_path / "simulation.yaml", config))
 
-
-def testSchemaV2RejectsUnknownSurfaceOpticsOptions(tmp_path):
+def testSchemaV3RejectsRemovedCrossSectionRegistry(tmp_path):
     config = _config()
-    config["simulation"]["gain_medium"]["surface_optics"][1]["refractive_indices"] = [1.0]
+    config["cross_sections"] = {}
+    with pytest.raises(ValueError, match="unsupported top-level options"):
+        _load(tmp_path, config)
 
-    with pytest.raises(ValueError, match="unsupported simulation.gain_medium.surface_optics.1 options"):
-        Simulation.from_yaml(_write(tmp_path / "simulation.yaml", config))
+
+def testSchemaV3RejectsUnknownSurfaceOpticsOptions(tmp_path):
+    config = _config()
+    config["optical_components"]["crystal"]["surface_optics"][0]["n_inside"] = 1.8
+    with pytest.raises(ValueError, match="surface_optics"):
+        _load(tmp_path, config)
+
+
+def testSchemaV3RejectsUnknownReferences(tmp_path):
+    config = _config()
+    config["gain_media"]["amplifier"]["components"] = ["missing"]
+    with pytest.raises(ValueError, match="unknown optical_components reference"):
+        _load(tmp_path, config)

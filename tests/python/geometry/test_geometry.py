@@ -9,8 +9,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
-from HASEonGPU import GainMedium, Grid, MeshTopology, backendFlat, unitDimension
+from HASEonGPU import Grid, MeshTopology, backendFlat, unitDimension
+from pyInclude.geometry.core import GainMedium
 
 
 def _lineCount(path):
@@ -246,7 +248,8 @@ def test_defineFieldValidatesSpec():
 
 def test_volume_surface_optics_are_indexed_by_physical_surface_id():
     import numpy as np
-    from pyInclude.geometry import GainMedium, SurfaceOptics, VolumeTopology
+    from pyInclude.geometry import SurfaceOptics, VolumeTopology
+    from pyInclude.geometry.core import GainMedium
 
     points = np.array(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -281,8 +284,18 @@ def test_phi_ase_reflection_controls_are_openpmd_attributes():
     assert "forwardRayLength" not in attributes
 
 
-def test_phi_ase_rejects_retired_forward_ray_length_config():
+def test_phi_ase_rejects_retired_forward_ray_length_config(tmp_path):
     from pyInclude.simulation import PhiASE
 
-    with pytest.raises(ValueError, match="forward_ray_length is retired"):
-        PhiASE({"forward_ray_length": 1.0})
+    path = tmp_path / "retired-forward-ray-length.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 3,
+                "simulation": {"phi_ase": {"forward_ray_length": 1.0}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="forward_ray_length"):
+        PhiASE.fromYaml(path)
