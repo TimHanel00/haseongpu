@@ -34,7 +34,7 @@ namespace hase::core
     [[nodiscard]] ForwardPhiAseRawResult makeForwardRawResult(
         unsigned volumeCount,
         unsigned vertexCount,
-        unsigned batchCount = hase::kernels::forward::defaultForwardRseBatchCount);
+        unsigned batchCount = kernels::forward::defaultForwardRseBatchCount);
 
     [[nodiscard]] double calcForwardBetaVolumeTotal(HostMesh const& hostMesh);
 

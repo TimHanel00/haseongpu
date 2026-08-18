@@ -109,6 +109,10 @@ GainMedium
    completeGainDomain = gainMedium.domain
 
 Adding a component sets ``component.opticalRole`` to ``"gainElement"``.
+Its material must have ``active=True`` and the resolved run condition must
+provide a positive ``activeIonDensity``. Conversely, an active material cannot
+be placed outside the gain medium. These checks make the material
+classification authoritative for whether population excitation is evaluated.
 Passive cladding is an ``OpticalComponent`` owned by ``Simulation``, not by
 ``GainMedium``:
 
@@ -127,9 +131,11 @@ domains and stores the resulting ``boundary()`` as the exterior surface. This
 removes gain--cladding and cladding--cladding interfaces on a shared topology.
 Pass an explicit surface to override that inference.
 
-Excitation is defined only over ``GainMedium``; passive cells are initialized
-to zero during lowering. A passive material may define ``bulkAttenuation`` for
-volumetric loss. Omitting it selects zero bulk loss.
+Excitation is defined only over active ``GainMedium`` components; passive cells
+are initialized to zero during lowering and do not acquire an excited-state
+population. A passive material may define ``bulkAttenuation`` (or the exact
+``absorptionCoefficient`` alias) for volumetric loss. Omitting it selects zero
+bulk loss.
 
 Backend limits
 --------------

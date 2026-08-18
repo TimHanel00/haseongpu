@@ -80,6 +80,7 @@ def test_general_pump_reproduces_legacy_crystal_inversion(openPmdFileBackend, al
         spectralResolution=191,
         pumpRayCount=50_000,
         pumpRngSeed=5489,
+        useCladding=False,
     )
     states = []
     simulation.onStep(states.append).step(3)

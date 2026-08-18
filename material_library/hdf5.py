@@ -9,16 +9,23 @@
 from __future__ import annotations
 
 import json
+import warnings
 
 import h5py
 import numpy as np
 
 from hase_units import Quantity, Unit, units
-from .model import CrossSectionTable, _MaterialRecord, _MaterialState
+from .model import (
+    CrossSectionTable,
+    LegacyMaterialActivityWarning,
+    _MaterialRecord,
+    _MaterialState,
+)
 
 
 FORMAT_NAME = "HASEonGPU-material-library"
-FORMAT_VERSION = "1.0"
+FORMAT_VERSION = "1.1"
+SUPPORTED_FORMAT_VERSIONS = {"1.0", FORMAT_VERSION}
 
 
 def _write_metadata(owner, metadata):
@@ -66,6 +73,7 @@ def write_material_library(path, entries, *, overwrite=False):
         for key, material in entries:
             material_group = materials_group.create_group(key, track_order=True)
             material_group.attrs["name"] = material.name
+            material_group.attrs["active"] = material.active
             _write_metadata(material_group, material.metadata)
             states_group = material_group.create_group("states", track_order=True)
             for index, state in enumerate(material.states):
@@ -103,18 +111,39 @@ def read_material_library(path):
             format_version = format_version.decode("utf-8")
         if format_name != FORMAT_NAME:
             raise ValueError(f"not a {FORMAT_NAME} file")
-        if format_version != FORMAT_VERSION:
+        if format_version not in SUPPORTED_FORMAT_VERSIONS:
             raise ValueError(
                 f"unsupported material-library format version {format_version!r}; "
-                f"expected {FORMAT_VERSION!r}"
+                f"supported versions are {sorted(SUPPORTED_FORMAT_VERSIONS)!r}"
+            )
+        if format_version == "1.0":
+            warnings.warn(
+                "material-library HDF5 v1.0 has no explicit active flag; "
+                "activity is inferred from stored lifetime and cross-section data",
+                LegacyMaterialActivityWarning,
+                stacklevel=2,
             )
         result = []
         for key, material_group in handle["materials"].items():
             name = material_group.attrs["name"]
             if isinstance(name, bytes):
                 name = name.decode("utf-8")
-            material = _MaterialRecord(str(name), metadata=_read_metadata(material_group))
-            for state_group in material_group["states"].values():
+            states_group = material_group["states"]
+            active = (
+                bool(material_group.attrs["active"])
+                if format_version == FORMAT_VERSION
+                else any(
+                    "fluorescence_lifetime" in state_group
+                    and "cross_sections" in state_group
+                    for state_group in states_group.values()
+                )
+            )
+            material = _MaterialRecord(
+                str(name),
+                active=active,
+                metadata=_read_metadata(material_group),
+            )
+            for state_group in states_group.values():
                 temperature = (
                     _read_quantity(state_group, "temperature")
                     if bool(state_group.attrs["temperature_known"])

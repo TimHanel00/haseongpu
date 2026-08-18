@@ -32,6 +32,10 @@ class TemperatureInterpolationWarning(UserWarning):
     """Warn that no measured state exists at the requested temperature."""
 
 
+class LegacyMaterialActivityWarning(UserWarning):
+    """Warn that an HDF5 v1.0 material lacks an explicit activity flag."""
+
+
 def _metadata_copy(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     if metadata is None:
         return {}
@@ -374,12 +378,14 @@ class Material:
         unknown-temperature reference.
     refractiveIndex, fluorescenceLifetime, crossSections
         Physical state selected from the material database.
+    active
+        Whether the material participates in active-ion population dynamics.
+        This classification is independent of the selected ion density.
     bulkAttenuation
         Optional passive intensity attenuation coefficient. The name
         ``absorptionCoefficient`` aliases this property.
     activeIonDensity
-        Non-negative total active-ion number density. A positive value makes
-        this an active condition and requires lifetime plus emission data.
+        Non-negative total active-ion number density for the selected run.
     name
         Optional run-specific label overriding ``materialName`` for display.
     opticalAxis
@@ -398,10 +404,12 @@ class Material:
     """Upper-state spontaneous-decay lifetime used by the rate equations."""
     crossSections: CrossSectionTable | None
     """Absorption and stimulated-emission cross sections on the run grid."""
+    active: bool
+    """Whether population excitation is evaluated for this material."""
     bulkAttenuation: Quantity | None = None
     """Optional passive intensity attenuation coefficient in inverse length."""
     activeIonDensity: Quantity = Quantity(0.0, units.m**-3)
-    """Total active-ion number density; zero makes the condition non-active."""
+    """Total active-ion number density selected for the current run."""
     name: str | None = None
     """Optional run-specific label with no effect on physical coefficients."""
     opticalAxis: object | None = None
@@ -422,6 +430,7 @@ class Material:
         opticalAxis=None,
         metadata=None,
         *,
+        active,
         absorptionCoefficient=None,
     ):
         if bulkAttenuation is not None and absorptionCoefficient is not None:
@@ -431,6 +440,7 @@ class Material:
         self.refractiveIndex = refractiveIndex
         self.fluorescenceLifetime = fluorescenceLifetime
         self.crossSections = crossSections
+        self.active = active
         self.activeIonDensity = activeIonDensity
         self.bulkAttenuation = (
             absorptionCoefficient if bulkAttenuation is None else bulkAttenuation
@@ -441,6 +451,9 @@ class Material:
         self.__post_init__()
 
     def __post_init__(self):
+        if not isinstance(self.active, (bool, np.bool_)):
+            raise TypeError("material active must be a boolean")
+        self.active = bool(self.active)
         density = requireQuantity(self.activeIonDensity, NUMBER_DENSITY, "activeIonDensity")
         density_si = float(density.toValue(units.m**-3))
         if not np.isfinite(density_si) or density_si < 0.0:
@@ -452,7 +465,9 @@ class Material:
             if axis.shape != (3,) or np.any(~np.isfinite(axis)) or np.linalg.norm(axis) == 0.0:
                 raise ValueError("opticalAxis must be a finite non-zero three-vector")
             self.opticalAxis = tuple(axis / np.linalg.norm(axis))
-        if density_si > 0.0:
+        if self.isPassive and density_si > 0.0:
+            raise ValueError("passive materials require zero activeIonDensity")
+        if self.isActive:
             if self.fluorescenceLifetime is None:
                 raise ValueError("active materials require fluorescenceLifetime")
             if self.crossSections is None:
@@ -475,12 +490,12 @@ class Material:
 
     @property
     def isActive(self):
-        """Whether active-ion density is positive."""
-        return float(self.activeIonDensity.toValue(units.m**-3)) > 0.0
+        """Whether this material participates in population dynamics."""
+        return self.active
 
     @property
     def isPassive(self):
-        """Whether active-ion density is zero."""
+        """Whether this material is excluded from population dynamics."""
         return not self.isActive
 
     @property
@@ -563,6 +578,8 @@ class _MaterialRecord:
     ----------
     name
         Non-empty physical material name.
+    active
+        Material-level active/passive classification shared by all states.
     metadata
         Optional string-keyed provenance shared by all states.
 
@@ -575,13 +592,18 @@ class _MaterialRecord:
 
     name: str
     """Human-readable physical material name."""
+    active: bool
+    """Whether resolved conditions participate in population dynamics."""
     metadata: Mapping[str, Any]
     """String-keyed provenance shared by every temperature state."""
 
-    def __init__(self, name: str, *, metadata: Mapping[str, Any] | None = None):
+    def __init__(self, name: str, *, active: bool, metadata: Mapping[str, Any] | None = None):
         if not isinstance(name, str) or not name.strip():
             raise ValueError("material name must be a non-empty string")
+        if not isinstance(active, (bool, np.bool_)):
+            raise TypeError("material active must be a boolean")
         self.name = name
+        self.active = bool(active)
         self.metadata = _metadata_copy(metadata)
         self._states: list[_MaterialState] = []
 
@@ -689,7 +711,9 @@ class _MaterialRecord:
             Required absolute temperature for numerically temperature-resolved
             materials. Omit it for an unknown-temperature reference.
         activeIonDensity
-            Non-negative total active-ion number density; defaults to zero.
+            Non-negative total active-ion number density; defaults to zero and
+            does not alter the record's active/passive classification. A
+            ``GainMedium`` requires a positive value for an active material.
         spectralResolution
             Optional integer target cross-section sample count. It must not be
             smaller than the selected table. Resampling occurs in the material
@@ -738,6 +762,7 @@ class _MaterialRecord:
             refractiveIndex=state.refractiveIndex,
             fluorescenceLifetime=state.fluorescenceLifetime,
             crossSections=crossSections,
+            active=self.active,
             bulkAttenuation=state.bulkAttenuation,
             activeIonDensity=activeIonDensity,
             name=name,

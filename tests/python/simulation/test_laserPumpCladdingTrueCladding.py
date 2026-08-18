@@ -17,10 +17,8 @@ import numpy as np
 import pytest
 from HASEonGPU import (
     CrossSectionTable,
-    Domain,
     GainMedium,
     Material,
-    OpticalComponent,
     PhiASE,
     units,
 )
@@ -126,11 +124,8 @@ def _tet_types(reference):
     return np.repeat(reference["wedgeCladdingCellTypes"], 3).astype(np.uint32)
 
 
-def _make_current_medium(reference, cladding_absorption):
+def _make_current_medium(reference, absorptionCoefficient):
     metadata = reference["metadata"]["material"]
-    topology = laserPumpCladding.laserPumpCladdingComponent()[0].domain.topologies[0]
-    tet_types = _tet_types(reference)
-    cladding_cells = np.flatnonzero(tet_types == CLADDING_NUMBER)
     active = Material(
         materialName="Yb:YAG regression material",
         temperature=293.15 * units.K,
@@ -141,42 +136,37 @@ def _make_current_medium(reference, cladding_absorption):
             absorption=metadata["crossSectionAbsorption"] * units.cm**2,
             emission=metadata["crossSectionEmission"] * units.cm**2,
         ),
+        active=True,
         activeIonDensity=2.776e20 / units.cm**3,
     )
-    claddingMask = np.zeros(topology.numberOfCells, dtype=bool)
-    claddingMask[cladding_cells] = True
-    gainDomain = Domain(
-        entityKind="volume",
-        topology=topology,
-        mask=~claddingMask,
-    )
-    claddingDomain = Domain(
-        entityKind="volume",
-        topology=topology,
-        mask=claddingMask,
-    )
-    component = OpticalComponent(domain=gainDomain, material=active)
-    medium = GainMedium([component])
     passive = Material(
         materialName="cladding",
         temperature=293.15 * units.K,
         refractiveIndex=1.0,
         fluorescenceLifetime=None,
         crossSections=None,
-        bulkAttenuation=cladding_absorption / units.cm,
+        active=False,
+        absorptionCoefficient=absorptionCoefficient / units.cm,
     )
-    claddingComponent = OpticalComponent(domain=claddingDomain, material=passive)
+    components, _bottom, _top = laserPumpCladding.laserPumpCladdingComponents(
+        active,
+        useCladding=True,
+        claddingMaterial=passive,
+    )
+    component, claddingComponent = components
+    medium = GainMedium([component])
+    topology = component.domain.topologies[0]
+    claddingDomain = claddingComponent.domain
+    claddingMask = claddingDomain.maskFor(topology)
 
     gain_beta = float(reference["metadata"]["material"]["gainBetaVolume"])
-    beta_volume = np.full(topology.numberOfCells, gain_beta, dtype=np.float64)
-    beta_volume[cladding_cells] = 0.0
 
     # PhiASE source selection and propagation use only per-cell betaVolume;
     # cladding cells have exactly zero source.
     backend, crossSections = lowerGainMedium(
         medium,
-        {component.domain: beta_volume[~claddingMask]},
-        opticalComponents=[component, claddingComponent],
+        {component.domain: np.full(np.count_nonzero(~claddingMask), gain_beta)},
+        opticalComponents=components,
     )
     return backend, crossSections, claddingDomain
 
@@ -286,8 +276,11 @@ def currentTrueCladdingResults(trueCladdingReference, openPmdFileBackend):
     reference = trueCladdingReference
     material = reference["metadata"]["material"]
     results = []
-    for cladding_absorption in material["claddingAbsorptions"]:
-        medium, cross_sections, _claddingDomain = _make_current_medium(reference, cladding_absorption)
+    for absorptionCoefficient in material["claddingAbsorptions"]:
+        medium, cross_sections, _claddingDomain = _make_current_medium(
+            reference,
+            absorptionCoefficient,
+        )
         phi_ase = PhiASE(
             crossSections=cross_sections,
             minRays=CURRENT_FORWARD_RAYS,
@@ -312,7 +305,7 @@ def currentTrueCladdingResults(trueCladdingReference, openPmdFileBackend):
         assert relative_standard_error.shape == phi.shape
         results.append(
             {
-                "claddingAbsorption": cladding_absorption,
+                "absorptionCoefficient": absorptionCoefficient,
                 "phiASE": phi,
                 "integrals": _partitioned_tet_integrals(medium.topology, tet_types, phi),
                 "relativeStandardError": relative_standard_error,
@@ -336,7 +329,7 @@ def testCurrentTrueCladdingPhiAseMatchesLegacyTotalIntegral(
             legacy["total"],
             rtol=0.05,
             atol=0.0,
-            err_msg=f"claddingAbsorption={current['claddingAbsorption']}",
+            err_msg=f"absorptionCoefficient={current['absorptionCoefficient']}",
         )
 
     legacy_no_absorption = reference["metadata"]["diagnostics"][0]["integrals"]["total"]

@@ -56,6 +56,7 @@ def main():
             [1.1e-21, 1.0e-22] * units.cm**2,
             [1.0e-22, 2.48e-20] * units.cm**2,
         ),
+        active=True,
         activeIonDensity=2.776e20 / units.cm**3,
     )
     component = OpticalComponent(

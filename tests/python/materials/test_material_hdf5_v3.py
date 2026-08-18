@@ -1,9 +1,11 @@
+import h5py
 import numpy as np
 import pytest
 import yaml
 
 from hase_units import units
 from material_library import (
+    LegacyMaterialActivityWarning,
     Material,
     MaterialLibrary,
     TemperatureInterpolationWarning,
@@ -23,9 +25,21 @@ def test_builtin_library_resolves_mutable_material_with_recorded_units():
     assert isinstance(resolved, Material)
     assert resolved.temperature.toValue(units.K) == pytest.approx(293.15)
     assert resolved.bulkAttenuation is None
+    assert resolved.active is True
     assert resolved.crossSections.wavelengths.unit.symbol == "nm"
     resolved.refractiveIndex = 1.9
     assert resolved.validate().refractiveIndex == pytest.approx(1.9)
+
+
+def test_builtin_activity_is_independent_of_run_specific_ion_density():
+    library = loadBuiltinMaterials()
+    active = library.resolve("YbYAG", temperature=293.15 * units.K)
+    passive = library.resolve("CladdingGlass", temperature=293.15 * units.K)
+
+    assert active.isActive
+    assert active.activeIonDensity.toValue(units.cm**-3) == 0.0
+    assert passive.isPassive
+    assert passive.absorptionCoefficient.toValue(units.cm**-1) == pytest.approx(5.5)
 
 
 def test_resolved_material_hdf5_roundtrip_preserves_units(tmp_path):
@@ -41,6 +55,7 @@ def test_resolved_material_hdf5_roundtrip_preserves_units(tmp_path):
     )
 
     assert restored.materialName == source.materialName
+    assert restored.active is True
     assert restored.bulkAttenuation is None
     assert restored.fluorescenceLifetime.toValue(units.ms) == pytest.approx(0.941)
     np.testing.assert_array_equal(
@@ -89,6 +104,7 @@ def test_passive_material_roundtrip_preserves_bulk_attenuation(tmp_path):
         refractiveIndex=1.45,
         fluorescenceLifetime=None,
         crossSections=None,
+        active=False,
         bulkAttenuation=5.5 / units.cm,
     )
     path = tmp_path / "passive-material.h5"
@@ -102,6 +118,25 @@ def test_passive_material_roundtrip_preserves_bulk_attenuation(tmp_path):
 
     assert restored.isPassive
     assert restored.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
+
+
+def test_hdf5_v11_stores_activity_and_v10_uses_documented_compatibility(tmp_path):
+    path = tmp_path / "material.h5"
+    material().toHdf5(path, key="YbYAG")
+    with h5py.File(path, "r+") as handle:
+        assert handle.attrs["format_version"] == "1.1"
+        assert bool(handle["materials"]["YbYAG"].attrs["active"])
+        handle.attrs["format_version"] = "1.0"
+        del handle["materials"]["YbYAG"].attrs["active"]
+
+    with pytest.warns(LegacyMaterialActivityWarning):
+        restored = Material.fromHdf5(
+            path,
+            key="YbYAG",
+            temperature=293.15 * units.K,
+        )
+
+    assert restored.isActive
 
 
 def test_material_from_yaml_resolves_relative_hdf5_path(tmp_path):
@@ -134,6 +169,7 @@ def test_material_yaml_accepts_absorption_coefficient_alias(tmp_path):
         refractiveIndex=1.45,
         fluorescenceLifetime=None,
         crossSections=None,
+        active=False,
     )
     passive.toHdf5(tmp_path / "materials.h5", key="Cladding")
     config = {

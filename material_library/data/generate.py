@@ -63,6 +63,7 @@ def buildMaterialLibrary():
         refractiveIndex=1.83,
         fluorescenceLifetime=0.941 * units.ms,
         crossSections=crossSections,
+        active=True,
         metadata=sourceMetadata
         | {
             "temperature_context": "cross sections recorded at room temperature",
@@ -70,6 +71,24 @@ def buildMaterialLibrary():
     )
     library = MaterialLibrary()
     library.register("YbYAG", ybYag)
+    library.register(
+        "CladdingGlass",
+        Material(
+            materialName="absorbing cladding glass",
+            temperature=YB_YAG_ROOM_TEMPERATURE,
+            refractiveIndex=1.45,
+            fluorescenceLifetime=None,
+            crossSections=None,
+            active=False,
+            absorptionCoefficient=5.5 / units.cm,
+            metadata={
+                "source": "HASEonGPU laserPumpCladding reference condition",
+                "generator": "python3 -m material_library.data.generate",
+                "generator_revision": "3",
+                "temperature_context": "nominal room-temperature example value",
+            },
+        ),
+    )
     return library
 
 

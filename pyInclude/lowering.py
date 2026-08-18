@@ -44,6 +44,8 @@ def _validateComponents(gainMedium, opticalComponents=None):
     material.validate()
     if not material.isActive:
         raise ValueError("GainMedium components require an active Material")
+    if float(material.activeIonDensity.toValue(units.cm**-3)) <= 0.0:
+        raise ValueError("GainMedium components require positive activeIonDensity")
     if (
         material.bulkAttenuation is not None
         and float(material.bulkAttenuation.toValue(units.cm**-1)) != 0.0

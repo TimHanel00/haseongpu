@@ -64,6 +64,7 @@ def buildSimulation():
             refractiveIndex=1.45,
             fluorescenceLifetime=None,
             crossSections=None,
+            active=False,
             absorptionCoefficient=5.5 / units.cm,
         ),
         name="cladding",

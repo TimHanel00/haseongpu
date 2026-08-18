@@ -218,7 +218,7 @@ namespace hase::core
                     policy.m_communicator);
                 MPI_Allreduce(&localRuntime, &global.runtime, 1, MPI_FLOAT, MPI_SUM, policy.m_communicator);
 
-                std::array<unsigned, 5u> localStatus{
+                std::array localStatus{
                     localPresence == 0u ? 0u : static_cast<unsigned>(localRaw.srmStatus),
                     localRaw.srmPasses,
                     localRaw.srmMaxIterations,

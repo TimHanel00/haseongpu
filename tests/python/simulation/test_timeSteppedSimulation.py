@@ -129,6 +129,7 @@ def _physicalGraph(crossSections):
             absorption=crossSections.absorptionAt(wavelength) * units.cm**2,
             emission=crossSections.emissionAt(wavelength) * units.cm**2,
         ),
+        active=True,
         activeIonDensity=2.76e20 / units.cm**3,
     )
     component = OpticalComponent(

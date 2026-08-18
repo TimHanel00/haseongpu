@@ -13,9 +13,10 @@ Five types define the physical graph:
 
 ``Material``
    A mutable optical state resolved at one temperature. Materials carry
-   refractive index, optional passive bulk attenuation, fluorescence lifetime,
-   active-ion density, optical axis, metadata, and any absorption/emission
-   spectra used by ASE and pump transport.
+   an explicit active/passive classification, refractive index, optional
+   passive bulk attenuation, fluorescence lifetime, active-ion density,
+   optical axis, metadata, and any absorption/emission spectra used by ASE and
+   pump transport.
 
 ``OpticalComponent``
    One physical object: a volume ``Domain`` combined with one ``Material``.
@@ -80,7 +81,8 @@ while independent mesh bindings remain disconnected. The public domain model
 can represent other cell structures, but the current backend lowers Tet4
 ``VolumeTopology`` bindings only. Gain components must reference the same
 resolved ``Material`` object, and passive components must share one attenuation
-coefficient.
+coefficient. Material activity, rather than a non-zero density used as a flag,
+determines which components may participate in excitation dynamics.
 
 ``Simulation.fromYaml`` constructs the same graph from schema version 3. Named
 Python objects can be injected into that construction, allowing measured or

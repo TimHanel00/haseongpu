@@ -58,23 +58,56 @@ def laserPumpCladdingMaterial(spectralResolution=1000):
     )
 
 
-def laserPumpCladdingComponent(material=None):
-    """Build the crystal and return it with its typed pump boundary domains."""
+def laserPumpCladdingPassiveMaterial(absorptionCoefficient=None):
+    """Resolve the passive glass used for the radial cladding component."""
+    material = Material.fromHdf5(
+        materialDatabase,
+        key="CladdingGlass",
+        temperature=293.15 * units.K,
+        interpolation="exact",
+        name="cladding_glass",
+    )
+    if absorptionCoefficient is not None:
+        material.absorptionCoefficient = absorptionCoefficient
+    return material.validate()
+
+
+def laserPumpCladdingComponents(
+    material=None,
+    *,
+    useCladding=True,
+    claddingMaterial=None,
+):
+    """Build the optical assembly and its gain-owned pump end surfaces.
+
+    The labelled mesh contains an active core (domain 1) and a radial passive
+    shell (domain 2). Disabling the shell assigns the complete volume to the
+    gain material, reproducing historical full-crystal regression geometry.
+    """
     material = laserPumpCladdingMaterial() if material is None else material
     topology = VolumeTopology.fromFile(scriptDir / "data" / "ptTet4.vtk", format="vtk")
     volume = Domain.fromTopology(topology)
+    gainVolume = (
+        Domain.fromGmsh(topology, 1, entityKind="volume")
+        if useCladding
+        else volume
+    )
     allExterior = Domain.where(topology, "all_exterior")
     bottom = Domain.where(topology, "z_min")
     top = Domain.where(topology, "z_max")
     side = allExterior - bottom - top
 
-    component = OpticalComponent(domain=volume, material=material, name="crystal")
-    component.assignSurfaceOptics(
-        side,
-        SurfaceOptics(reflectivity=0.0, n_inside=1.0, n_outside=1.0),
-    )
-    for domain in (bottom, top):
-        component.assignSurfaceOptics(
+    crystal = OpticalComponent(domain=gainVolume, material=material, name="crystal")
+    gainBoundary = gainVolume.boundary()
+    pumpInput = bottom - (bottom - gainBoundary)
+    pumpExit = top - (top - gainBoundary)
+    if not useCladding:
+        crystal.assignSurfaceOptics(
+            side,
+            SurfaceOptics(reflectivity=0.0, n_inside=1.0, n_outside=1.0),
+        )
+    for domain in (pumpInput, pumpExit):
+        crystal.assignSurfaceOptics(
             domain,
             SurfaceOptics(
                 reflectivity=0.0,
@@ -82,7 +115,37 @@ def laserPumpCladdingComponent(material=None):
                 n_outside=1.0,
             ),
         )
-    return component, bottom, top
+    components = [crystal]
+    if useCladding:
+        claddingMaterial = (
+            laserPumpCladdingPassiveMaterial()
+            if claddingMaterial is None
+            else claddingMaterial
+        )
+        cladding = OpticalComponent(
+            domain=Domain.fromGmsh(topology, 2, entityKind="volume"),
+            material=claddingMaterial,
+            name="cladding",
+        )
+        cladding.assignSurfaceOptics(
+            side,
+            SurfaceOptics(
+                reflectivity=0.0,
+                n_inside=claddingMaterial.refractiveIndex,
+                n_outside=1.0,
+            ),
+        )
+        components.append(cladding)
+    return tuple(components), pumpInput, pumpExit
+
+
+def laserPumpCladdingComponent(material=None, *, useCladding=True):
+    """Return the active crystal plus its gain-owned pump end surfaces."""
+    components, bottom, top = laserPumpCladdingComponents(
+        material,
+        useCladding=useCladding,
+    )
+    return components[0], bottom, top
 
 
 def buildSimulation(
@@ -97,11 +160,27 @@ def buildSimulation(
     pumpRngSeed=5489,
     reportTimings=False,
     outputSteps=None,
+    useCladding=True,
+    absorptionCoefficient=None,
     **aseOverrides,
 ):
-    """Construct the complete five-object physical graph without running it."""
+    """Construct the complete physical graph without running it.
+
+    ``useCladding`` defaults to true. ``absorptionCoefficient`` optionally
+    replaces the passive material's stored bulk attenuation coefficient.
+    """
     material = laserPumpCladdingMaterial(spectralResolution)
-    component, bottom, top = laserPumpCladdingComponent(material)
+    claddingMaterial = (
+        laserPumpCladdingPassiveMaterial(absorptionCoefficient)
+        if useCladding
+        else None
+    )
+    components, bottom, top = laserPumpCladdingComponents(
+        material,
+        useCladding=useCladding,
+        claddingMaterial=claddingMaterial,
+    )
+    component = components[0]
     gainMedium = GainMedium([component], name="amplifier")
     phiAseParameters = {
         "propagationMode": "forward",
@@ -144,7 +223,7 @@ def buildSimulation(
         profile=pumpProfile,
     )
     simulation = Simulation(
-        opticalComponents=[component],
+        opticalComponents=components,
         gainMedium=gainMedium,
         initialExcitation=0.0,
         phiASE=PhiASE(**phiAseParameters),
@@ -214,17 +293,36 @@ def _writeTet4StateVtk(path, state, fields):
     return path
 
 
-def writeVtkFields(state, vtkOutputDir=scriptDir, claddingAbsorption=1.0, crossSections=None, nTot=None):
+def writeVtkFields(
+    state,
+    vtkOutputDir=scriptDir,
+    absorptionCoefficient=0.0,
+    claddingMask=None,
+    crossSections=None,
+    nTot=None,
+):
+    """Write cell-centred state and material-derived absorption diagnostics."""
     if state.phiAse is None:
         raise ValueError("VTK export requires state.phiAse")
     if crossSections is None or nTot is None:
         raise ValueError("VTK export requires crossSections and nTot for gain")
+    claddingMask = (
+        np.zeros(np.asarray(state.phiAse).shape, dtype=bool)
+        if claddingMask is None
+        else np.asarray(claddingMask, dtype=bool)
+    )
+    if claddingMask.shape != np.asarray(state.phiAse).shape:
+        raise ValueError("claddingMask must match state.phiAse")
     fields = {
         "betaVolume": state.betaVolume,
         "phiASE": state.phiAse,
         "dndtAse": state.dndtAse,
         "dndtPump": state.dndtPump,
-        "cladAbs": state.phiAse * np.float64(claddingAbsorption),
+        "cladAbs": (
+            state.phiAse
+            * np.float64(absorptionCoefficient)
+            * claddingMask
+        ),
         "localGain": calcGainFromState(state, crossSections, nTot),
     }
     path = Path(vtkOutputDir) / f"laserPumpCladding_{state.step:03d}.vtk"
@@ -247,6 +345,8 @@ def runExample(
     pumpRngSeed=5489,
     reportTimings=False,
     outputSteps=None,
+    useCladding=True,
+    absorptionCoefficient=None,
     **aseOverrides,
 ):
     simulation = buildSimulation(
@@ -261,22 +361,38 @@ def runExample(
         pumpRngSeed=pumpRngSeed,
         reportTimings=reportTimings,
         outputSteps=outputSteps,
+        useCladding=useCladding,
+        absorptionCoefficient=absorptionCoefficient,
         **aseOverrides,
     )
     material = simulation.gainMedium.components[0].material
     nTot = material.activeIonDensity.toValue(units.cm**-3)
+    backendMedium = simulation._backendGainMedium
+    claddingMask = np.asarray(
+        backendMedium.get("claddingCellTypes").value,
+        dtype=np.uint32,
+    ) == np.uint32(backendMedium.get("claddingNumber").value)
+    absorptionCoefficient = float(
+        backendMedium.get("claddingAbsorption").value
+    )
     print(f"Running simulation with backend {simulation.phiASE.backend}")
     print(f"Using openPMD backend {simulation.phiASE.openpmdBackend}")
     simulation.onStep(printState)
     simulation.onStep(
         writeVtkFields,
         Path(vtkOutputDir),
-        5.5,
+        absorptionCoefficient,
+        claddingMask,
         simulation.crossSections,
         nTot,
     )
     if openPmdOutputDir is not None:
-        simulation.onStep(writeParaviewState, Path(openPmdOutputDir), 5.5)
+        simulation.onStep(
+            writeParaviewState,
+            Path(openPmdOutputDir),
+            absorptionCoefficient,
+            claddingMask,
+        )
     simulation.step()
     return simulation.getLastState()
 
@@ -297,6 +413,12 @@ def main(argv=None):
     parser.add_argument("--pump-rng-seed", type=int, default=5489)
     parser.add_argument("--spectral-resolution", type=int, default=1000)
     parser.add_argument("--timings", action="store_true")
+    parser.add_argument(
+        "--cladding",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="include the passive radial cladding component (default: enabled)",
+    )
     args = parser.parse_args(argv)
 
     overrides = {} if args.rng_seed is None else {"rngSeed": args.rng_seed}
@@ -314,6 +436,7 @@ def main(argv=None):
         pumpRayCount=args.pump_ray_count,
         pumpRngSeed=args.pump_rng_seed,
         outputSteps=args.output_steps,
+        useCladding=args.cladding,
         **overrides,
     )
     print(f"phiAse shape: {state.phiAse.shape}")

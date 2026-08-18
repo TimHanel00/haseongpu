@@ -30,6 +30,7 @@ def _material():
             absorption=1.2e-21 * units.cm**2,
             emission=2.1e-20 * units.cm**2,
         ),
+        active=True,
         activeIonDensity=2.76e20 / units.cm**3,
     )
 

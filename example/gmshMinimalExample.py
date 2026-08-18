@@ -78,6 +78,7 @@ def main():
                 absorption=7.8e-21 * units.cm**2,
                 emission=1.9e-21 * units.cm**2,
             ),
+            active=True,
             activeIonDensity=2.776e20 / units.cm**3,
         )
         crystal = OpticalComponent(domain=crystalDomain, material=material)
