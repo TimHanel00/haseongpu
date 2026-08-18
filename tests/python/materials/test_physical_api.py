@@ -52,6 +52,7 @@ def material(name="Yb:YAG"):
             absorption=1.0e-21 * units.cm**2,
             emission=2.0e-20 * units.cm**2,
         ),
+        active=True,
         activeIonDensity=2.776e20 / units.cm**3,
     )
 
@@ -173,6 +174,30 @@ def test_resolved_material_remains_mutable_and_revalidatable():
         resolved.validate()
 
 
+def test_material_activity_is_authoritative_for_population_dynamics():
+    active = material()
+    active.activeIonDensity = 0.0 / units.cm**3
+    assert active.validate().isActive
+
+    component = OpticalComponent(
+        material=active,
+        domain=Domain.fromTopology(topology()),
+    )
+    with pytest.raises(ValueError, match="positive activeIonDensity"):
+        lowerGainMedium(GainMedium([component]))
+
+    with pytest.raises(ValueError, match="passive materials require zero"):
+        Material(
+            materialName="invalid passive material",
+            temperature=293.15 * units.K,
+            refractiveIndex=1.45,
+            fluorescenceLifetime=None,
+            crossSections=None,
+            active=False,
+            activeIonDensity=1.0 / units.cm**3,
+        )
+
+
 def test_lowering_preserves_shared_adjacency_and_concatenates_independent_meshes():
     shared = topology()
     shared_material = material()
@@ -242,6 +267,7 @@ def test_passive_component_lowers_one_attenuation_and_cell_selection():
         refractiveIndex=1.45,
         fluorescenceLifetime=None,
         crossSections=None,
+        active=False,
         absorptionCoefficient=5.5 / units.cm,
     )
     claddingComponent = OpticalComponent(
@@ -273,6 +299,7 @@ def test_material_attenuation_alias_and_lossless_passive_lowering():
             refractiveIndex=1.45,
             fluorescenceLifetime=None,
             crossSections=None,
+            active=False,
             bulkAttenuation=1.0 / units.cm,
             absorptionCoefficient=1.0 / units.cm,
         )
@@ -287,6 +314,7 @@ def test_material_attenuation_alias_and_lossless_passive_lowering():
         refractiveIndex=1.45,
         fluorescenceLifetime=None,
         crossSections=None,
+        active=False,
     )
     passiveComponent = OpticalComponent(
         material=unspecified, domain=Domain.fromGmsh(mesh, "left")
@@ -315,6 +343,7 @@ def test_lowering_rejects_heterogeneous_passive_attenuation():
                 refractiveIndex=1.45,
                 fluorescenceLifetime=None,
                 crossSections=None,
+                active=False,
                 bulkAttenuation=attenuation / units.cm,
             ),
             domain=Domain.fromTopology(topology(offset=2.0 * index)),
@@ -342,6 +371,7 @@ def test_simulation_keeps_non_gain_components_and_requires_exact_excitation_cove
         refractiveIndex=1.5,
         fluorescenceLifetime=None,
         crossSections=None,
+        active=False,
     )
     windowMesh = topology(10.0)
     window = OpticalComponent(

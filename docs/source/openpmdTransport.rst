@@ -126,8 +126,9 @@ The public frontend graph and the transport representation are distinct. A
 resolved ``Material`` carries unit-bearing physical values and spectra;
 ``OpticalComponent`` and ``Domain`` attach them to a ``VolumeTopology``. Before
 writing the series, lowering combines the complete optical-component assembly,
-marks the ``GainMedium`` subset as active, maps supported passive components to
-backend cladding cells, and converts ``CrossSectionTable`` to
+validates the stored material activity against the ``GainMedium`` selection,
+maps supported passive components to backend cladding cells, and converts
+``CrossSectionTable`` to
 ``CrossSectionData``. Those internal class names are not an openPMD schema. The
 wire contract is the openPMD series written for the C++ backend.
 

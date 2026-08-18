@@ -36,6 +36,17 @@ _convert_vtk_topology_spec.loader.exec_module(_convert_vtk_topology)
 convertVtk = _convert_vtk_topology.convertVtk
 
 
+_label_cladding_path = repoRoot / "utils" / "label_laser_pump_cladding_domains.py"
+_label_cladding_spec = importlib.util.spec_from_file_location(
+    "_hase_label_laser_pump_cladding_domains",
+    _label_cladding_path,
+)
+if _label_cladding_spec is None or _label_cladding_spec.loader is None:
+    raise ImportError(f"cannot load cladding-domain generator from {_label_cladding_path}")
+_label_cladding = importlib.util.module_from_spec(_label_cladding_spec)
+_label_cladding_spec.loader.exec_module(_label_cladding)
+
+
 _laser_pump_launcher_path = repoRoot / "utils" / "testLaunchLaserPump.py"
 _laser_pump_launcher_spec = importlib.util.spec_from_file_location(
     "_hase_test_launch_laser_pump",
@@ -74,9 +85,15 @@ LEGACY_WEDGE_FORWARD_RAYS = int(
 
 
 def testLaserPumpCladdingDefaultConfigEnablesReflections():
-    phi_ase = laserPumpCladding.buildSimulation().phiASE
+    simulation = laserPumpCladding.buildSimulation()
 
-    assert phi_ase.useReflections is True
+    assert simulation.phiASE.useReflections is True
+    assert [component.name for component in simulation.opticalComponents] == [
+        "crystal",
+        "cladding",
+    ]
+    assert simulation.opticalComponents[0].material.isActive
+    assert simulation.opticalComponents[1].material.isPassive
 
 
 def testLaserPumpCladdingPhiAseOverridesReplaceInlineDefaults():
@@ -126,6 +143,14 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
         assert getattr(api.phiASE, name) == getattr(yaml.phiASE, name), name
     assert api.phiASE.useReflections is True
     assert api.prePump == yaml.prePump is True
+    assert [component.name for component in api.opticalComponents] == [
+        component.name for component in yaml.opticalComponents
+    ] == ["crystal", "cladding"]
+    np.testing.assert_array_equal(
+        api._backendGainMedium.get("claddingCellTypes").value,
+        yaml._backendGainMedium.get("claddingCellTypes").value,
+    )
+    assert api._backendGainMedium.get("claddingAbsorption").value == pytest.approx(5.5)
 
     api_pump = api.pumps[0]
     yaml_pump = yaml.pumps[0]
@@ -272,6 +297,26 @@ def testPtTet4GeometryConvertsBackToLegacyWedgeOrder(
     assert "betaVolume" in cell_data
 
 
+def testPtTet4GeometryLabelsOneRadialCladdingCellLayer():
+    components, _bottom, _top = laserPumpCladding.laserPumpCladdingComponents()
+    crystal, cladding = components
+    topology = crystal.domain.topologies[0]
+
+    assert np.count_nonzero(crystal.domain.maskFor(topology)) == 21276
+    assert np.count_nonzero(cladding.domain.maskFor(topology)) == 648
+    domainIds, counts = np.unique(topology.cellDomains, return_counts=True)
+    np.testing.assert_array_equal(domainIds, [1, 2])
+    np.testing.assert_array_equal(counts, [21276, 648])
+    np.testing.assert_array_equal(
+        topology.cellDomains,
+        _label_cladding.laserPumpCladdingCellDomains(
+            topology.points,
+            topology.cellPointIndices,
+            topology.structuredNumberOfLevels,
+        ),
+    )
+
+
 def testLaserPumpCladdingUsesMaterialSpectrumForBackendAndPump():
     simulation = laserPumpCladding.buildSimulation(spectralResolution=191)
     material = simulation.gainMedium.components[0].material
@@ -294,7 +339,7 @@ def testLaserPumpCladdingUsesMaterialSpectrumForBackendAndPump():
 
 
 def testLaserPumpCladdingTet4MediumAssignsCylinderSurfaceOptics():
-    simulation = laserPumpCladding.buildSimulation()
+    simulation = laserPumpCladding.buildSimulation(useCladding=False)
     component = simulation.gainMedium.components[0]
     topology = component.domain.topologies[0]
     points = np.asarray(topology.points, dtype=np.float64)
@@ -314,7 +359,7 @@ def testLaserPumpCladdingTet4MediumAssignsCylinderSurfaceOptics():
 
 
 def testLaserPumpCladdingTet4MediumPreservesLegacyTenLayerPumpLayout():
-    simulation = laserPumpCladding.buildSimulation()
+    simulation = laserPumpCladding.buildSimulation(useCladding=False)
     component = simulation.gainMedium.components[0]
     topology = component.domain.topologies[0]
     points = np.asarray(topology.points, dtype=np.float64)
@@ -379,6 +424,7 @@ def testLaserPumpCladdingRunExampleReflectionToggleChangesPhiAse(
             reflectionTolerance=0.0,
             surfaceReservoirSize=32,
             outputSteps=(2,),
+            useCladding=True,
         )
         points, cells, _cell_types, _point_data, cell_data, _fields = _parseVtk(
             output_dir / "laserPumpCladding_002.vtk"
@@ -418,6 +464,7 @@ def laserPumpCladdingBackendResults(
             relativeStandardErrorThreshold=0.05,
             adaptiveSteps=metadata["parameters"]["adaptiveSteps"],
             outputSteps=metadata["observable"]["stepNumbers"],
+            useCladding=False,
         )
 
         relative_standard_error = np.asarray(state.relativeStandardError, dtype=np.float64)
@@ -583,6 +630,12 @@ def testLaserPumpCladdingExampleWritesVtkFromCompiledSnapshots(
     assert state.step == 2
     scalars = _vtkScalarNames(second)
     assert {"betaVolume", "phiASE", "dndtAse", "dndtPump", "cladAbs"}.issubset(scalars)
+    _points, _cells, _types, _pointData, cellData, _fields = _parseVtk(second)
+    claddingTypes = fakeCompiledSnapshots[-1]["simulation"]._backendGainMedium.get(
+        "claddingCellTypes"
+    ).value
+    np.testing.assert_array_equal(cellData["cladAbs"][claddingTypes == 0], 0.0)
+    np.testing.assert_array_equal(cellData["cladAbs"][claddingTypes == 1], 5.5)
     assert fakeCompiledSnapshots[-1]["phiASE"].relativeStandardErrorThreshold == 0.1
     assert fakeCompiledSnapshots[-1]["simulation"].pumps[0].pump_steps == 1
 
@@ -647,6 +700,32 @@ def testLaserPumpCladdingCliAcceptsZeroAseSteps(monkeypatch, tmp_path):
 
     assert calls[-1]["kwargs"]["aseSteps"] == 0
     assert calls[-1]["kwargs"]["spectralResolution"] == 191
+    assert calls[-1]["kwargs"]["useCladding"] is True
+
+
+def testLaserPumpCladdingCliCanDisableCladding(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run_example(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return SimpleNamespace(phiAse=np.zeros((2, 3)), betaVolume=np.zeros((2, 3)))
+
+    monkeypatch.setattr(laserPumpCladding, "runExample", fake_run_example)
+    laserPumpCladding.main(
+        [
+            "--no-cladding",
+            "--simulation-steps",
+            "1",
+            "--pump-steps",
+            "1",
+            "--ase-steps",
+            "0",
+            "--vtk-output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert calls[-1]["kwargs"]["useCladding"] is False
 
 
 def testLaserPumpCladdingLauncherUsesSupportedCliOptions(monkeypatch, tmp_path):

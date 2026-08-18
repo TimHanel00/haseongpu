@@ -45,6 +45,7 @@ material = Material(
         absorption=1.0e-21 * units.cm**2,
         emission=2.0e-20 * units.cm**2,
     ),
+    active=True,
     activeIonDensity=1.0e20 / units.cm**3,
 )
 component = OpticalComponent(

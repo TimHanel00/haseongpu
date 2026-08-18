@@ -14,8 +14,8 @@ arrays across the simulation configuration.
 Resolve a bundled material
 --------------------------
 
-The bundled database contains the room-temperature Yb:YAG data used by the
-laser-pump example:
+The bundled database contains the active room-temperature Yb:YAG record and
+the passive absorbing glass used by the laser-pump example:
 
 .. code-block:: python
 
@@ -61,19 +61,29 @@ an HDF5 library:
        refractiveIndex=1.83,
        fluorescenceLifetime=0.941 * units.ms,
        crossSections=spectra,
+       active=True,
        activeIonDensity=2.776e20 / units.cm**3,
    )
 
-A positive ``activeIonDensity`` makes the condition active and requires a
-fluorescence lifetime plus non-zero emission data. ``bulkAttenuation`` is not
-required for a gain material. The current backend does not apply a non-zero
-passive loss coefficient in active gain cells.
+``active=True`` classifies the material as participating in active-ion
+population dynamics. The classification belongs to the material record and is
+independent of ``activeIonDensity``. The density quantifies the available ions
+for one crystal condition; it does not switch the rate equations on or off.
+
+An active material requires a fluorescence lifetime, cross sections, and
+non-zero emission data. A library record may be resolved with zero density for
+inspection or subsequent parameterization. Before that material is placed in a
+``GainMedium``, the run condition must supply a positive density.
+``bulkAttenuation`` is not required for a gain material. The current backend
+does not apply a non-zero passive loss coefficient in active gain cells.
 
 Passive materials and bulk attenuation
 --------------------------------------
 
-A passive material has zero active-ion density. An absorbing cladding can be
-described without fluorescence or spectroscopic cross sections:
+A passive material is constructed with ``active=False``. It has zero
+``activeIonDensity`` and is excluded from population excitation. An absorbing
+cladding can therefore be described without fluorescence or spectroscopic
+cross sections:
 
 .. code-block:: python
 
@@ -83,6 +93,7 @@ described without fluorescence or spectroscopic cross sections:
        refractiveIndex=1.45,
        fluorescenceLifetime=None,
        crossSections=None,
+       active=False,
        absorptionCoefficient=5.5 / units.cm,
    )
 
@@ -100,9 +111,10 @@ inverse-length units; ``5.5 / units.cm`` is therefore :math:`5.5\,\mathrm{cm}^{-
 
 An omitted coefficient is ``None`` and contributes no volumetric attenuation.
 An explicit ``0.0 / units.cm`` has the same transport effect and may be useful
-when a measured material record should state the zero coefficient. ``isPassive``
-tests for zero active-ion density, whereas ``isTransparent`` identifies a
-passive condition with no bulk-loss contribution.
+when a measured material record should state the zero coefficient.
+``isActive`` and ``isPassive`` report the explicit material classification;
+``isTransparent`` identifies a passive condition with no bulk-loss
+contribution.
 ``bulkAttenuation`` is the canonical material property and HDF5 field.
 ``absorptionCoefficient`` is an exact read/write alias, including as a
 ``Material`` constructor keyword. It describes the same wavelength-independent
@@ -167,7 +179,9 @@ Persist a material library
 
 Libraries use a versioned HDF5 representation with units and JSON-compatible
 metadata on the material record, temperature state, and cross-section table.
-Passive attenuation is stored only when it is specified:
+Format 1.1 stores the boolean ``active`` attribute on each material record;
+temperature states under the same key cannot disagree about it. Passive
+attenuation is stored only when it is specified:
 
 .. code-block:: python
 
@@ -182,6 +196,10 @@ Passive attenuation is stored only when it is specified:
 
 ``Material.toHdf5`` is a convenience for a one-record, one-state library.
 Existing files are not overwritten unless ``overwrite=True`` is explicit.
+Version 1.0 files predate the activity attribute. They remain readable through
+a warning-emitting compatibility path that infers the classification from
+stored lifetime and cross-section data. Rewriting such a library records the
+classification explicitly as version 1.1.
 
 From material to simulation
 ---------------------------

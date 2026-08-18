@@ -146,6 +146,7 @@ def testCurrentTet4WithoutReflectionsMatchesLegacyWedgeIntegral(
         relativeStandardErrorThreshold=0.05,
         adaptiveSteps=metadata["parameters"]["adaptiveSteps"],
         outputSteps=metadata["observable"]["stepNumbers"],
+        useCladding=False,
     )
 
     assert state.aseResult.srmStatus == "disabled"

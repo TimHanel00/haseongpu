@@ -28,7 +28,7 @@ references are errors.
          path: materials.h5
          key: CladdingGlass
        temperature: 293.15
-       bulk_attenuation: 5.5
+       absorption_coefficient: 5.5
 
    topologies:
      assembly:
@@ -94,9 +94,10 @@ Material resolution
 -------------------
 
 Every YAML material is resolved from a versioned HDF5 library. The stored
-record supplies available temperature-dependent properties. ``temperature``,
-``active_ion_density``, ``interpolation``, and ``spectral_resolution`` select
-the condition used by this simulation.
+record supplies its active/passive classification and available
+temperature-dependent properties. ``temperature``, ``active_ion_density``,
+``interpolation``, and ``spectral_resolution`` select the condition used by
+this simulation. ``active_ion_density`` does not reclassify the material.
 
 Run-specific overrides ``refractive_index``, ``fluorescence_lifetime``, and
 ``bulk_attenuation`` are applied after resolution and revalidated. They are
@@ -105,7 +106,8 @@ Use the material-library API when the corrected data should become a durable,
 provenance-bearing material state. See :doc:`materials`.
 
 ``bulk_attenuation`` uses ``cm^-1``. A passive material that omits it contributes
-no volumetric attenuation. ``absorption_coefficient`` is its exact YAML alias;
+no volumetric attenuation. ``absorption_coefficient`` is its exact YAML alias
+and the preferred physical spelling in configuration examples;
 a material entry cannot provide both names. This coefficient describes
 wavelength-independent bulk intensity loss, not the active-ion absorption
 cross section.

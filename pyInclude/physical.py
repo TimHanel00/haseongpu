@@ -425,8 +425,9 @@ class GainMedium:
     Parameters
     ----------
     components
-        Optical components whose materials provide active-ion density,
-        fluorescence lifetime, and absorption/emission cross sections.
+        Optical components whose materials have ``active=True`` and provide
+        the run-specific ion density, fluorescence lifetime, and
+        absorption/emission cross sections required by population dynamics.
     name
         Optional label for the active component group.
     """

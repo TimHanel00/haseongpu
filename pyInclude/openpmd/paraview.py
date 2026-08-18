@@ -41,11 +41,17 @@ def _reset_scalar_record(iteration, name, values, primitive_shape, axis_labels):
 def writeParaviewState(
     state,
     outputDir,
-    claddingAbsorption=1.0,
+    absorptionCoefficient=0.0,
+    claddingMask=None,
     pattern="laserPumpCladding_%06T.bp",
     handleName="laserPumpCladding.pmd",
 ):
-    """Append one simulation state to an openPMD series and write a ParaView handle."""
+    """Append one simulation state to an openPMD series.
+
+    ``absorptionCoefficient`` is applied only where ``claddingMask`` is true;
+    the resulting diagnostic is zero in active gain cells. The function also
+    writes the small ParaView series handle beside the iteration data.
+    """
     import openpmd_api as io
 
     output_dir = Path(outputDir)
@@ -71,10 +77,17 @@ def writeParaviewState(
     if state.phiAse is not None:
         phi_ase = np.asarray(state.phiAse)
         _reset_scalar_record(iteration, "phi_ase", phi_ase, phi_ase.shape, cell_axes)
+        cladding_mask = (
+            np.zeros(phi_ase.shape, dtype=bool)
+            if claddingMask is None
+            else np.asarray(claddingMask, dtype=bool)
+        )
+        if cladding_mask.shape != phi_ase.shape:
+            raise ValueError("claddingMask must match state.phiAse")
         _reset_scalar_record(
             iteration,
             "cladding_absorption",
-            phi_ase * np.float64(claddingAbsorption),
+            phi_ase * np.float64(absorptionCoefficient) * cladding_mask,
             phi_ase.shape,
             cell_axes,
         )

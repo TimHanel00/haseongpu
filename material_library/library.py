@@ -41,7 +41,11 @@ class MaterialLibrary:
         if key in self._materials:
             raise KeyError(f"material key {key!r} is already registered")
         material.validate()
-        record = _MaterialRecord(material.materialName, metadata=material.metadata)
+        record = _MaterialRecord(
+            material.materialName,
+            active=material.active,
+            metadata=material.metadata,
+        )
         record._append_state(self._stateFromMaterial(material))
         self._materials[key] = record
         return material
@@ -59,6 +63,8 @@ class MaterialLibrary:
         material.validate()
         if material.materialName != record.name:
             raise ValueError("temperature states under one key must have the same materialName")
+        if material.active != record.active:
+            raise ValueError("temperature states under one key must have the same active flag")
         record._append_state(self._stateFromMaterial(material))
         return material
 

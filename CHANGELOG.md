@@ -33,7 +33,9 @@ reflection, but not Fresnel reflection/transmission, refracted rays, or general
 internal optical interfaces.
 
 The Python material API now separates versioned, temperature-resolved HDF5
-records from mutable run conditions. Unit-bearing ``Material`` and
+records from mutable run conditions. Material records carry an explicit
+active/passive classification, while ``activeIonDensity`` remains a
+run-specific quantitative condition. Unit-bearing ``Material`` and
 ``CrossSectionTable`` values are assigned to typed ``Domain`` selections
 through disjoint ``OpticalComponent`` volumes. ``GainMedium`` selects the
 active subset, while passive components remain part of the complete optical
@@ -44,6 +46,9 @@ concrete cell structure; the current backend lowers Tet4 bindings only.
 ``Simulation`` accepts an optional declared exterior surface; when omitted, it
 infers the boundary of all component domains without exposing an aggregate
 optical-domain attribute. Schema version 3 represents the same graph in YAML.
+The laser-pump example now enables a disjoint passive radial cladding component
+by default; ``--no-cladding`` retains the historical full-crystal regression
+geometry.
 
 ## HASEonGPU 2.1.1
 

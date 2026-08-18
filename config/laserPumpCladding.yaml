@@ -14,6 +14,14 @@ materials:
     active_ion_density: 2.776e20
     interpolation: exact
     spectral_resolution: 1000
+  cladding_glass:
+    # Activity and the default absorption coefficient are material properties
+    # stored in the HDF5 record. This passive material has no ion population.
+    from_hdf5:
+      path: ../material_library/data/materials.h5
+      key: CladdingGlass
+    temperature: 293.15
+    interpolation: exact
 
 topologies:
   amplifier_mesh:
@@ -24,7 +32,17 @@ topologies:
 
 domains:
   amplifier_volume:
-    topology: amplifier_mesh
+    from_gmsh:
+      topology: amplifier_mesh
+      physical_group: 1
+      entity_kind: volume
+  cladding_volume:
+    from_gmsh:
+      topology: amplifier_mesh
+      physical_group: 2
+      entity_kind: volume
+  cladding_boundary:
+    boundary: cladding_volume
   all_exterior:
     where:
       topology: amplifier_mesh
@@ -40,6 +58,11 @@ domains:
       topology: amplifier_mesh
       entity_kind: surface
       selector: z_max
+  pump_input:
+    # Remove bottom faces owned by the radial cladding shell.
+    difference: [ase_bottom, cladding_boundary]
+  pump_exit:
+    difference: [ase_top, cladding_boundary]
   end_surfaces:
     union: [ase_bottom, ase_top]
   cladding_surface:
@@ -50,17 +73,21 @@ optical_components:
     domain: amplifier_volume
     material: yb_yag
     surface_optics:
+      - domain: pump_input
+        reflectivity: 0.0
+        interior_refractive_index: 1.83
+        exterior_refractive_index: 1.0
+      - domain: pump_exit
+        reflectivity: 0.0
+        interior_refractive_index: 1.83
+        exterior_refractive_index: 1.0
+  cladding:
+    domain: cladding_volume
+    material: cladding_glass
+    surface_optics:
       - domain: cladding_surface
         reflectivity: 0.0
-        interior_refractive_index: 1.0
-        exterior_refractive_index: 1.0
-      - domain: ase_bottom
-        reflectivity: 0.0
-        interior_refractive_index: 1.83
-        exterior_refractive_index: 1.0
-      - domain: ase_top
-        reflectivity: 0.0
-        interior_refractive_index: 1.83
+        interior_refractive_index: 1.45
         exterior_refractive_index: 1.0
 
 gain_media:
@@ -68,7 +95,7 @@ gain_media:
     components: [crystal]
 
 simulation:
-  optical_components: [crystal]
+  optical_components: [crystal, cladding]
   gain_medium: amplifier
   initial_excitation:
     value: 0.0
@@ -112,10 +139,10 @@ simulation:
         axis_u: [1.0, 0.0, 0.0]
         axis_v: [0.0, 1.0, 0.0]
       injection:
-        domain: ase_bottom
+        domain: pump_input
       relays:
-        - exit_domain: ase_top
-          entry_domain: ase_top
+        - exit_domain: pump_exit
+          entry_domain: pump_exit
           flip_u: false
           flip_v: false
           rotation: 0.0

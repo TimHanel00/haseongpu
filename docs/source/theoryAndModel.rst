@@ -33,7 +33,8 @@ mapping is the bridge between a physical model and a runnable input:
      - Meaning
    * - :math:`\beta_j`
      - ``Simulation.initialExcitation`` / ``TimeStepState.betaVolume``
-     - Cell-centered excited-state fraction.
+     - Cell-centered excited-state fraction, evaluated only in components
+       whose material has ``active=True`` and which belong to ``GainMedium``.
    * - :math:`N_{\mathrm{tot}}`
      - ``component.material.activeIonDensity``
      - Active-ion concentration used in ASE and pump gain.
@@ -44,7 +45,7 @@ mapping is the bridge between a physical model and a runnable input:
      - ``component.material.crossSections``
      - Wavelength-dependent absorption and emission cross sections.
    * - :math:`\alpha_{\mathrm{bulk}}`
-     - ``passiveComponent.material.bulkAttenuation``
+     - ``passiveComponent.material.absorptionCoefficient``
      - Constant passive intensity attenuation coefficient.
    * - :math:`\Phi_j`
      - ``TimeStepState.phiAse``

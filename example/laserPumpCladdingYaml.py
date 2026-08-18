@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
+
 from _source_tree_import import ensure_hase_importable
 
 
@@ -37,7 +39,14 @@ def runExample(
     """Run the YAML-defined simulation and return its final state."""
     simulation = buildSimulation(configPath)
     material = simulation.gainMedium.components[0].material
-    absorption = 5.5
+    backendMedium = simulation._backendGainMedium
+    claddingMask = np.asarray(
+        backendMedium.get("claddingCellTypes").value,
+        dtype=np.uint32,
+    ) == np.uint32(backendMedium.get("claddingNumber").value)
+    absorptionCoefficient = float(
+        backendMedium.get("claddingAbsorption").value
+    )
 
     print(f"Running simulation with backend {simulation.phiASE.backend}")
     print(f"Using openPMD backend {simulation.phiASE.openpmdBackend}")
@@ -45,12 +54,18 @@ def runExample(
     simulation.onStep(
         writeVtkFields,
         Path(vtkOutputDir),
-        absorption,
+        absorptionCoefficient,
+        claddingMask,
         simulation.crossSections,
         material.activeIonDensity.toValue(units.cm**-3),
     )
     if openPmdOutputDir is not None:
-        simulation.onStep(writeParaviewState, Path(openPmdOutputDir), absorption)
+        simulation.onStep(
+            writeParaviewState,
+            Path(openPmdOutputDir),
+            absorptionCoefficient,
+            claddingMask,
+        )
     simulation.step()
     return simulation.getLastState()
 

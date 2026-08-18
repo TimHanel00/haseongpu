@@ -124,6 +124,7 @@ def test_simulation_from_yaml_lowers_passive_component_outside_gain_medium(tmp_p
         refractiveIndex=1.45,
         fluorescenceLifetime=None,
         crossSections=None,
+        active=False,
         absorptionCoefficient=5.5 / units.cm,
     )
 
