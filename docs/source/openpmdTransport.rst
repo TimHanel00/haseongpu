@@ -1,105 +1,212 @@
 openPMD Transport
 =================
 
-HASEonGPU uses openPMD as the transport boundary between the Python frontend and
-the C++ ``calcPhiASE`` backend. Users construct ``Material``,
-``OpticalComponent``, ``Domain``, ``GainMedium``, and ``PhiASE`` objects; a
-``Simulation`` lowers that physical graph to the records and attributes
-consumed by the backend. This page owns storage-backend,
-provider-compatibility, and record-layout details; Alpaka compute selection is
-documented separately in :doc:`backendSelection`.
+HASEonGPU uses openPMD to exchange a self-describing primitive graph between
+the Python frontend and ``calcPhiASE``. The graph retains the frontend's
+``Simulation``, ``Domain``, ``OpticalComponent``, ``Material``, pump, and
+solver structure instead of defining a second flattened input model.
 
-Storage Backends
+This page describes runtime selection, session behavior, and the stored graph.
+Alpaka compute selection is documented separately in
+:doc:`backendSelection`. Contributors extending the graph should use
+:doc:`developer/transportFields`.
+
+Storage backends
 ----------------
 
 The openPMD storage backend is independent from the Alpaka compute backend.
-``auto`` is the default: it chooses the first backend supported by both the
-compiled and Python openPMD providers in this order: ``adios``, ``adios-sst``,
-then ``hdf5``. Explicit runtime values are:
-
-``adios-sst``
-   ADIOS2 SST streaming series. Select it explicitly when a live stream is
-   preferable to file-backed exchange.
+``auto`` selects the first backend supported by both the Python and C++
+openPMD providers in this order: ``adios``, ``adios-sst``, then ``hdf5``.
 
 ``adios``
-   ADIOS2 file-backed ``.bp`` series. This is the automatic default when
-   supported because it is currently more robust and usually faster than SST
-   for HASEonGPU's frontend/backend exchange.
+   File-backed ADIOS2 ``.bp`` series. This is preferred by ``auto`` when it is
+   available.
+
+``adios-sst``
+   ADIOS2 SST streaming series. Synchronized Python/backend stepping requires
+   this streaming backend.
 
 ``hdf5``
-   HDF5 ``.h5`` series.  Requires HDF5 support in the selected openPMD-api
-   provider.
+   HDF5 ``.h5`` series. The selected openPMD provider must include HDF5
+   support.
 
-Select it in Python or YAML:
+Select the backend on ``PhiASE`` or in schema-v3 YAML:
 
 .. code-block:: python
 
-   phi_ase = PhiASE(..., openpmdBackend="auto")
+   phi_ase = PhiASE(
+       backend="Host_Cpu_CpuSerial",
+       openpmdBackend="auto",
+   )
 
 .. code-block:: yaml
 
    schema_version: 3
    simulation:
      phi_ase:
-       backend: Host_Cpu_CpuSerial       # Alpaka compute backend
-       openpmd_backend: auto              # choose a compatible backend
+       backend: Host_Cpu_CpuSerial
+       openpmd_backend: auto
 
-Set ``PhiASE.openpmdBackend`` or the YAML ``openpmd_backend`` value to override
-automatic selection for a particular run.
+The frontend checks an explicit selection, or resolves ``auto``, against both
+the provider linked into ``calcPhiASE`` and the active Python ``openpmd_api``
+module before launching the backend.
 
-Streaming Sessions
-------------------
+Transported object graph
+------------------------
 
-``PhiASE.run(...)`` defaults to one open/write/read/close cycle per call.  For
-repeated ``adios-sst`` calls, keep a stream open:
+Each frontend primitive privately describes the state it owns through
+``_transportDescription()``. The hook is internal serialization metadata; the
+primitive's public constructor, properties, and methods remain responsible for
+the user-facing API and validation.
+
+A description contains:
+
+``transportField(name, ...)``
+   A value owned directly by the primitive. Examples include
+   ``Simulation.controlFields`` and ``Material.refractiveIndex``.
+
+``reference(name, ...)``
+   A relationship to another self-describing primitive. For example,
+   ``OpticalComponent`` references its ``Domain`` and ``Material``, while
+   ``Material`` references its ``CrossSectionTable``.
+
+The composer follows references and deduplicates objects by identity. Two
+components that share one material therefore store one material node and one
+cross-section-table node. The components contain references to those nodes;
+they do not copy the material fields.
+
+The generic writer consumes the resulting ``TransportGraph`` without
+inspecting concrete frontend types. Adding a field to ``Material`` or
+``Simulation`` does not add a corresponding branch to the writer.
+
+Domain-local SoA topology
+-------------------------
+
+A ``Domain`` stores a selection mask for each ``VolumeTopology`` shard it
+references. It does not depend on one simulation-global mesh object. This
+keeps topology ownership suitable for later partitioning by domain, rank, or
+device.
+
+Topology arrays use structure-of-arrays order:
+
+* points: ``coordinate x point``;
+* cell connectivity: ``localVertex x cell``;
+* cell faces: ``localVertex x localFace x cell``;
+* neighbors and boundaries: ``localFace x cell``;
+* face centers and normals: ``coordinate x localFace x cell``; and
+* cell centers and sample points: ``coordinate x cell``.
+
+Stored representation
+---------------------
+
+Each input iteration contains a complete, versioned primitive graph. Iteration
+attributes identify the transport version, root path, node paths, node types,
+and references between nodes.
+
+Numeric scalar and array fields are stored as openPMD mesh records. Each record
+carries its logical graph path, owning primitive type, field name, axes, shape,
+dynamic flag, encoding, and physical-unit metadata. ``Quantity`` values retain
+their ``unitSI`` and ``unitDimension`` information. Strings, string sequences,
+references, and JSON metadata are stored as namespaced attributes.
+
+Logical paths are encoded into provider-safe record and attribute keys. A
+consumer uses the stored logical path rather than assigning meaning to the
+physical key. Primitive definitions consequently do not depend on ADIOS2 or
+HDF5 naming restrictions.
+
+The C++ reader reconstructs the root ``Simulation`` and delegates each
+referenced namespace to the corresponding backend primitive's
+``fromTransport(reader, prefix)`` function. Numeric loading is prefetched by
+subtree; following one primitive does not require loading unrelated numeric
+fields.
+
+Direct ASE sessions
+-------------------
+
+``PhiASE.run(...)`` normally opens, writes, reads, and closes one transport
+session. Direct execution accepts the physical ``GainMedium`` graph; spectra
+come from the materials referenced by its components:
+
+.. code-block:: python
+
+   phi_ase.run(gainMedium=medium, initialExcitation=0.25)
+   result = phi_ase.getResults()
+
+For repeated SST requests, keep one stream open:
 
 .. code-block:: python
 
    session = phi_ase.openStream()
    try:
-       for _ in range(steps):
-           phi_ase.run(gainMedium=medium, crossSections=spectra, openpmdSession=session)
+       for excitation in states:
+           phi_ase.run(
+               gainMedium=medium,
+               initialExcitation=excitation,
+               openpmdSession=session,
+           )
            result = phi_ase.getResults()
    finally:
        phi_ase.closeStream()
 
-Use ``openpmdSession="persistent"`` to let ``PhiASE`` own a reusable stream, or
-``openpmdSession="interval"`` to force one-shot behavior.  ``Simulation`` owns a separate transport session for each compiled run;
-caller-managed simulation sessions are not supported.
+``openpmdSession="persistent"`` lets ``PhiASE`` own a reusable stream.
+``openpmdSession="interval"`` forces one-shot behavior.
 
-``Simulation.step(...)`` and ``Simulation.runUntil(...)`` launch the
-compiled ``calcPhiASE --cpp-control`` path. Python writes one initial input
-iteration with run-control attributes, then reads the snapshot series produced
-by the C++ time loop. For streaming backends, Python starts a dedicated
-snapshot receiver thread before sending the input iteration. The autonomous
-backend owns stepping; Python only consumes the completed-step indices and
-fields selected by ``output_steps`` and ``output_fields`` in the initial
-iteration. A bounded handoff keeps memory use finite, so a slow callback can
-apply ordinary stream backpressure without turning Python into the step
-controller. Caller-managed simulation openPMD sessions are not supported; the
-compiled run owns its transport lifetime.
+Compiled simulation sessions
+----------------------------
 
-With ``execution_mode="synchronized-debug"``, the input series remains open.
-After output step *N*, Python writes dynamic input iteration *N* and the backend
-waits for it before starting step *N+1*. Only records listed in
-``control_fields`` are written in these later iterations; currently that list
-may contain ``beta_volume``. Static topology, spectra, backend selection, and
-all other initialization records are transferred only in iteration zero.
-The user-facing order of ``onInit``, ``onStep``, and ``beforeStep`` is
-documented in :ref:`simulation-callback-lifecycle`.
+``Simulation.step(...)`` and ``Simulation.runUntil(...)`` launch
+``calcPhiASE --cpp-control``. A ``Simulation`` root references its physical
+components, gain medium, exterior surface, excitation state, ``PhiASE``, time
+integrator, and pump registrations. Pump registrations reference the physical
+pump, injection method, and relays.
 
-Provider Compatibility
+In ``autonomous`` mode, Python sends the initial graph and the C++ backend owns
+the complete time loop. Python receives the completed steps selected by
+``outputSteps`` and ``outputFields``. With an SST backend, the result receiver
+starts before the input writer and a bounded handoff applies backpressure when
+a callback is slower than the backend. Caller-managed simulation sessions are
+not supported.
+
+``synchronized-debug`` mode requires ``adios-sst``. After output step *N*,
+Python runs the registered ``onStep`` and ``beforeStep`` callbacks, refreshes
+the frontend ``ExcitationState``, and writes graph iteration *N*. The backend
+waits for that iteration before starting step *N+1*. Every input iteration is
+self-describing and complete; the changed state remains owned by
+``ExcitationState`` rather than by a separate update schema.
+
+``controlFields`` declares which supported state Python may update between
+steps. It is transport data owned by ``Simulation``; the generic writer stores
+the string sequence without interpreting its simulation meaning.
+
+Results and snapshots
+---------------------
+
+One-shot ASE output uses the ``phiAseResult`` namespace. It contains
+cell-centered flux, standard error, relative standard error, total ray count,
+ASE depletion, and reflection-termination metadata.
+
+Compiled simulation output uses one ``simulationSnapshot`` iteration for each
+selected completed step. A snapshot contains only the evolving fields selected
+by ``outputFields`` and their result metadata. Output fields are cell-centered;
+the compiled transport does not expose a separate point-centered excitation
+state.
+
+MPI uses the same primitive graph and result namespaces. MPI changes the
+execution topology, not the transport model. Rank/device layout, launch
+behavior, and shared-storage requirements are documented in :doc:`mpi`.
+
+Provider compatibility
 ----------------------
 
 The Python ``openpmd_api`` module and the C++ ``openPMD::openPMD`` provider
-must be compatible and must both support the selected runtime backend.  The
-guided setup checks this for common installs:
+must be compatible and must both support the selected storage backend. The
+guided setup checks the normal configuration:
 
 .. code-block:: bash
 
    python3 utils/configure_hase.py
 
-For manual checks against an existing provider:
+For a manual provider check:
 
 .. code-block:: bash
 
@@ -107,152 +214,17 @@ For manual checks against an existing provider:
      --backend adios-sst \
      --cmake-prefix-path /path/to/openpmd/prefix
 
-Then point installation or CMake configuration at the same provider, for
-example with ``CMAKE_PREFIX_PATH`` or ``openPMD_DIR``.  If the matching Python
-package is not on the normal Python path, set ``HASE_OPENPMD_PYTHON_PACKAGE_DIR``
-at build time or ``HASE_OPENPMD_PYTHONPATH`` before importing HASEonGPU.
-
-The HASEonGPU wheel does not vendor openPMD runtime libraries or generated
-``openpmd_api`` bindings.  The runtime environment must provide compatible
-openPMD libraries and Python bindings. Provider build options are listed in
+The wheel does not vendor openPMD runtime libraries or generated
+``openpmd_api`` bindings. If the matching Python package is outside the normal
+Python path, use ``HASE_OPENPMD_PYTHON_PACKAGE_DIR`` at build time or
+``HASE_OPENPMD_PYTHONPATH`` at runtime. Provider build options are listed in
 :ref:`openpmd-provider-options`.
 
-.. _openpmd-record-layout:
-
-openPMD Record Layout
----------------------
-
-The public frontend graph and the transport representation are distinct. A
-resolved ``Material`` carries unit-bearing physical values and spectra;
-``OpticalComponent`` and ``Domain`` attach them to a ``VolumeTopology``. Before
-writing the series, lowering combines the complete optical-component assembly,
-validates the stored material activity against the ``GainMedium`` selection,
-maps supported passive components to backend cladding cells, and converts
-``CrossSectionTable`` to
-``CrossSectionData``. Those internal class names are not an openPMD schema. The
-wire contract is the openPMD series written for the C++ backend.
-
-All array data at that boundary is written as openPMD ``Mesh`` records below
-each ``Iteration``'s ``meshes`` group. Scalar arrays are named openPMD records
-with the scalar ``SCALAR`` record component. Component records, currently
-``core_points``, use named components such as ``x``, ``y``, and ``z``. The
-record names are HASE-owned, which is allowed by openPMD, but the records carry
-the normal openPMD mesh and component metadata: ``geometry``,
-``geometryParameters``, ``dataOrder``, ``axisLabels``, ``gridSpacing``,
-``gridGlobalOffset``, ``gridUnitSI``, ``unitDimension``, component ``unitSI``,
-and component ``position``.
-
-Scalar simulation and backend settings are not openPMD field records. Values
-such as ``number_of_points``, ``thickness``, ``rng_seed``, ``backend``, and
-``parallel_mode`` are stored as attributes on the openPMD iteration.
-These values configure the HASE backend and do
-not represent sampled mesh data. They therefore are not part of ``/meshes``
-and do not carry record metadata such as ``axisLabels`` or component
-``position``.
-
-Forward-reflection request attributes follow the same HASE openPMD extension
-schema: ``use_reflections``, ``reflection_max_iterations``,
-``reflection_tolerance``, and ``surface_reservoir_size``. The parser rejects
-the retired ``forward_ray_length`` attribute; forward rays now traverse to a
-physical boundary. Runtime environment overrides ``HASE_SRM_MAX_ITERATIONS``
-and ``HASE_SRM_DIVERGENCE_STREAK`` are deliberately not serialized because
-they are local execution policy rather than portable request data.
-
-The topology convention inside ``/meshes`` follows VTK's unstructured-grid
-model and tetrahedral cell. openPMD provides the mesh-record model, but it
-does not standardize VTK-style Tet4 connectivity itself. HASEonGPU therefore
-stores a VTK-compatible unstructured-cell layout in openPMD records:
-
-* ``core_points`` stores VTK ``POINTS`` as ``x``, ``y``, and ``z`` components.
-* ``core_cells_connectivity`` stores the VTK cell connectivity point ids.
-* ``core_cells_offsets`` stores offsets into the connectivity array.
-* ``core_cells_types`` stores the VTK cell type id; Tet4 cells use type ``10``.
-
-Main input field records are:
-
-* ``core_beta_volume`` for the authoritative dynamic time-integrator state
-* ``core_cladding_cell_type``, ``core_refractive_index``, and
-  ``core_reflectivity`` for static material/surface data
-* ``core_lambda_absorption``, ``core_lambda_emission``,
-  ``core_sigma_absorption``, and ``core_sigma_emission`` for spectra
-
-The C++ backend writes result records under ``core_result_``:
-``phi_ase``, ``standard_error``, ``relative_standard_error``, ``total_rays``,
-and ``dndt_ase``. ``standard_error`` has the same flux unit as ``phi_ase``;
-``relative_standard_error`` is dimensionless. Result records use record-C
-layout.
-
-Result iterations also carry registered HASE extension attributes for SRM
-termination: ``srm_status``, ``srm_passes``, ``srm_remaining_fraction``,
-``srm_max_iterations``, and ``srm_divergence_streak``. They are scalar
-iteration metadata, not mesh records. Python readers expose them as
-``Result.srmStatus``, ``srmPasses``, ``srmRemainingFraction``,
-``srmMaxIterations``, and ``srmDivergenceStreak``.
-
-.. _compiled-simulation-run-control:
-
-Compiled Simulation Run Control
---------------------------------
-
-For compiled ``Simulation`` runs, iteration attributes also include run-control
-metadata:
-
-* ``timeStep``, ``numberOfSteps``, and ``firstSimulationStep``
-* ``aseSteps`` and ``prePump``
-* ``executionMode`` (``autonomous`` or ``synchronized-debug``)
-* optional ``outputSteps`` containing one-based completed-step indices; when
-  omitted, every completed step is emitted
-* ``outputFieldsString`` and ``controlFieldsString`` as scalar JSON arrays
-  of field names; this scalar encoding is identical for ADIOS BP, ADIOS SST,
-  and HDF5
-* ``timeIntegrator`` (``explicit-euler``, ``heun``, ``midpoint``,
-  ``runge-kutta-4``, ``frozen-phi-ase-runge-kutta-4``,
-  ``implicit-euler``, or ``exponential-euler``)
-* ``implicitIterations`` and ``implicitTolerance`` for implicit Euler
-* ``pumpSchemaVersion`` (currently ``2``)
-* per-source ``pumpSourceRayCount``, ``pumpSourcePumpSteps``, and
-  ``pumpSourceRngSeed`` arrays
-* flattened source, spectrum, angular, profile, and planar-relay arrays
-
-Readers continue to accept the former ``output_fields`` and ``control_fields``
-string-vector attributes for existing series. New writers use only the scalar
-JSON attributes so that run control has one backend-independent wire format.
-
-The C++ backend writes one output iteration for each selected completed step.
-Snapshot iterations contain the records selected by ``outputFieldsString``;
-by default these are the cell-centered ``core_beta_volume`` record plus
-``core_result_phi_ase``, ``core_result_standard_error``,
-``core_result_relative_standard_error``, ``core_result_total_rays``,
-``core_result_dndt_ase``, and ``core_result_dndt_pump``. Every dynamic and
-result field has the ``cell`` axis; point beta, point PhiASE, and point
-derivatives are not part of the compiled simulation contract. The first emitted
-snapshot also includes the static canonical mesh/material/spectral records.
-
-
-Iteration Updates
------------------
-
-The first Python-written iteration contains the full static context: lowered
-topology, material fields, spectra, compute attributes, and
-``core_beta_volume``.
-Synchronized-debug control iterations contain only ``core_beta_volume`` and
-reuse the cached static context from iteration 0.
-
-Changing topology, spectra, material constants, or compute settings requires a
-new input series whose first iteration carries a complete static update.  This
-keeps repeated ASE evaluations and streaming runs small while preserving a
-stable backend contract.
-
-MPI uses the same records and attributes; it changes execution topology, not
-the transport schema. Rank/device layout, automatic frontend launching, shared
-working-directory requirements, and scheduler examples are documented in
-:doc:`mpi`.
-
-Artifact Retention
+Artifact retention
 ------------------
 
-Temporary transport artifacts are normally removed when a session exits.  These
-environment variables help with debugging:
+Temporary transport artifacts are normally removed when a session exits.
+These environment variables support debugging:
 
 ``HASE_OPENPMD_KEEP_ARTIFACTS=1``
    Keep artifacts below ``./hase-openpmd-artifacts``.
@@ -264,14 +236,14 @@ environment variables help with debugging:
    Prefix generated artifact names.
 
 ``HASE_OPENPMD_ARTIFACT_RUN_ID=id``
-   Use a stable run id instead of a timestamped id.
+   Use a stable run identifier instead of a timestamped identifier.
 
 ``HASE_OPENPMD_WATCHDOG_INTERVAL=30``
-   Watchdog interval while the result receiver waits.  Use ``0`` or ``none`` to
-   disable the watchdog.
+   Set the interval while the streamed-result watchdog waits. ``0`` or
+   ``none`` disables it.
 
 ``HASE_OPENPMD_THREAD_JOIN_TIMEOUT=10``
-   Time allowed for streaming helper threads to stop during session close.
+   Set the time allowed for streaming helper threads to stop.
 
 ``HASE_CALCPHIASE=/path/to/calcPhiASE``
-   Force the Python transport to use a specific binary.
+   Force the Python transport to use a specific executable.

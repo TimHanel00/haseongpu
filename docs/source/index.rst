@@ -58,6 +58,12 @@ Contents
 
 .. toctree::
    :maxdepth: 2
+   :caption: Developer guide
+
+   developer/index
+
+.. toctree::
+   :maxdepth: 2
    :caption: Reference
 
    pythonAPI
