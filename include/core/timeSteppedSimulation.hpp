@@ -234,6 +234,8 @@ namespace hase::core
                         if(betaVolume.size() != m_mesh.numberOfCells)
                             throw std::runtime_error("synchronized beta_volume control has the wrong cell count");
                         detail::copyVectorToBuffer(m_queue, betaVolume, m_beta);
+                        // Complete the queued copy while the callback-local host vector is alive.
+                        alpaka::onHost::wait(m_queue);
                     }
                 }
             }

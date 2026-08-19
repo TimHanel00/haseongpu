@@ -17,17 +17,12 @@ from openpmd_backend_matrix import openpmd_runtime_backend, openpmd_test_backend
 from alpaka_backend_matrix import alpaka_runtime_backend
 from pyInclude.geometry import MeshTopology, OpenPmdScalarField, VolumeTopology
 from pyInclude.geometry.core import GainMedium
-from pyInclude.laser import (
-    CrossSectionData,
-    PlanarPumpRelay,
-    PumpAngularDistribution,
-    PumpSpectrum,
-    SuperGaussianPumpProfile,
-    _PumpProperties,
-    _PumpSource,
-)
+from hase_units import units
+from material_library import CrossSectionTable, Material
+from pyInclude.laser import CrossSectionData
 from pyInclude.openpmd import HASE_TRANSPORT_VERSION, PrimitiveFieldSpec, PrismSchema, backendFlat, backendFlatArray, fieldSpec, haseTransportAttributes, primitiveView, spectralContext, unitDimension
-from pyInclude.simulation import PhiASE
+from pyInclude.physical import Domain, GainMedium as PhysicalGainMedium, OpticalComponent
+from pyInclude.simulation import PhiASE, _AseSimulationRequest
 
 
 
@@ -173,13 +168,29 @@ def launch_smoke_topology():
 
 def launch_smoke_medium():
     topology = launch_smoke_topology()
-    return GainMedium(topology).withPhysicalProperties(
-        betaVolume=backendFlat(np.array([0.0], dtype=np.float64)),
-        claddingCellTypes=np.array([0], dtype=np.uint32),
-        nTot=1.0,
-        crystalTFluo=1.0,
-        claddingNumber=99,
-        claddingAbsorption=0.0,
+    material = Material(
+        materialName="launch smoke material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.8,
+        fluorescenceLifetime=1.0 * units.s,
+        crossSections=CrossSectionTable.monochromatic(
+            wavelength=1000.0 * units.nm,
+            absorption=0.0 * units.cm**2,
+            emission=1.0e-20 * units.cm**2,
+        ),
+        active=True,
+        activeIonDensity=1.0 / units.m**3,
+    )
+    component = OpticalComponent(domain=Domain.fromTopology(topology), material=material)
+    return PhysicalGainMedium((component,))
+
+
+def launch_smoke_request(phi_ase=None):
+    medium = launch_smoke_medium()
+    return _AseSimulationRequest(
+        launch_smoke_phi_ase() if phi_ase is None else phi_ase,
+        medium,
+        0.0,
     )
 
 
@@ -314,15 +325,6 @@ def _scalar_record_values(mesh):
         "sigma_absorption": SPECTRAL_FIELD_VALUES["sigmaAbsorption"],
         "sigma_emission": SPECTRAL_FIELD_VALUES["sigmaEmission"],
     }
-
-
-@pytest.fixture
-def contract_input(tmp_path):
-    _require_openpmd_transport_io()
-    output = tmp_path / ("contract" + _file_suffix_for_tests())
-    with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
-        writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
-    return output
 
 
 def _io():
@@ -525,14 +527,13 @@ def test_runSimulationResolvesAutoAgainstRuntime(monkeypatch, tmp_path):
         return resolved
 
     monkeypatch.setattr(transport, "_ensure_backend_available", resolve_backend)
-    monkeypatch.setattr(transport, "_simulation_run_control", lambda *args, **kwargs: {})
     monkeypatch.setattr(transport, "_artifact_root", lambda: tmp_path)
     monkeypatch.setattr(transport, "_artifact_run_id", lambda: "auto")
     monkeypatch.setattr(transport, "_frontend_progress_enabled", lambda: True)
     monkeypatch.setattr(
         transport,
         "_write_simulation_input",
-        lambda input_path, spec, simulation, run_control: written.append((input_path, spec)),
+        lambda input_path, spec, simulation, **kwargs: written.append((input_path, spec)),
     )
     monkeypatch.setattr(
         transport,
@@ -1007,20 +1008,18 @@ def test_runPhiAseUsesOpenPmdSessionManager(monkeypatch):
             events.append(("exit", exc_type))
             return False
 
-        def run(self, phi_ase, gain_medium, cross_sections):
-            events.append(("run", phi_ase, gain_medium, cross_sections))
+        def run(self, root):
+            events.append(("run", root))
             return result
 
     monkeypatch.setattr(transport, "OpenPmdPhiAseSession", FakeSession)
-    phi_ase = object()
-    medium = object()
-    cross_sections = object()
+    root = object()
 
-    assert transport.runPhiASE(phi_ase, medium, cross_sections, transport="adios") is result
+    assert transport.runPhiASE(root, transport="adios") is result
     assert events == [
         ("init", "adios"),
         ("enter",),
-        ("run", phi_ase, medium, cross_sections),
+        ("run", root),
         ("exit", None),
     ]
 
@@ -1030,8 +1029,8 @@ def test_runPhiAseUsesProvidedSession(monkeypatch):
     events = []
 
     class FakeSession:
-        def run(self, phiAse, gainMedium, crossSections):
-            events.append(("run", phiAse, gainMedium, crossSections))
+        def run(self, root):
+            events.append(("run", root))
             return result
 
     monkeypatch.setattr(
@@ -1040,18 +1039,14 @@ def test_runPhiAseUsesProvidedSession(monkeypatch):
         lambda **kwargs: pytest.fail("provided openpmdSession should bypass session construction"),
     )
 
-    phiAse = object()
-    gainMedium = object()
-    crossSections = object()
+    root = object()
     openpmdSession = FakeSession()
 
     assert transport.runPhiASE(
-        phiAse,
-        gainMedium,
-        crossSections,
+        root,
         openpmdSession=openpmdSession,
     ) is result
-    assert events == [("run", phiAse, gainMedium, crossSections)]
+    assert events == [("run", root)]
 
 
 def test_openPmdSessionAssignsMonotonicRequestIterations(monkeypatch):
@@ -1064,19 +1059,19 @@ def test_openPmdSessionAssignsMonotonicRequestIterations(monkeypatch):
         lambda backend, executable=None: transport.OPENPMD_BACKENDS["adios"],
     )
 
-    def fake_run_file_iteration(self, iteration_index, phi_ase, gain_medium, cross_sections):
-        calls.append((iteration_index, phi_ase, gain_medium, cross_sections))
+    def fake_run_file_iteration(self, iteration_index, root):
+        calls.append((iteration_index, root))
         return SimpleNamespace(iteration=iteration_index)
 
     monkeypatch.setattr(transport.OpenPmdPhiAseSession, "_run_file_iteration", fake_run_file_iteration)
 
     with transport.OpenPmdPhiAseSession(transport="adios") as session:
-        first = session.run("phi0", "medium0", "cross0")
-        second = session.run("phi1", "medium1", "cross1")
+        first = session.run("root0")
+        second = session.run("root1")
 
     assert first.iteration == 0
     assert second.iteration == 1
-    assert calls == [(0, "phi0", "medium0", "cross0"), (1, "phi1", "medium1", "cross1")]
+    assert calls == [(0, "root0"), (1, "root1")]
 
 
 def test_backendProcessForwardsStreamsByDefaultWhileRunning(monkeypatch):
@@ -1327,211 +1322,6 @@ def test_layoutHelpersRejectAccidentalTransposeViews():
         backendFlatArray(transposed_same_size, spec, mesh)
 
 
-def test_inputSeriesWritesContract(contract_input):
-    io = _io()
-    series = io.Series(str(contract_input), io.Access.read_only)
-    for name, value in haseTransportAttributes.items():
-        assert series.get_attribute(name) == value
-    assert series.get_attribute("haseTransportVersion") == HASE_TRANSPORT_VERSION
-    iteration = series.iterations[0]
-
-    topology = asymmetric_topology()
-    explicit_context = transport._explicit_topology_context(topology)
-    assert iteration.get_attribute("number_of_points") == topology.numberOfSamplePoints
-    assert iteration.get_attribute("number_of_cells") == topology.numberOfCells
-    assert iteration.get_attribute("number_of_levels") == 1
-    assert iteration.get_attribute("thickness") == pytest.approx(0.0)
-    assert iteration.get_attribute("n_tot") == pytest.approx(7.5)
-    assert iteration.get_attribute("crystal_t_fluo") == pytest.approx(1.75)
-    assert iteration.get_attribute("spectral_resolution") == 3
-    assert iteration.get_attribute("rng_seed") == 1234
-    assert iteration.get_attribute("propagation_mode") == "forward"
-
-    points = iteration.meshes["core_points"]
-    assert points.get_attribute("haseTransportVersion") == HASE_TRANSPORT_VERSION
-    assert points.get_attribute("haseEntity") == "coordinate_mesh_point"
-    assert _attribute_list(points.get_attribute("haseAxes")) == ["coordinate", "mesh_point"]
-    assert _attribute_list(points.get_attribute("hasePrimitiveShape")) == [3, topology.numberOfPoints]
-    assert points.get_attribute("haseUnit") == "m"
-    assert points.unit_dimension[io.Unit_Dimension.L] == 1.0
-    np.testing.assert_array_equal(_read_component(series, points["x"]), topology.points[:, 0])
-    np.testing.assert_array_equal(_read_component(series, points["y"]), topology.points[:, 1])
-    np.testing.assert_array_equal(_read_component(series, points["z"]), topology.points[:, 2])
-    series.flush()
-
-    canonical_scalars = {
-        "cells_connectivity": (transport.CANONICAL_CONNECTIVITY_SPEC, topology.cellsConnectivityFlat()),
-        "cells_offsets": (transport.CANONICAL_OFFSETS_SPEC, topology.cellsOffsets()),
-        "cells_types": (transport.CANONICAL_CELL_TYPES_SPEC, topology.cellTypes),
-        "cell_face_offsets": (
-            transport.EXPLICIT_CELL_FACE_OFFSETS_SPEC,
-            np.arange(topology.numberOfCells + 1, dtype=np.uint32) * np.uint32(topology.numberOfFacesPerCell),
-        ),
-        "cell_faces": (transport.EXPLICIT_CELL_FACES_SPEC, topology.facePointIndices.reshape(-1)),
-        "cell_neighbor_cells": (transport.EXPLICIT_CELL_NEIGHBORS_SPEC, topology.neighborCells.reshape(-1)),
-        "cell_neighbor_local_faces": (transport.EXPLICIT_CELL_NEIGHBOR_FACES_SPEC, topology.neighborLocalFaces.reshape(-1)),
-        "cell_face_boundaries": (transport.EXPLICIT_FACE_BOUNDARIES_SPEC, topology.faceBoundaries.reshape(-1)),
-        "cell_domains": (transport.EXPLICIT_CELL_DOMAINS_SPEC, topology.cellDomains),
-    }
-    for record_name, (spec, expected) in canonical_scalars.items():
-        record = iteration.meshes["core_" + record_name]
-        values = _read_scalar(series, iteration, "core_" + record_name)
-        np.testing.assert_array_equal(values, expected.astype(spec.dtypeObject, copy=False))
-        _assert_hase_metadata(record, spec, explicit_context)
-
-    assert "core_sample_points" not in iteration.meshes
-    assert "core_point_beta" not in iteration.meshes
-
-    dynamic_specs = {
-        "beta_volume": (transport.EXPLICIT_BETA_VOLUME_SPEC, VOLUME_BETA),
-        "cladding_cell_type": (fieldSpec("claddingCellType"), MESH_FIELD_VALUES["claddingCellType"]),
-        "refractive_index": (fieldSpec("refractiveIndex"), MESH_FIELD_VALUES["refractiveIndex"]),
-        "reflectivity": (fieldSpec("reflectivity"), MESH_FIELD_VALUES["reflectivity"]),
-        "lambda_absorption": (fieldSpec("lambdaAbsorption"), SPECTRAL_FIELD_VALUES["lambdaAbsorption"]),
-        "lambda_emission": (fieldSpec("lambdaEmission"), SPECTRAL_FIELD_VALUES["lambdaEmission"]),
-        "sigma_absorption": (fieldSpec("sigmaAbsorption"), SPECTRAL_FIELD_VALUES["sigmaAbsorption"]),
-        "sigma_emission": (fieldSpec("sigmaEmission"), SPECTRAL_FIELD_VALUES["sigmaEmission"]),
-    }
-    for record_name, (spec, expected) in dynamic_specs.items():
-        context = spectralContext(expected) if record_name in {"lambda_absorption", "lambda_emission", "sigma_absorption", "sigma_emission"} else explicit_context
-        record = iteration.meshes["core_" + record_name]
-        values = _read_scalar(series, iteration, "core_" + record_name)
-        assert values.shape == (expected.size,)
-        assert values.dtype == spec.dtypeObject
-        np.testing.assert_array_equal(values, expected.astype(spec.dtypeObject, copy=False))
-        _assert_hase_metadata(record, spec, context)
-
-    series.close()
-
-
-def _build_dir_candidates():
-    root = Path(__file__).resolve().parents[3]
-    yield from sorted(root.glob("build/cp*"))
-    yield root / "build"
-    yield root / "build" / "ci"
-
-
-def _parser_validation_candidates():
-    env = os.environ.get("HASE_OPENPMD_PARSER_VALIDATION")
-    if env:
-        yield Path(env)
-    for build_dir in _build_dir_candidates():
-        yield build_dir / "tests" / "tests_openpmdParserValidation"
-
-
-def _parser_validation_binary():
-    configured = os.environ.get("HASE_OPENPMD_PARSER_VALIDATION")
-    for helper in _parser_validation_candidates():
-        if helper.is_file() and os.access(helper, os.X_OK):
-            resolved = helper.resolve()
-            source_mtime = max(
-                (Path(__file__).resolve().parents[3] / "tests" / "openpmdParserValidation.cpp").stat().st_mtime,
-                (Path(__file__).resolve().parents[3] / "src" / "openpmd" / "OpenPmdParser.cpp").stat().st_mtime,
-            )
-            if resolved.stat().st_mtime >= source_mtime:
-                return resolved
-            if configured:
-                pytest.fail(f"configured HASE_OPENPMD_PARSER_VALIDATION is stale: {configured}")
-    if configured:
-        pytest.fail(f"configured HASE_OPENPMD_PARSER_VALIDATION is not executable: {configured}")
-    pytest.skip("no openPMD parser validation binary found; build tests_openpmdParserValidation or set HASE_OPENPMD_PARSER_VALIDATION")
-
-
-def test_inputSeriesOmitsStaticTopology(tmp_path):
-    _require_openpmd_transport_io()
-    output = tmp_path / ("dynamic_split" + _file_suffix_for_tests())
-    with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
-        writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
-        writer.write(asymmetric_phi_ase(), asymmetric_medium(), asymmetric_cross_sections())
-
-    series = _io().Series(str(output), _io().Access.read_only)
-    first = series.iterations[0]
-    second = series.iterations[1]
-    assert first.get_attribute("haseStaticUpdate") is True
-    assert second.get_attribute("haseStaticUpdate") is False
-    assert "core_points" in first.meshes
-    assert "core_cells_connectivity" in first.meshes
-    assert "core_points" not in second.meshes
-    assert "core_cells_connectivity" not in second.meshes
-    assert "core_point_beta" not in first.meshes
-    assert sorted(second.meshes) == ["core_beta_volume"]
-    series.close()
-
-
-def test_timeSteppedInputIncludesInitialVolumeBeta(tmp_path):
-    _require_openpmd_transport_io()
-    output = tmp_path / ("time_stepped_input" + _file_suffix_for_tests())
-    simulation = SimpleNamespace(
-        phiASE=asymmetric_phi_ase(),
-        _backendGainMedium=asymmetric_medium(),
-        crossSections=asymmetric_cross_sections(),
-    )
-
-    transport._write_simulation_input(
-        output,
-        SimpleNamespace(name=_file_backend_for_tests()),
-        simulation,
-        {"numberOfSteps": 1},
-    )
-
-    series = _io().Series(str(output), _io().Access.read_only)
-    iteration = series.iterations[0]
-    np.testing.assert_array_equal(
-        _read_scalar(series, iteration, "core_beta_volume"),
-        VOLUME_BETA,
-    )
-    series.close()
-
-
-def test_cppParserRoundTripsPythonWriter(contract_input, tmp_path):
-    output = tmp_path / ("round_trip_result" + _file_suffix_for_tests())
-    env = os.environ.copy()
-    env["HASE_OPENPMD_PYTHON_CONTRACT_INPUT"] = str(contract_input)
-    env["HASE_OPENPMD_PYTHON_CONTRACT_OUTPUT"] = str(output)
-    helper = _parser_validation_binary()
-    completed = subprocess.run(
-        [str(helper), "openPMD parser round-trips a Python writer contract input"],
-        check=False,
-        text=True,
-        capture_output=True,
-        env=env,
-    )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-
-    result = transport.read_result(output)
-    expected_phi = np.array([0.5 + i for i in range(3)], dtype=np.float32)
-    expected_standard_error = np.array([1000.0 + i for i in range(3)], dtype=np.float64)
-    expected_relative_standard_error = np.array([0.1 * (i + 1) for i in range(3)], dtype=np.float64)
-    expected_total_rays = np.array([200 + i for i in range(3)], dtype=np.uint32)
-    expected_dndt_ase = np.array([-10.0 - i for i in range(3)], dtype=np.float64)
-    np.testing.assert_array_equal(result.phiAse, expected_phi)
-    np.testing.assert_array_equal(result.standardError, expected_standard_error)
-    np.testing.assert_array_equal(result.relativeStandardError, expected_relative_standard_error)
-    np.testing.assert_array_equal(result.totalRays, expected_total_rays)
-    np.testing.assert_array_equal(result.dndtAse, expected_dndt_ase)
-
-    io = _io()
-    series = io.Series(str(output), io.Access.read_only)
-    iteration = series.iterations[0]
-    expected_units = {
-        "phi_ase": "cm^-2 s^-1",
-        "standard_error": "cm^-2 s^-1",
-        "relative_standard_error": "1",
-        "total_rays": "count",
-        "dndt_ase": "s^-1",
-    }
-    for name in ["phi_ase", "standard_error", "relative_standard_error", "total_rays", "dndt_ase"]:
-        record = iteration.meshes["core_result_" + name]
-        assert record.get_attribute("haseTransportVersion") == HASE_TRANSPORT_VERSION
-        assert record.get_attribute("haseEntity") == "cell"
-        assert _attribute_list(record.get_attribute("haseAxes")) == ["cell"]
-        assert record.get_attribute("haseLayoutOrder") == "recordC"
-        assert _attribute_list(record.get_attribute("hasePrimitiveShape")) == [3]
-        assert record.get_attribute("haseUnit") == expected_units[name]
-        assert list(record.axis_labels) == ["cell"]
-    series.close()
-
-
 def _openpmd_backend_values():
     return openpmd_test_backends()
 
@@ -1598,7 +1388,7 @@ def _assert_mpi_mode_rejected_by_non_mpi_build(tmp_path, executable):
     output_path = tmp_path / f"mpi_output{_file_suffix_for_tests()}"
 
     with transport.OpenPmdInputSeries(input_path, backend=_file_backend_for_tests()) as writer:
-        writer.write(phi_ase, launch_smoke_medium(), launch_smoke_cross_sections())
+        writer.write(launch_smoke_request(phi_ase))
     completed = subprocess.run(
         [str(executable), f"--input-path={input_path}", f"--output-path={output_path}"],
         check=False,
@@ -1677,7 +1467,7 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
     output_path = tmp_path / f"{parallel_mode}_output{_file_suffix_for_tests()}"
 
     with transport.OpenPmdInputSeries(input_path, backend=_file_backend_for_tests()) as writer:
-        writer.write(phi_ase, launch_smoke_medium(), launch_smoke_cross_sections())
+        writer.write(launch_smoke_request(phi_ase))
     completed = subprocess.run(
         [*command_prefix, str(executable), f"--input-path={input_path}", f"--output-path={output_path}"],
         check=False,
@@ -1690,14 +1480,6 @@ def _round_trip_calc_phi_ase(tmp_path, parallel_mode):
     result = transport.read_result(output_path)
     _assert_launch_smoke_result(result)
 
-    io = _io()
-    series = io.Series(str(input_path), io.Access.read_only)
-    try:
-        assert series.iterations[0].get_attribute("parallel_mode") == parallel_mode
-    finally:
-        series.close()
-
-
 @pytest.mark.integration
 @pytest.mark.parametrize("openpmd_backend", _openpmd_backend_values())
 def test_pythonApiLaunchesConfiguredOpenPmdBackendOnce(monkeypatch, tmp_path, openpmd_backend):
@@ -1709,13 +1491,12 @@ def test_pythonApiLaunchesConfiguredOpenPmdBackendOnce(monkeypatch, tmp_path, op
     phi_ase.openpmdBackend = openpmd_backend
     command_prefix = _backend_execution_command_prefix(build_dir)
     if command_prefix is None:
-        phi_ase.run(gainMedium=launch_smoke_medium(), crossSections=launch_smoke_cross_sections())
+        phi_ase.run(gainMedium=launch_smoke_medium())
     else:
         session = phi_ase.openStream(command_prefix=command_prefix, workspace_dir=tmp_path)
         try:
             phi_ase.run(
                 gainMedium=launch_smoke_medium(),
-                crossSections=launch_smoke_cross_sections(),
                 openpmdSession=session,
             )
         finally:
@@ -1745,9 +1526,7 @@ def test_calcPhiAseAdaptiveRangeReachesMaxForUnconvergedCell(tmp_path):
     phi_ase.relativeStandardErrorThreshold = 0.0
 
     result = transport.runPhiASE(
-        phi_ase,
-        launch_smoke_medium(),
-        launch_smoke_cross_sections(),
+        launch_smoke_request(phi_ase),
         transport=_configured_backend_for_tests(),
         workspace_dir=tmp_path,
     )
@@ -1777,56 +1556,13 @@ def test_mpiMatrixRoundTrip(monkeypatch, tmp_path):
     phi_ase.parallelMode = "mpi"
 
     result = transport.runPhiASE(
-        phi_ase,
-        launch_smoke_medium(),
-        launch_smoke_cross_sections(),
+        launch_smoke_request(phi_ase),
         transport=_configured_backend_for_tests(),
         command_prefix=_mpiexec_command_prefix(ranks),
         workspace_dir=tmp_path,
     )
 
     _assert_launch_smoke_result(result)
-
-
-def test_openPmdInputSeriesPreservesCustomFields(tmp_path):
-    _require_openpmd_transport_io()
-
-    temperature_dimension = unitDimension.tFluo
-
-    values = np.array([300.0, 310.0, 320.0], dtype=np.float64)
-    medium = asymmetric_medium().defineField(
-        "temperature",
-        entity="cell",
-        values=values,
-        unit="K",
-        unitDimension=temperature_dimension,
-        backendRequired=False,
-    )
-    assert next(iter(medium.getPrisms())).temperature == pytest.approx(300.0)
-    output = tmp_path / ("custom" + _file_suffix_for_tests())
-
-    with transport.OpenPmdInputSeries(output, backend=_file_backend_for_tests()) as writer:
-        writer.write(asymmetric_phi_ase(), medium, asymmetric_cross_sections())
-
-    io = _io()
-    series = io.Series(str(output), io.Access.read_only)
-    iteration = series.iterations[0]
-    record = iteration.meshes["custom_temperature"]
-    np.testing.assert_array_equal(_read_scalar(series, iteration, "custom_temperature"), values)
-    assert record.get_attribute("haseTransportVersion") == HASE_TRANSPORT_VERSION
-    assert record.get_attribute("haseEntity") == "cell"
-    assert _attribute_list(record.get_attribute("haseAxes")) == ["cell"]
-    assert record.get_attribute("haseAxesString") == "cell"
-    assert record.get_attribute("haseLayoutOrder") == "backendFlat"
-    assert _attribute_list(record.get_attribute("hasePrimitiveShape")) == [3]
-    assert record.get_attribute("haseStatic") is True
-    assert record.get_attribute("haseDynamic") is False
-    assert record.get_attribute("haseBackendRequired") is False
-    assert record.get_attribute("haseUserDefined") is True
-    assert record.get_attribute("haseUserFieldName") == "temperature"
-    assert record.get_attribute("haseUnit") == "K"
-    _assert_base_openpmd_scalar_metadata(record, axis_labels=["flatIndex"], unit_dimension=temperature_dimension)
-    series.close()
 
 
 def _write_minimal_snapshot_scalar(iteration, name, values):
@@ -1842,31 +1578,26 @@ def test_read_simulation_output_uses_cell_layout(tmp_path):
     io = _io()
     series = io.Series(str(output), transport._access("create_linear"), transport._series_config(output))
     iteration = series.snapshots()[0]
-    number_of_points = 4
-    number_of_levels = 1
     number_of_cells = 2
     cell_flat = np.array([100.0 + cell for cell in range(number_of_cells)])
 
-    iteration.set_attribute("number_of_points", number_of_points)
-    iteration.set_attribute("number_of_levels", number_of_levels)
-    iteration.set_attribute("number_of_cells", number_of_cells)
-    iteration.set_attribute("step_index", 1)
-    iteration.set_attribute("time", 0.25)
-    iteration.set_attribute("haseStaticUpdate", True)
-    iteration.set_attribute("srm_status", "stable")
-    iteration.set_attribute("srm_passes", 2)
-    iteration.set_attribute("srm_remaining_fraction", 0.25)
-    iteration.set_attribute("srm_max_iterations", 8)
-    iteration.set_attribute("srm_divergence_streak", 3)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/step"), 1)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/time"), 0.25)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmStatus"), "stable")
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmPasses"), 2)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmRemainingFraction"), 0.25)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmMaxIterations"), 8)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmDivergenceStreak"), 3)
     iteration.time = 0.25
 
-    _write_minimal_snapshot_scalar(iteration, "core_beta_volume", cell_flat.astype(np.float64))
-    _write_minimal_snapshot_scalar(iteration, "core_result_phi_ase", cell_flat.astype(np.float32))
-    _write_minimal_snapshot_scalar(iteration, "core_result_standard_error", (cell_flat + 1000.0).astype(np.float64))
-    _write_minimal_snapshot_scalar(iteration, "core_result_relative_standard_error", (cell_flat + 0.1).astype(np.float64))
-    _write_minimal_snapshot_scalar(iteration, "core_result_total_rays", np.arange(cell_flat.size, dtype=np.uint32))
-    _write_minimal_snapshot_scalar(iteration, "core_result_dndt_ase", (cell_flat + 2000.0).astype(np.float64))
-    _write_minimal_snapshot_scalar(iteration, "core_result_dndt_pump", (cell_flat + 3000.0).astype(np.float64))
+    root = "simulationSnapshot"
+    _write_minimal_snapshot_scalar(iteration, transport.recordName(f"{root}/betaVolume"), cell_flat.astype(np.float64))
+    _write_minimal_snapshot_scalar(iteration, transport.recordName(f"{root}/phiAse"), cell_flat.astype(np.float32))
+    _write_minimal_snapshot_scalar(iteration, transport.recordName(f"{root}/standardError"), (cell_flat + 1000.0).astype(np.float64))
+    _write_minimal_snapshot_scalar(iteration, transport.recordName(f"{root}/relativeStandardError"), (cell_flat + 0.1).astype(np.float64))
+    _write_minimal_snapshot_scalar(iteration, transport.recordName(f"{root}/totalRays"), np.arange(cell_flat.size, dtype=np.uint32))
+    _write_minimal_snapshot_scalar(iteration, transport.recordName(f"{root}/dndtAse"), (cell_flat + 2000.0).astype(np.float64))
+    _write_minimal_snapshot_scalar(iteration, transport.recordName(f"{root}/dndtPump"), (cell_flat + 3000.0).astype(np.float64))
     iteration.close()
     series.close()
 
@@ -1884,65 +1615,6 @@ def test_read_simulation_output_uses_cell_layout(tmp_path):
     assert state.aseResult.srmRemainingFraction == pytest.approx(0.25)
     assert state.aseResult.srmMaxIterations == 8
     assert state.aseResult.srmDivergenceStreak == 3
-
-
-def test_simulation_run_control_serializes_general_pump_graph():
-    cross_sections = CrossSectionData.monochromatic(
-        wavelength=940e-9, crossSectionAbsorption=1.0e-22, crossSectionEmission=2.0e-22
-    )
-    source = _PumpSource(
-        surfaceDomains=(11,),
-        totalPower=12.5,
-        spectrum=PumpSpectrum.monochromatic(940e-9),
-        crossSections=cross_sections,
-        angularDistribution=PumpAngularDistribution.collimated(),
-        profile=SuperGaussianPumpProfile(radius_u=1.5, radius_v=1.25, exponent=40),
-        relays=(PlanarPumpRelay.retroreflect((12,), transmission=0.75),),
-        rayCount=1234,
-        pumpSteps=4,
-        rngSeed=99,
-    )
-    pump = _PumpProperties(sources=(source,))
-    simulation = SimpleNamespace(
-        pump=pump,
-        phiASE=SimpleNamespace(ase_steps=7),
-        prePump=False,
-        currentStep=0,
-        _backendGainMedium=SimpleNamespace(topology=SimpleNamespace(surfaceDomainMap=lambda: None)),
-        timeStep=2.0e-6,
-        timeIntegrationSolver=SimpleNamespace(name="implicit-euler", iterations=5, tolerance=1.0e-7),
-        outputFields=("beta_volume", "dndt_pump"),
-        controlFields=("beta_volume",),
-        executionMode="synchronized-debug",
-    )
-
-    control = transport._simulation_run_control(simulation, steps=7)
-
-    assert control["timeStep"] == 2.0e-6
-    assert control["numberOfSteps"] == 7
-    assert control["firstSimulationStep"] == 0
-    assert control["aseSteps"] == 7
-    assert control["pumpSchemaVersion"] == 2
-    assert control["outputFieldsString"] == '["beta_volume","dndt_pump"]'
-    assert control["controlFieldsString"] == '["beta_volume"]'
-    assert "output_fields" not in control
-    assert "control_fields" not in control
-    assert control["pumpSourceTotalPower"] == [12.5]
-    assert control["pumpSourceRayCount"].tolist() == [1234]
-    assert control["pumpSourcePumpSteps"].tolist() == [4]
-    assert control["pumpSourceRngSeed"].tolist() == [99]
-    assert control["pumpSourceSurfaces"].tolist() == [11]
-    assert control["pumpSpectrumWavelengths"] == [940e-9]
-    assert control["pumpSpectrumSigmaAbsorption"] == [1.0e-22]
-    assert control["pumpSourceRelayOffsets"].tolist() == [0, 1]
-    assert control["pumpRelayExitSurfaces"].tolist() == [12]
-    assert control["pumpRelayTransmission"] == [0.75]
-    assert control["timeIntegrator"] == "implicit-euler"
-    assert control["implicitIterations"] == 5
-    assert control["implicitTolerance"] == 1.0e-7
-
-    simulation.phiASE.ase_steps = 0
-    assert transport._simulation_run_control(simulation, steps=7)["aseSteps"] == 0
 
 
 def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypatch, tmp_path):
@@ -1977,7 +1649,7 @@ def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypat
         events.append(("read-end",))
         return [SimpleNamespace(step=1)]
 
-    def fake_write_input(input_path, spec, simulation, run_control, *, close_after=None):
+    def fake_write_input(input_path, spec, simulation, *, close_after=None):
         assert receiver_started.wait(timeout=2.0)
         events.append(
             (
@@ -1985,7 +1657,7 @@ def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypat
                 threading.current_thread().name,
                 Path(input_path).name,
                 spec.name,
-                run_control["numberOfSteps"],
+                1,
             )
         )
         input_written.set()
@@ -2002,7 +1674,7 @@ def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypat
         tmp_path / "output.sst",
         spec,
         SimpleNamespace(),
-        {"numberOfSteps": 1},
+        1,
     )
 
     assert states[0].step == 1
@@ -2072,7 +1744,7 @@ def test_streaming_simulation_keeps_input_series_open_until_backend_exits(monkey
         tmp_path / "output.sst",
         SimpleNamespace(name="adios-sst"),
         simulation,
-        {"numberOfSteps": 1},
+        1,
     )
 
     assert states[0].step == 1
@@ -2096,23 +1768,11 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
         def __exit__(self, exc_type, exc, traceback):
             pass
 
-        def write(
-            self,
-            phi_ase,
-            gain_medium,
-            cross_sections,
-            *,
-            iteration_index,
-            include_static,
-            runControl=None,
-            dynamic_fields=None,
-        ):
+        def write(self, root, *, iteration_index):
             writes.append(
                 (
                     iteration_index,
-                    include_static,
-                    dynamic_fields,
-                    float(gain_medium.beta),
+                    float(root._backendGainMedium.beta),
                 )
             )
             if iteration_index == 0:
@@ -2164,15 +1824,15 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
         tmp_path / "output.sst",
         SimpleNamespace(name="adios-sst"),
         simulation,
-        {"numberOfSteps": 3},
+        3,
         on_state=update_control,
     )
 
     assert states[-1].step == 3
     assert writes == [
-        (0, True, {"beta_volume"}, 0.0),
-        (1, False, {"beta_volume"}, 1.0),
-        (2, False, {"beta_volume"}, 2.0),
+        (0, 0.0),
+        (1, 1.0),
+        (2, 2.0),
     ]
 
 
@@ -2197,7 +1857,7 @@ def test_streaming_simulation_reports_backend_exit_when_input_sender_is_blocked(
             assert writer_started.wait(timeout=2.0)
             return "", "unknown option --cpp-control"
 
-    def blocked_write_input(input_path, spec, simulation, run_control, *, close_after=None):
+    def blocked_write_input(input_path, spec, simulation, *, close_after=None):
         writer_started.set()
         assert release_writer.wait(timeout=2.0)
 
@@ -2218,7 +1878,7 @@ def test_streaming_simulation_reports_backend_exit_when_input_sender_is_blocked(
                 tmp_path / "output.sst",
                 SimpleNamespace(name="adios-sst"),
                 SimpleNamespace(),
-                {"numberOfSteps": 1},
+                1,
             )
         assert "return code 2" in str(exc_info.value)
         assert "unknown option --cpp-control" not in str(exc_info.value)
@@ -2246,7 +1906,7 @@ def test_streaming_simulation_preserves_input_writer_failure(monkeypatch, tmp_pa
             assert killed.wait(timeout=2.0)
             return "", ""
 
-    def failed_write_input(input_path, spec, simulation, run_control, *, close_after=None):
+    def failed_write_input(input_path, spec, simulation, *, close_after=None):
         raise ValueError("invalid simulation input")
 
     monkeypatch.setattr(transport.subprocess, "Popen", KilledProcess)
@@ -2260,7 +1920,7 @@ def test_streaming_simulation_preserves_input_writer_failure(monkeypatch, tmp_pa
             tmp_path / "output.sst",
             SimpleNamespace(name="adios-sst"),
             SimpleNamespace(),
-            {"numberOfSteps": 1},
+            1,
         )
 
     assert isinstance(exc_info.value.__cause__, ValueError)

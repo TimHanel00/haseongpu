@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import queue
 import re
@@ -17,121 +16,16 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from hase_transport import TransportComposer
 from .._progress import _ProgressBar
-from ..geometry import OpenPmdComponentField, OpenPmdScalarField
 from .._runtime import runtime_config, runtime_executable_candidates, runtime_root
 from .backends import _clean_backend_names, _load_backend_names
-from . import (
-    HASE_TRANSPORT_VERSION,
-    FieldSpec,
-    backendFlatArray,
-    fieldSpec,
-    flatEntityLabel,
-    haseTransportAttributes,
-    resultAttributeSpecs,
-    resultFieldSpecs,
-    simulationAttributeSpecs,
-    spectralContext,
-    unitDimension,
-)
+from .graph import TRANSPORT_VERSION, attributeName, recordName, writeGraph
+from . import resultAttributeSpecs
 from ..structures import Result
 
 
-CANONICAL_POINTS_SPEC = FieldSpec(
-    "canonicalPoints",
-    "points",
-    ("coordinate", "mesh_point"),
-    np.float64,
-    lambda context: (3, context.numberOfMeshPoints),
-    unit="m",
-    unitDimension=unitDimension.canonicalPoints,
-    backendRequired=False,
-)
-CANONICAL_CONNECTIVITY_SPEC = FieldSpec(
-    "canonicalConnectivity",
-    "cells_connectivity",
-    ("cell", "local_vertex"),
-    np.uint32,
-    lambda context: (context.numberOfCells, 4),
-    unitDimension=unitDimension.canonicalConnectivity,
-    backendRequired=False,
-)
-CANONICAL_OFFSETS_SPEC = FieldSpec(
-    "canonicalOffsets",
-    "cells_offsets",
-    ("cell_offset",),
-    np.uint32,
-    lambda context: (context.numberOfCells + 1,),
-    unitDimension=unitDimension.canonicalOffsets,
-    backendRequired=False,
-)
-CANONICAL_CELL_TYPES_SPEC = FieldSpec(
-    "canonicalCellTypes",
-    "cells_types",
-    ("cell",),
-    np.uint32,
-    lambda context: (context.numberOfCells,),
-    unitDimension=unitDimension.canonicalCellTypes,
-    backendRequired=False,
-)
-EXPLICIT_CELL_FACE_OFFSETS_SPEC = FieldSpec(
-    "explicitCellFaceOffsets",
-    "cell_face_offsets",
-    ("cell_offset",),
-    np.uint32,
-    lambda context: (context.numberOfCells + 1,),
-    backendRequired=False,
-)
-EXPLICIT_CELL_FACES_SPEC = FieldSpec(
-    "explicitCellFaces",
-    "cell_faces",
-    ("cell", "local_face", "local_vertex"),
-    np.int32,
-    lambda context: (context.numberOfCells, context.numberOfFacesPerCell, 3),
-    backendRequired=False,
-)
-EXPLICIT_CELL_NEIGHBORS_SPEC = FieldSpec(
-    "explicitCellNeighbors",
-    "cell_neighbor_cells",
-    ("cell", "local_face"),
-    np.int32,
-    lambda context: (context.numberOfCells, context.numberOfFacesPerCell),
-    backendRequired=False,
-)
-EXPLICIT_CELL_NEIGHBOR_FACES_SPEC = FieldSpec(
-    "explicitCellNeighborFaces",
-    "cell_neighbor_local_faces",
-    ("cell", "local_face"),
-    np.int32,
-    lambda context: (context.numberOfCells, context.numberOfFacesPerCell),
-    backendRequired=False,
-)
-EXPLICIT_FACE_BOUNDARIES_SPEC = FieldSpec(
-    "explicitFaceBoundaries",
-    "cell_face_boundaries",
-    ("cell", "local_face"),
-    np.int32,
-    lambda context: (context.numberOfCells, context.numberOfFacesPerCell),
-    backendRequired=False,
-)
-EXPLICIT_CELL_DOMAINS_SPEC = FieldSpec(
-    "explicitCellDomains",
-    "cell_domains",
-    ("cell",),
-    np.int32,
-    lambda context: (context.numberOfCells,),
-    backendRequired=False,
-)
-DYNAMIC_FIELD_NAMES = {"betaVolume"}
 _STEP_COMPLETE_RE = re.compile(r"\[HASE_STEP_COMPLETE\]\s+step=(\d+)/(\d+)(?:\s|$)")
-EXPLICIT_BETA_VOLUME_SPEC = FieldSpec(
-    "betaVolume",
-    "beta_volume",
-    ("cell",),
-    np.float64,
-    lambda context: (context.numberOfCells,),
-    dynamic=True,
-)
 
 
 def _env_flag(name):
@@ -313,30 +207,6 @@ class _BackendProcess:
 def _run_backend_process(command, *, progress=False):
     process = _BackendProcess(command, progress=progress)
     return SimpleNamespace(returncode=process.wait(), log_path=process.log_path)
-
-
-@dataclass(frozen=True)
-class _AttributeField:
-    name: str
-    value: object
-
-
-@dataclass(frozen=True)
-class _ScalarArrayField:
-    spec: FieldSpec
-    values: object
-    context: object
-    prefix: str = "core_"
-
-
-@dataclass(frozen=True)
-class _ComponentArrayField:
-    recordName: str
-    spec: FieldSpec
-    components: dict[str, object]
-    axisLabels: list[str]
-    context: object
-    prefix: str = "core_"
 
 
 @dataclass(frozen=True)
@@ -543,118 +413,6 @@ def _write_artifact_manifest(path: Path, *, backend, input_path, output_path, in
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _fieldContext(gainMedium):
-    topology = gainMedium.topology
-    if hasattr(topology, "cellPointIndices") and hasattr(topology, "neighborCells"):
-        number_of_levels = int(getattr(topology, "structuredNumberOfLevels", 1))
-        number_of_points = int(getattr(topology, "structuredNumberOfPoints", topology.numberOfSamplePoints))
-        return SimpleNamespace(
-            numberOfMeshPoints=topology.numberOfPoints,
-            numberOfPoints=number_of_points,
-            numberOfTriangles=topology.numberOfCells,
-            numberOfCells=topology.numberOfCells,
-            numberOfLevels=number_of_levels,
-            thickness=float(getattr(topology, "structuredThickness", 0.0)),
-            numberOfSamplePoints=topology.numberOfSamplePoints,
-            numberOfSurfaceDomains=int(np.max(topology.faceBoundaries[topology.faceBoundaries > 0]) + 1) if np.any(topology.faceBoundaries > 0) else 0,
-        )
-    raise TypeError("PhiASE openPMD transport requires a Tet4 VolumeTopology")
-
-
-def _validatePhiAseTransportOptions(phiAse):
-    if bool(phiAse.writeVtk):
-        raise ValueError("PhiASE.writeVtk is not supported by the openPMD transport")
-    if getattr(phiAse, "devices", None):
-        raise ValueError("PhiASE.devices is not supported by the openPMD transport")
-
-
-def _attributeFields(phiAse, gainMedium, crossSections):
-    values = _attributeValues(phiAse, gainMedium, crossSections)
-    for spec in simulationAttributeSpecs:
-        if spec.name not in values:
-            if spec.name == "rngSeed":
-                continue
-            raise KeyError(spec.name)
-        yield _AttributeField(spec.attribute, spec.cast(values[spec.name]))
-
-
-def _attributeValues(phiAse, gainMedium, crossSections):
-    _validatePhiAseTransportOptions(phiAse)
-    context = _fieldContext(gainMedium)
-    number_of_samples = (
-        context.numberOfCells
-    )
-    values = {}
-    if hasattr(gainMedium.topology, "openPmdAttributes"):
-        values.update(gainMedium.topology.openPmdAttributes(context))
-    else:
-        values.update(
-            {
-                "numberOfPoints": context.numberOfPoints,
-                "numberOfTriangles": context.numberOfCells,
-                "numberOfLevels": 1,
-                "thickness": 0.0,
-            }
-        )
-    values.update(gainMedium.openPmdAttributes(context))
-    values.update(crossSections.openPmdAttributes())
-    values.update(phiAse.openPmdAttributes(numberOfSamples=number_of_samples))
-    return values
-
-def _arrayFields(gainMedium, crossSections, *, phiAse=None, include_static=True, dynamic_fields=None):
-    context = _fieldContext(gainMedium)
-    for field in _fieldsFromDomain(gainMedium.openPmdFields(context)):
-        if include_static or field.spec.name in DYNAMIC_FIELD_NAMES:
-            if not include_static and dynamic_fields is not None and field.recordName not in dynamic_fields:
-                continue
-            yield field
-    if include_static:
-        yield from _fieldsFromDomain(crossSections.openPmdFields(spectralContext))
-
-
-def _fieldsFromDomain(fields):
-    for field in fields:
-        if isinstance(field, OpenPmdComponentField):
-            spec = fieldSpec(field.name)
-            yield _ComponentArrayField(
-                recordName=field.recordName or spec.recordName,
-                spec=spec,
-                components=field.components,
-                axisLabels=field.axisLabels,
-                context=field.context,
-                prefix=field.prefix,
-            )
-            continue
-        if isinstance(field, OpenPmdScalarField):
-            yield _ScalarArrayField(
-                field.spec if field.spec is not None else fieldSpec(field.name),
-                field.values,
-                field.context,
-                prefix=field.prefix,
-            )
-            continue
-        name, values, context = field
-        yield _ScalarArrayField(fieldSpec(name), values, context)
-
-
-
-def _unit_dimension(io, exponents):
-    labels = (
-        io.Unit_Dimension.L,
-        io.Unit_Dimension.M,
-        io.Unit_Dimension.T,
-        io.Unit_Dimension.I,
-        io.Unit_Dimension.theta,
-        io.Unit_Dimension.N,
-        io.Unit_Dimension.J,
-    )
-    return {label: float(exponent) for label, exponent in zip(labels, exponents) if exponent != 0.0}
-
-
-def _dimensionless_dimension():
-    return {}
-
-
 def _series_config(path: Path, backend=None):
     if backend is not None:
         return _backend_spec(backend).config
@@ -777,159 +535,6 @@ def _access(name):
     return getattr(io.Access, name)
 
 
-def _length_dimension():
-    io = _io()
-    return _unit_dimension(io, (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-
-
-def _as_array(values, dtype, shape=None, order="C"):
-    arr = np.asarray(values, dtype=dtype)
-    if shape is not None:
-        arr = arr.reshape(shape, order=order)
-    return np.ascontiguousarray(arr)
-
-
-def _reset_scalar_record(
-    record,
-    data,
-    axis_labels,
-    unit_dimension=None,
-    unit_si=1.0,
-    grid_unit_si=1.0,
-    grid_spacing=None,
-    grid_global_offset=None,
-    geometry_parameters="topology=explicit_tet4_volume",
-):
-    io = _io()
-    record.set_attribute("geometry", "other")
-    record.set_attribute("geometryParameters", geometry_parameters)
-    record.set_attribute("dataOrder", "C")
-    record.axis_labels = axis_labels
-    # ADIOS2 SST may not preserve openPMD axisLabels on streamed mesh records.
-    # Keep the canonical axisLabels property, plus a scalar fallback for readers.
-    record.set_attribute("haseAxisLabelsString", ",".join(axis_labels))
-    record.grid_spacing = [1.0] * data.ndim if grid_spacing is None else list(grid_spacing)
-    record.grid_global_offset = [0.0] * data.ndim if grid_global_offset is None else list(grid_global_offset)
-    record.grid_unit_SI = float(grid_unit_si)
-    record.unit_dimension = _dimensionless_dimension() if unit_dimension is None else unit_dimension
-    component = record[io.Mesh_Record_Component.SCALAR]
-    component.unit_SI = float(unit_si)
-    component.position = [0.0] * data.ndim
-    component.reset_dataset(io.Dataset(data.dtype, data.shape))
-    component.store_chunk(data)
-
-
-def _record_metadata(record, spec: FieldSpec):
-    record.set_attribute("haseTransportVersion", HASE_TRANSPORT_VERSION)
-    record.set_attribute("haseSchemaVersion", HASE_TRANSPORT_VERSION)
-    record.set_attribute("haseEntity", spec.entity)
-    record.set_attribute("haseAxes", list(spec.axes))
-    # ADIOS2 SST has been observed to stream string-list attributes as an empty
-    # scalar string. Keep haseAxes canonical, plus a scalar fallback.
-    record.set_attribute("haseAxesString", ",".join(spec.axes))
-    record.set_attribute("haseLayoutOrder", "backendFlat")
-    record.set_attribute("haseStatic", not spec.dynamic)
-    record.set_attribute("haseDynamic", spec.dynamic)
-    record.set_attribute("haseBackendRequired", spec.backendRequired)
-    record.set_attribute("haseUnit", spec.unit)
-    record.set_attribute("haseUserDefined", spec.userDefined)
-    if spec.userDefined:
-        record.set_attribute("haseUserFieldName", spec.name)
-
-
-def _resetFlatField(record, spec: FieldSpec, values, context):
-    io = _io()
-    data = np.ascontiguousarray(backendFlatArray(values, spec, context, layoutOrder="backendFlat"))
-    _reset_scalar_record(
-        record,
-        data,
-        [flatEntityLabel(spec)],
-        _unit_dimension(io, spec.unitDimension),
-        spec.unitSI,
-    )
-    _record_metadata(record, spec)
-    record.set_attribute("hasePrimitiveShape", list(spec.expectedShape(context)))
-
-
-def _resetComponent(record, component_name, data, axis_labels, unit_dimension, unit_si=1.0):
-    io = _io()
-    record.set_attribute("geometry", "other")
-    record.set_attribute("geometryParameters", "topology=explicit_tet4_volume")
-    record.set_attribute("dataOrder", "C")
-    record.axis_labels = axis_labels
-    # ADIOS2 SST may not preserve openPMD axisLabels on streamed mesh records.
-    # Keep the canonical axisLabels property, plus a scalar fallback for readers.
-    record.set_attribute("haseAxisLabelsString", ",".join(axis_labels))
-    record.grid_spacing = [1.0] * data.ndim
-    record.grid_global_offset = [0.0] * data.ndim
-    record.grid_unit_SI = 1.0
-    record.unit_dimension = unit_dimension
-    component = record[component_name]
-    component.unit_SI = float(unit_si)
-    component.position = [0.0] * data.ndim
-    component.reset_dataset(io.Dataset(data.dtype, data.shape))
-    component.store_chunk(data)
-
-
-def _explicit_topology_context(topology):
-    return SimpleNamespace(
-        numberOfMeshPoints=topology.numberOfPoints,
-        numberOfPoints=int(getattr(topology, "structuredNumberOfPoints", topology.numberOfSamplePoints)),
-        numberOfCells=topology.numberOfCells,
-        numberOfTriangles=topology.numberOfCells,
-        numberOfLevels=int(getattr(topology, "structuredNumberOfLevels", 1)),
-        thickness=float(getattr(topology, "structuredThickness", 0.0)),
-        numberOfFacesPerCell=topology.numberOfFacesPerCell,
-        numberOfCellVertices=4,
-        numberOfSamplePoints=topology.numberOfSamplePoints,
-        numberOfSurfaceDomains=int(np.max(topology.faceBoundaries[topology.faceBoundaries > 0]) + 1) if np.any(topology.faceBoundaries > 0) else 0,
-    )
-
-
-def _explicit_point_components(topology):
-    points = np.asarray(topology.points, dtype=np.float64)
-    return {
-        "x": points[:, 0],
-        "y": points[:, 1],
-        "z": points[:, 2],
-    }
-
-
-def _write_explicit_static_topology(iteration, topology):
-    context = _explicit_topology_context(topology)
-    record = iteration.meshes["core_" + CANONICAL_POINTS_SPEC.recordName]
-    for component_name, values in _explicit_point_components(topology).items():
-        _resetComponent(
-            record,
-            component_name,
-            np.ascontiguousarray(values),
-            ["mesh_point"],
-            _unit_dimension(_io(), CANONICAL_POINTS_SPEC.unitDimension),
-            CANONICAL_POINTS_SPEC.unitSI,
-        )
-    _record_metadata(record, CANONICAL_POINTS_SPEC)
-    record.set_attribute("geometryParameters", "topology=explicit_tet4_volume")
-    record.set_attribute("hasePrimitiveShape", list(CANONICAL_POINTS_SPEC.expectedShape(context)))
-
-    def backend_flat(values):
-        return np.asarray(values).reshape(-1)
-
-    for spec, values in (
-        (CANONICAL_CONNECTIVITY_SPEC, topology.cellsConnectivityFlat()),
-        (CANONICAL_OFFSETS_SPEC, topology.cellsOffsets()),
-        (CANONICAL_CELL_TYPES_SPEC, topology.cellTypes),
-        (
-            EXPLICIT_CELL_FACE_OFFSETS_SPEC,
-            np.arange(context.numberOfCells + 1, dtype=np.uint32) * np.uint32(context.numberOfFacesPerCell),
-        ),
-        (EXPLICIT_CELL_FACES_SPEC, backend_flat(topology.facePointIndices)),
-        (EXPLICIT_CELL_NEIGHBORS_SPEC, backend_flat(topology.neighborCells)),
-        (EXPLICIT_CELL_NEIGHBOR_FACES_SPEC, backend_flat(topology.neighborLocalFaces)),
-        (EXPLICIT_FACE_BOUNDARIES_SPEC, backend_flat(topology.faceBoundaries)),
-        (EXPLICIT_CELL_DOMAINS_SPEC, topology.cellDomains),
-    ):
-        _resetFlatField(iteration.meshes["core_" + spec.recordName], spec, values, context)
-
 def _loadScalar(series, iteration, name, dtype):
     io = _io()
     component = iteration.meshes[name][io.Mesh_Record_Component.SCALAR]
@@ -986,54 +591,23 @@ def findCalcPhiAse():
 def _open_input_series(path, *, backend=None):
     series = _io().Series(str(path), _access("create_linear"), _series_config(path, backend))
     series.set_software("HASEonGPU-openPMD-python-frontend")
-    for name, value in haseTransportAttributes.items():
-        series.set_attribute(name, value)
-    series.set_attribute("haseTransportVersion", HASE_TRANSPORT_VERSION)
-    series.set_attribute("haseSchemaVersion", HASE_TRANSPORT_VERSION)
+    series.set_attribute("haseTransportVersion", TRANSPORT_VERSION)
     return series
 
 
 def _write_input_iteration(
     series,
     iteration_index,
-    phiAse,
-    gainMedium,
-    crossSections,
-    *,
-    include_static=True,
-    runControl=None,
-    dynamic_fields=None,
+    root,
 ):
+    refresh = getattr(root, "_refreshExcitationState", None)
+    if refresh is not None:
+        refresh()
     iteration = series.snapshots()[int(iteration_index)]
-    iteration.time = 0.0
-    iteration.dt = 1.0
+    iteration.time = float(getattr(root, "currentTime", 0.0))
+    iteration.dt = float(getattr(root, "timeStep", 1.0))
     iteration.time_unit_SI = 1.0
-
-    for field in _attributeFields(phiAse, gainMedium, crossSections):
-        iteration.set_attribute(field.name, field.value)
-    if runControl:
-        for name, value in runControl.items():
-            if value is not None:
-                iteration.set_attribute(name, value)
-
-    if include_static:
-        iteration.set_attribute("haseStaticUpdate", True)
-        topology = gainMedium.topology
-        if not (hasattr(topology, "cellPointIndices") and hasattr(topology, "neighborCells")):
-            raise TypeError("PhiASE openPMD transport requires a Tet4 VolumeTopology")
-        _write_explicit_static_topology(iteration, topology)
-    else:
-        iteration.set_attribute("haseStaticUpdate", False)
-
-    for field in _arrayFields(
-        gainMedium,
-        crossSections,
-        phiAse=phiAse,
-        include_static=include_static,
-        dynamic_fields=dynamic_fields,
-    ):
-        _writeArrayField(iteration, field)
-
+    writeGraph(iteration, TransportComposer().compose(root), _io())
     iteration.close()
 
 
@@ -1058,30 +632,14 @@ class OpenPmdInputSeries:
 
     def write(
         self,
-        phiAse,
-        gainMedium,
-        crossSections,
+        root,
         *,
         iteration_index=None,
-        include_static=None,
-        runControl=None,
-        dynamic_fields=None,
     ):
         if self._series is None:
             raise RuntimeError("OpenPmdInputSeries must be used as a context manager before writing")
         index = self._next_iteration if iteration_index is None else int(iteration_index)
-        write_static = (index == 0) if include_static is None else bool(include_static)
-        _write_input_iteration(
-            self._series,
-            index,
-            phiAse,
-            gainMedium,
-            crossSections,
-            include_static=write_static,
-            runControl=runControl,
-            dynamic_fields=dynamic_fields,
-        )
-        self._series.flush()
+        _write_input_iteration(self._series, index, root)
         self._next_iteration = max(self._next_iteration, index + 1)
         return index
 
@@ -1093,31 +651,6 @@ class OpenPmdInputSeries:
 
 
 
-def _writeArrayField(iteration, field):
-    if isinstance(field, _ComponentArrayField):
-        record = iteration.meshes[field.prefix + field.recordName]
-        for component_name, values in field.components.items():
-            data = np.ascontiguousarray(values)
-            _resetComponent(
-                record,
-                component_name,
-                data,
-                field.axisLabels,
-                _unit_dimension(_io(), field.spec.unitDimension),
-                field.spec.unitSI,
-            )
-        _record_metadata(record, field.spec)
-        record.set_attribute("hasePrimitiveShape", list(field.spec.expectedShape(field.context)))
-        return
-
-    _resetFlatField(
-        iteration.meshes[field.prefix + field.spec.recordName],
-        field.spec,
-        field.values,
-        field.context,
-    )
-
-
 def _iteration_index(iteration, fallback=None):
     for name in ("iteration_index", "iterationIndex"):
         if hasattr(iteration, name):
@@ -1127,12 +660,14 @@ def _iteration_index(iteration, fallback=None):
 
 def _read_result_iteration(series, iteration, *, fallback_index=None) -> tuple[int | None, Result]:
     iteration_index = _iteration_index(iteration, fallback_index)
-    prefix = "core_result_"
     values = {
-        spec.name: _loadScalar(series, iteration, prefix + spec.recordName, spec.dtypeObject)
-        for spec in resultFieldSpecs()
+        "phiAse": _loadScalar(series, iteration, recordName("phiAseResult/phiAse"), np.float32),
+        "standardError": _loadScalar(series, iteration, recordName("phiAseResult/standardError"), np.float64),
+        "relativeStandardError": _loadScalar(series, iteration, recordName("phiAseResult/relativeStandardError"), np.float64),
+        "totalRays": _loadScalar(series, iteration, recordName("phiAseResult/totalRays"), np.uint32),
+        "dndtAse": _loadScalar(series, iteration, recordName("phiAseResult/dndtAse"), np.float64),
     }
-    values.update(_result_status_values(iteration))
+    values.update(_result_status_values(iteration, "phiAseResult"))
     iteration.close()
     return iteration_index, Result(**values)
 
@@ -1172,7 +707,7 @@ def _has_attribute(obj, name):
         return False
 
 
-def _result_status_values(iteration):
+def _result_status_values(iteration, root="phiAseResult"):
     defaults = {
         "srmStatus": "disabled",
         "srmPasses": 0,
@@ -1180,10 +715,11 @@ def _result_status_values(iteration):
         "srmMaxIterations": 0,
         "srmDivergenceStreak": 0,
     }
-    return {
-        spec.name: spec.cast(iteration.get_attribute(spec.attribute)) if _has_attribute(iteration, spec.attribute) else defaults[spec.name]
-        for spec in resultAttributeSpecs
-    }
+    result = {}
+    for spec in resultAttributeSpecs:
+        name = attributeName(f"{root}/{spec.name}")
+        result[spec.name] = spec.cast(iteration.get_attribute(name)) if _has_attribute(iteration, name) else defaults[spec.name]
+    return result
 
 
 def read_simulation_output(path, *, on_state=None):
@@ -1193,16 +729,19 @@ def read_simulation_output(path, *, on_state=None):
     states = []
     for fallback_index, iteration in enumerate(series.read_iterations()):
         iteration_index = _iteration_index(iteration, fallback_index)
-        number_of_cells = int(iteration.get_attribute("number_of_cells"))
-        cell_shape = (number_of_cells,)
-        beta_volume = _read_optional_scalar(series, iteration, "core_beta_volume", np.float64)
-        phi_ase = _read_optional_scalar(series, iteration, "core_result_phi_ase", np.float32)
-        dndt_ase = _read_optional_scalar(series, iteration, "core_result_dndt_ase", np.float64)
-        standard_error = _read_optional_scalar(series, iteration, "core_result_standard_error", np.float64)
+        beta_volume = _read_optional_scalar(series, iteration, recordName("simulationSnapshot/betaVolume"), np.float64)
+        phi_ase = _read_optional_scalar(series, iteration, recordName("simulationSnapshot/phiAse"), np.float32)
+        dndt_ase = _read_optional_scalar(series, iteration, recordName("simulationSnapshot/dndtAse"), np.float64)
+        standard_error = _read_optional_scalar(series, iteration, recordName("simulationSnapshot/standardError"), np.float64)
         relative_standard_error = _read_optional_scalar(
-            series, iteration, "core_result_relative_standard_error", np.float64
+            series, iteration, recordName("simulationSnapshot/relativeStandardError"), np.float64
         )
-        total_rays = _read_optional_scalar(series, iteration, "core_result_total_rays", np.uint32)
+        total_rays = _read_optional_scalar(series, iteration, recordName("simulationSnapshot/totalRays"), np.uint32)
+        present = next(
+            (value for value in (beta_volume, phi_ase, dndt_ase, standard_error, relative_standard_error, total_rays) if value is not None),
+            np.empty(0),
+        )
+        cell_shape = (present.size,)
         ase_result = None
         if any(value is not None for value in (phi_ase, standard_error, relative_standard_error, total_rays, dndt_ase)):
             ase_result = Result(
@@ -1211,12 +750,14 @@ def read_simulation_output(path, *, on_state=None):
                 relativeStandardError=[] if relative_standard_error is None else relative_standard_error,
                 totalRays=[] if total_rays is None else total_rays,
                 dndtAse=[] if dndt_ase is None else dndt_ase,
-                **_result_status_values(iteration),
+                **_result_status_values(iteration, "simulationSnapshot"),
             )
+        step_name = attributeName("simulationSnapshot/step")
+        time_name = attributeName("simulationSnapshot/time")
         state = SimpleNamespace(
             iterationIndex=iteration_index,
-            step=int(iteration.get_attribute("step_index")) if _has_attribute(iteration, "step_index") else iteration_index + 1,
-            time=float(iteration.get_attribute("time")) if _has_attribute(iteration, "time") else float(iteration.time),
+            step=int(iteration.get_attribute(step_name)) if _has_attribute(iteration, step_name) else iteration_index + 1,
+            time=float(iteration.get_attribute(time_name)) if _has_attribute(iteration, time_name) else float(iteration.time),
             betaVolume=_reshape_optional(beta_volume, cell_shape),
             phiAse=_reshape_optional(phi_ase, cell_shape),
             standardError=_reshape_optional(standard_error, cell_shape),
@@ -1224,11 +765,11 @@ def read_simulation_output(path, *, on_state=None):
             totalRays=_reshape_optional(total_rays, cell_shape),
             dndtAse=_reshape_optional(dndt_ase, cell_shape),
             dndtPump=_reshape_optional(
-                _read_optional_scalar(series, iteration, "core_result_dndt_pump", np.float64),
+                _read_optional_scalar(series, iteration, recordName("simulationSnapshot/dndtPump"), np.float64),
                 cell_shape,
             ),
             aseResult=ase_result,
-            staticUpdate=bool(iteration.get_attribute("haseStaticUpdate")) if _has_attribute(iteration, "haseStaticUpdate") else iteration_index == 0,
+            staticUpdate=True,
         )
         states.append(state)
         if on_state is not None:
@@ -1324,14 +865,14 @@ class OpenPmdPhiAseSession:
             raise close_error
         return False
 
-    def run(self, phiAse, gainMedium, crossSections):
+    def run(self, root):
         if not self._entered:
             raise RuntimeError("OpenPmdPhiAseSession must be used as a context manager before running")
         iteration_index = self._next_iteration
         if self.spec.streaming:
-            result = self._run_streaming_iteration(iteration_index, phiAse, gainMedium, crossSections)
+            result = self._run_streaming_iteration(iteration_index, root)
         else:
-            result = self._run_file_iteration(iteration_index, phiAse, gainMedium, crossSections)
+            result = self._run_file_iteration(iteration_index, root)
         self._next_iteration += 1
         return result
 
@@ -1448,7 +989,7 @@ class OpenPmdPhiAseSession:
             self._tmp_path / f"{stem}-manifest.txt",
         )
 
-    def _run_file_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
+    def _run_file_iteration(self, iteration_index, root):
         input_path, output_path, manifest_path = self._paths_for_file_iteration(iteration_index)
         input_handle = None
         output_handle = None
@@ -1468,7 +1009,7 @@ class OpenPmdPhiAseSession:
             )
 
         with OpenPmdInputSeries(input_path, backend=self.spec.name) as writer:
-            writer.write(phiAse, gainMedium, crossSections, iteration_index=iteration_index, include_static=True)
+            writer.write(root, iteration_index=iteration_index)
         completed = _run_backend_process(self._calc_phi_ase_command(input_path, output_path))
         if manifest_path is not None:
             _write_artifact_manifest(
@@ -1586,16 +1127,8 @@ class OpenPmdPhiAseSession:
                 request = self._send_queue.get()
                 if request is None:
                     return
-                iteration_index, phiAse, gainMedium, crossSections = request
-                _write_input_iteration(
-                    series,
-                    iteration_index,
-                    phiAse,
-                    gainMedium,
-                    crossSections,
-                    include_static=(iteration_index == 0),
-                )
-                series.flush()
+                iteration_index, root = request
+                _write_input_iteration(series, iteration_index, root)
         except BaseException as exc:
             self._sender_errors.put((None, exc))
         finally:
@@ -1606,10 +1139,10 @@ class OpenPmdPhiAseSession:
                     self._sender_errors.put((None, exc))
             self._input_series = None
 
-    def _run_streaming_iteration(self, iteration_index, phiAse, gainMedium, crossSections):
+    def _run_streaming_iteration(self, iteration_index, root):
         if self._send_queue is None:
             raise RuntimeError("openPMD input sender thread is not running")
-        self._send_queue.put((iteration_index, phiAse, gainMedium, crossSections))
+        self._send_queue.put((iteration_index, root))
         return self._wait_for_result(iteration_index)
 
     def _raise_if_streaming_finished_without_result(self, expected_iteration_index):
@@ -1670,9 +1203,7 @@ class OpenPmdPhiAseSession:
 
 
 def _runOpenPmdAndExecuteHaseBinary(
-    phiAse,
-    gainMedium,
-    crossSections,
+    root,
     *,
     transport=None,
     command_prefix=None,
@@ -1681,7 +1212,7 @@ def _runOpenPmdAndExecuteHaseBinary(
     openpmdSession=None,
 ):
     if openpmdSession is not None:
-        return openpmdSession.run(phiAse, gainMedium, crossSections)
+        return openpmdSession.run(root)
 
     kwargs = {"transport": transport}
     if command_prefix is not None:
@@ -1691,12 +1222,10 @@ def _runOpenPmdAndExecuteHaseBinary(
     if watchdog_interval is not None:
         kwargs["watchdog_interval"] = watchdog_interval
     with OpenPmdPhiAseSession(**kwargs) as session:
-        return session.run(phiAse, gainMedium, crossSections)
+        return session.run(root)
 
 def runPhiASE(
-    phiAse,
-    gainMedium,
-    crossSections,
+    root,
     *,
     transport=None,
     command_prefix=None,
@@ -1705,9 +1234,7 @@ def runPhiASE(
     openpmdSession=None,
 ):
     return _runOpenPmdAndExecuteHaseBinary(
-        phiAse,
-        gainMedium,
-        crossSections,
+        root,
         transport=transport,
         command_prefix=command_prefix,
         workspace_dir=workspace_dir,
@@ -1716,204 +1243,9 @@ def runPhiASE(
     )
 
 
-_TIME_INTEGRATORS = {
-    "explicit-euler",
-    "heun",
-    "midpoint",
-    "runge-kutta-4",
-    "frozen-phi-ase-runge-kutta-4",
-    "implicit-euler",
-    "exponential-euler",
-}
-
-
-def _time_integrator_name(solver):
-    if isinstance(solver, str):
-        name = solver
-    else:
-        name = getattr(solver, "name", None)
-    if name not in _TIME_INTEGRATORS:
-        raise ValueError(
-            "compiled Simulation supports time integrators: "
-            + ", ".join(sorted(_TIME_INTEGRATORS))
-        )
-    return name
-
-
-def _simulation_run_control(simulation, *, steps):
-    ase_steps = 0 if simulation.phiASE.ase_steps is None else int(simulation.phiASE.ase_steps)
-    solver = simulation.timeIntegrationSolver
-    control = {
-        "timeStep": float(simulation.timeStep),
-        "numberOfSteps": int(steps),
-        "firstSimulationStep": int(simulation.currentStep),
-        "aseSteps": ase_steps,
-        "prePump": bool(simulation.prePump),
-        "executionMode": getattr(simulation, "executionMode", "autonomous"),
-        "timeIntegrator": _time_integrator_name(solver),
-        "pumpSchemaVersion": 2,
-    }
-    if hasattr(simulation, "outputFields"):
-        control["outputFieldsString"] = json.dumps(
-            list(simulation.outputFields), separators=(",", ":")
-        )
-    output_steps = getattr(simulation, "outputSteps", None)
-    if output_steps is not None:
-        if output_steps and output_steps[-1] > int(steps):
-            raise ValueError("output_steps entries must not exceed the number of requested steps")
-        control["outputSteps"] = np.asarray(output_steps, dtype=np.uint64)
-    control_fields = getattr(simulation, "controlFields", ())
-    control["controlFieldsString"] = json.dumps(list(control_fields), separators=(",", ":"))
-    control.update(_general_pump_attributes(simulation))
-    if hasattr(solver, "iterations"):
-        control["implicitIterations"] = int(solver.iterations)
-    if hasattr(solver, "tolerance"):
-        control["implicitTolerance"] = float(solver.tolerance)
-    return control
-
-
-def _resolve_surface_domains(topology, domains):
-    domain_map = topology.surfaceDomainMap()
-    return [int(domain_map.resolve(domain)) if isinstance(domain, str) else int(domain) for domain in domains]
-
-
-def _append_offset(values, offsets, additions):
-    values.extend(additions)
-    offsets.append(len(values))
-
-
-def _general_pump_attributes(simulation):
-    """Flatten the general pump graph into openPMD iteration attributes."""
-    topology = simulation._backendGainMedium.topology
-    pump = simulation.pump
-    source_surfaces, source_surface_offsets = [], [0]
-    spectrum_wavelengths, spectrum_weights, spectrum_sigma_a, spectrum_sigma_e = [], [], [], []
-    spectrum_offsets = [0]
-    angular_polar, angular_azimuthal, angular_weights, angular_offsets = [], [], [], [0]
-    profile_kind, profile_radius_u, profile_radius_v, profile_exponent = [], [], [], []
-    profile_center, profile_axis_u, profile_axis_v = [], [], []
-    source_relay_offsets = [0]
-    relay_exit_surfaces, relay_exit_offsets = [], [0]
-    relay_entry_surfaces, relay_entry_offsets = [], [0]
-    relay_flip_u, relay_flip_v, relay_rotation = [], [], []
-    relay_offset, relay_tilt, relay_magnification, relay_transmission = [], [], [], []
-    relay_count = 0
-
-    for source in pump.sources:
-        _append_offset(
-            source_surfaces,
-            source_surface_offsets,
-            _resolve_surface_domains(topology, source.surfaceDomains),
-        )
-        wavelengths = np.asarray(source.spectrum.wavelengths, dtype=np.float64)
-        _append_offset(spectrum_wavelengths, spectrum_offsets, wavelengths.tolist())
-        spectrum_weights.extend(np.asarray(source.spectrum.weights, dtype=np.float64).tolist())
-        spectrum_sigma_a.extend(float(source.crossSections.absorptionAt(wavelength)) for wavelength in wavelengths)
-        spectrum_sigma_e.extend(float(source.crossSections.emissionAt(wavelength)) for wavelength in wavelengths)
-        _append_offset(
-            angular_polar,
-            angular_offsets,
-            np.asarray(source.angularDistribution.polarAngles, dtype=np.float64).tolist(),
-        )
-        angular_azimuthal.extend(np.asarray(source.angularDistribution.azimuthalAngles, dtype=np.float64).tolist())
-        angular_weights.extend(np.asarray(source.angularDistribution.weights, dtype=np.float64).tolist())
-
-        profile = source.profile
-        is_super_gaussian = getattr(profile, "kind", "uniform") == "super-gaussian"
-        profile_kind.append(1 if is_super_gaussian else 0)
-        profile_radius_u.append(float(profile.radiusU) if is_super_gaussian else 1.0)
-        profile_radius_v.append(float(profile.radiusV) if is_super_gaussian else 1.0)
-        profile_exponent.append(float(profile.exponent) if is_super_gaussian else 2.0)
-        profile_center.extend(profile.center if is_super_gaussian else (0.0, 0.0, 0.0))
-        profile_axis_u.extend(profile.axisU if is_super_gaussian else (1.0, 0.0, 0.0))
-        profile_axis_v.extend(profile.axisV if is_super_gaussian else (0.0, 1.0, 0.0))
-
-        for relay in source.relays:
-            _append_offset(
-                relay_exit_surfaces,
-                relay_exit_offsets,
-                _resolve_surface_domains(topology, relay.exitDomains),
-            )
-            _append_offset(
-                relay_entry_surfaces,
-                relay_entry_offsets,
-                _resolve_surface_domains(topology, relay.entryDomains),
-            )
-            relay_flip_u.append(int(relay.flipU))
-            relay_flip_v.append(int(relay.flipV))
-            relay_rotation.append(float(relay.rotation))
-            relay_offset.extend(float(value) for value in relay.offset)
-            relay_tilt.extend(float(value) for value in relay.tilt)
-            relay_magnification.append(float(relay.magnification))
-            relay_transmission.append(float(relay.transmission))
-            relay_count += 1
-        source_relay_offsets.append(relay_count)
-
-    attributes = {
-        "pumpSourceTotalPower": [float(source.totalPower) for source in pump.sources],
-        "pumpSourceRayCount": [int(source.rayCount) for source in pump.sources],
-        "pumpSourcePumpSteps": [int(source.pumpSteps) for source in pump.sources],
-        "pumpSourceRngSeed": [int(source.rngSeed) for source in pump.sources],
-        "pumpSourceSurfaceOffsets": source_surface_offsets,
-        "pumpSourceSurfaces": source_surfaces,
-        "pumpSpectrumOffsets": spectrum_offsets,
-        "pumpSpectrumWavelengths": spectrum_wavelengths,
-        "pumpSpectrumWeights": spectrum_weights,
-        "pumpSpectrumSigmaAbsorption": spectrum_sigma_a,
-        "pumpSpectrumSigmaEmission": spectrum_sigma_e,
-        "pumpAngularOffsets": angular_offsets,
-        "pumpAngularPolar": angular_polar,
-        "pumpAngularAzimuthal": angular_azimuthal,
-        "pumpAngularWeights": angular_weights,
-        "pumpProfileKind": profile_kind,
-        "pumpProfileRadiusU": profile_radius_u,
-        "pumpProfileRadiusV": profile_radius_v,
-        "pumpProfileExponent": profile_exponent,
-        "pumpProfileCenter": profile_center,
-        "pumpProfileAxisU": profile_axis_u,
-        "pumpProfileAxisV": profile_axis_v,
-        "pumpSourceRelayOffsets": source_relay_offsets,
-        "pumpRelayExitOffsets": relay_exit_offsets,
-        "pumpRelayExitSurfaces": relay_exit_surfaces,
-        "pumpRelayEntryOffsets": relay_entry_offsets,
-        "pumpRelayEntrySurfaces": relay_entry_surfaces,
-        "pumpRelayFlipU": relay_flip_u,
-        "pumpRelayFlipV": relay_flip_v,
-        "pumpRelayRotation": relay_rotation,
-        "pumpRelayOffset": relay_offset,
-        "pumpRelayTilt": relay_tilt,
-        "pumpRelayMagnification": relay_magnification,
-        "pumpRelayTransmission": relay_transmission,
-    }
-    unsigned_names = {
-        "pumpSourceRayCount", "pumpSourcePumpSteps", "pumpSourceRngSeed",
-        "pumpSourceSurfaceOffsets", "pumpSourceSurfaces", "pumpSpectrumOffsets",
-        "pumpAngularOffsets", "pumpProfileKind", "pumpSourceRelayOffsets",
-        "pumpRelayExitOffsets", "pumpRelayExitSurfaces",
-        "pumpRelayEntryOffsets", "pumpRelayEntrySurfaces",
-        "pumpRelayFlipU", "pumpRelayFlipV",
-    }
-    for name in unsigned_names:
-        attributes[name] = np.asarray(attributes[name], dtype=np.uint64)
-    # openPMD backends do not portably represent zero-length attributes. Relay
-    # offset arrays retain the zero-relay shape; empty relay payloads are omitted.
-    for name in tuple(attributes):
-        if name.startswith("pumpRelay") and np.asarray(attributes[name]).size == 0:
-            del attributes[name]
-    return attributes
-
-
-def _write_simulation_input(input_path, spec, simulation, run_control, *, close_after=None):
+def _write_simulation_input(input_path, spec, simulation, *, close_after=None):
     with OpenPmdInputSeries(input_path, backend=spec.name) as writer:
-        writer.write(
-            simulation.phiASE,
-            simulation._backendGainMedium,
-            simulation.crossSections,
-            iteration_index=0,
-            include_static=True,
-            runControl=run_control,
-            dynamic_fields={"beta_volume"},
-        )
+        writer.write(simulation, iteration_index=0)
         if close_after is not None:
             close_after.wait()
 
@@ -1924,7 +1256,7 @@ def _run_streaming_simulation(
     output_path,
     spec,
     simulation,
-    run_control,
+    steps,
     *,
     on_state=None,
     progress=False,
@@ -1942,7 +1274,7 @@ def _run_streaming_simulation(
             def receive_state(state):
                 if on_state is not None:
                     on_state(state)
-                if synchronized_debug and int(state.step) < int(run_control["numberOfSteps"]):
+                if synchronized_debug and int(state.step) < int(steps):
                     completed_step = int(state.step)
                     control_queue.put(completed_step)
                     acknowledged_step = control_ack_queue.get()
@@ -1974,21 +1306,12 @@ def _run_streaming_simulation(
                     input_path,
                     spec,
                     simulation,
-                    run_control,
                     close_after=backend_finished,
                 )
             else:
                 with OpenPmdInputSeries(input_path, backend=spec.name) as writer:
-                    writer.write(
-                        simulation.phiASE,
-                        simulation._backendGainMedium,
-                        simulation.crossSections,
-                        iteration_index=0,
-                        include_static=True,
-                        runControl=run_control,
-                        dynamic_fields={"beta_volume"},
-                    )
-                    for expected_step in range(1, int(run_control["numberOfSteps"])):
+                    writer.write(simulation, iteration_index=0)
+                    for expected_step in range(1, int(steps)):
                         completed_step = control_queue.get()
                         if completed_step is None:
                             raise RuntimeError(
@@ -1999,14 +1322,7 @@ def _run_streaming_simulation(
                                 f"synchronized-debug expected completed step {expected_step}, "
                                 f"received {completed_step}"
                             )
-                        writer.write(
-                            simulation.phiASE,
-                            simulation._backendGainMedium,
-                            simulation.crossSections,
-                            iteration_index=completed_step,
-                            include_static=False,
-                            dynamic_fields=set(getattr(simulation, "controlFields", ())),
-                        )
+                        writer.write(simulation, iteration_index=completed_step)
                         control_ack_queue.put(completed_step)
                     backend_finished.wait()
             input_queue.put((True, None))
@@ -2088,7 +1404,6 @@ def runSimulation(
         raise ValueError("steps must be positive")
     executable = findCalcPhiAse()
     spec = _ensure_backend_available(transport, executable)
-    run_control = _simulation_run_control(simulation, steps=steps)
     progress = _frontend_progress_enabled()
     if simulation.executionMode == "synchronized-debug" and not spec.streaming:
         raise ValueError("synchronized-debug requires an openPMD streaming backend")
@@ -2123,12 +1438,12 @@ def runSimulation(
                 output_path,
                 spec,
                 simulation,
-                run_control,
+                steps,
                 on_state=on_state,
                 progress=progress,
             )
 
-        _write_simulation_input(input_path, spec, simulation, run_control)
+        _write_simulation_input(input_path, spec, simulation)
         completed = _run_backend_process(command, progress=progress)
         if completed.returncode != 0:
             detail = _backend_failure_detail(completed.log_path)

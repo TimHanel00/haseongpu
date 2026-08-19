@@ -35,7 +35,7 @@ from .geometry import (
     SurfaceOptics,
     VolumeTopology,
 )
-from .physical import Domain, GainMedium, OpticalComponent
+from .physical import Domain, GainMedium, OpticalComponent, SurfaceOpticsAssignment
 from material_library import CrossSectionTable, Material, MaterialLibrary
 from hase_units import Quantity, Unit, units
 from .laser import (
@@ -53,7 +53,9 @@ from .laser import (
     integrate_pump_profile,
 )
 from .simulation import (
+    ExcitationState,
     PhiASE,
+    PumpRegistration,
     Simulation,
     TimeStepState,
     autonomous_final,

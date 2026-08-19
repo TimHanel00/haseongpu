@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from hase_transport import PrimitiveDescription, field
+
 
 @dataclass
 class TimeIntegrationSolver:
@@ -21,6 +23,16 @@ class TimeIntegrationSolver:
     """
 
     name: str
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "timeIntegrationSolver",
+            fields=(
+                field("name"),
+                field("iterations", optional=True),
+                field("tolerance", optional=True),
+            ),
+        )
 
 
 class ExplicitEuler(TimeIntegrationSolver):

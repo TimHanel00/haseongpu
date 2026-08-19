@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from hase_transport import PrimitiveDescription, field as transportField
+
 
 @dataclass(frozen=True)
 class SurfaceOptics:
@@ -20,6 +22,16 @@ class SurfaceOptics:
     reflectivity: float = 0.0
     n_inside: float = 1.0
     n_outside: float = 1.0
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "surfaceOptics",
+            fields=(
+                transportField("reflectivity"),
+                transportField("nInside", "n_inside"),
+                transportField("nOutside", "n_outside"),
+            ),
+        )
 
 
 @dataclass(frozen=True)

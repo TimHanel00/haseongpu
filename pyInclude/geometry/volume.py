@@ -16,6 +16,8 @@ import warnings
 
 import numpy as np
 
+from hase_transport import PrimitiveDescription, field as transportField
+
 try:
     from numba import njit
 except ImportError:
@@ -237,6 +239,44 @@ class VolumeTopology:
     cellDomains: np.ndarray | None = None
     faceBoundaries: np.ndarray | None = None
     metadata: dict = field(default_factory=dict)
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "volumeTopology",
+            fields=(
+                transportField("points", lambda owner: np.asarray(owner.points).T, axes=("coordinate", "point")),
+                transportField(
+                    "cellPointIndices",
+                    lambda owner: np.asarray(owner.cellPointIndices).T,
+                    axes=("localVertex", "cell"),
+                ),
+                transportField("cellTypes", axes=("cell",)),
+                transportField("cellDomains", axes=("cell",)),
+                transportField(
+                    "facePointIndices",
+                    lambda owner: np.asarray(owner.facePointIndices).transpose(2, 1, 0),
+                    axes=("localVertex", "localFace", "cell"),
+                ),
+                transportField("neighborCells", lambda owner: np.asarray(owner.neighborCells).T, axes=("localFace", "cell")),
+                transportField("neighborLocalFaces", lambda owner: np.asarray(owner.neighborLocalFaces).T, axes=("localFace", "cell")),
+                transportField("faceBoundaries", lambda owner: np.asarray(owner.faceBoundaries).T, axes=("localFace", "cell")),
+                transportField(
+                    "faceCenters",
+                    lambda owner: np.asarray(owner.faceCenters).transpose(2, 1, 0),
+                    axes=("coordinate", "localFace", "cell"),
+                ),
+                transportField(
+                    "faceNormals",
+                    lambda owner: np.asarray(owner.faceNormals).transpose(2, 1, 0),
+                    axes=("coordinate", "localFace", "cell"),
+                ),
+                transportField("faceAreas", lambda owner: np.asarray(owner.faceAreas).T, axes=("localFace", "cell")),
+                transportField("cellCenters", lambda owner: np.asarray(owner.cellCenters).T, axes=("coordinate", "cell")),
+                transportField("cellVolumes", axes=("cell",)),
+                transportField("samplePoints", lambda owner: np.asarray(owner.samplePoints).T, axes=("coordinate", "sample")),
+                transportField("metadata", encoding="json"),
+            ),
+        )
 
     def __post_init__(self):
         self.points = _asPoints3(self.points)

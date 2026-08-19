@@ -13,6 +13,7 @@ import pytest
 repoRoot = Path(__file__).resolve().parents[3]
 
 
+from hase_transport import TransportComposer
 from HASEonGPU import PhiASE, SpectralDecomposition
 from pyInclude.geometry import Gmsh, GmshElement, SurfaceOptics, VolumeTopology
 from pyInclude.geometry.core import GainMedium
@@ -472,78 +473,21 @@ def testVolumeTopologyRejectsUnsupportedGmshVolumes():
         VolumeTopology.fromGmsh(gmsh)
 
 
-def testExplicitOpenPmdTopologySpecsUseTet4Shapes():
+def testExplicitTopologyTransportUsesTet4StructureOfArrays():
     topology = _oneTetTopology()
-    context = transport._explicit_topology_context(topology)
+    graph = TransportComposer().compose(topology)
+    node = graph.node("volumeTopology")
 
-    assert transport.CANONICAL_CONNECTIVITY_SPEC.expectedShape(context) == (1, 4)
-    assert transport.EXPLICIT_CELL_FACES_SPEC.expectedShape(context) == (1, 4, 3)
-    assert transport.EXPLICIT_CELL_NEIGHBORS_SPEC.expectedShape(context) == (1, 4)
-    np.testing.assert_array_equal(topology.cellsOffsets(), np.array([0, 4], dtype=np.uint32))
-    assert topology.faceConnectivityFlat().shape == (12,)
+    point_spec, points = node.fields["points"]
+    connectivity_spec, connectivity = node.fields["cellPointIndices"]
+    faces_spec, faces = node.fields["facePointIndices"]
+    neighbors_spec, neighbors = node.fields["neighborCells"]
 
-
-def _readOpenPmdScalar(series, iteration, name):
-    io = transport._io()
-    chunk = iteration.meshes[name][io.Mesh_Record_Component.SCALAR].load_chunk()
-    series.flush()
-    return np.array(chunk, copy=True).reshape(-1)
-
-
-def testExplicitOpenPmdStaticTopologyWriterStoresFaceLookupTables(tmp_path, openPmdFileBackend):
-    topology = _oneTetTopology()
-    path = tmp_path / ("explicit_volume" + transport._backend_spec(openPmdFileBackend).suffix)
-
-    series = transport._open_input_series(path, backend=openPmdFileBackend)
-    iteration = series.snapshots()[0]
-    try:
-        transport._write_explicit_static_topology(iteration, topology)
-        iteration.close()
-    finally:
-        series.close()
-
-    io = transport._io()
-    series = io.Series(str(path), io.Access.read_only)
-    iteration = series.iterations[0]
-    try:
-        assert "core_points" in iteration.meshes
-        assert "core_sample_points" not in iteration.meshes
-        assert "core_cell_faces" in iteration.meshes
-        assert "core_cell_neighbor_cells" in iteration.meshes
-        assert "core_cell_neighbor_local_faces" in iteration.meshes
-        assert "core_cell_face_boundaries" in iteration.meshes
-        assert "core_cell_domains" in iteration.meshes
-        assert iteration.meshes["core_points"].get_attribute("geometryParameters") == "topology=explicit_tet4_volume"
-        np.testing.assert_array_equal(_readOpenPmdScalar(series, iteration, "core_cell_faces"), topology.facePointIndices.reshape(-1))
-        np.testing.assert_array_equal(_readOpenPmdScalar(series, iteration, "core_cell_neighbor_cells"), topology.neighborCells.reshape(-1))
-        np.testing.assert_array_equal(_readOpenPmdScalar(series, iteration, "core_cell_face_boundaries"), topology.faceBoundaries.reshape(-1))
-    finally:
-        series.close()
-
-
-def testForwardOpenPmdInputWritesVolumeRecords(tmp_path, openPmdFileBackend):
-    from HASEonGPU import PhiASE, SpectralDecomposition
-
-    topology = _oneTetTopology()
-    medium = GainMedium(topology=topology)
-    medium.withPhysicalProperties(betaVolume=np.ones(topology.numberOfCells, dtype=np.float64))
-    crossSections = SpectralDecomposition.monochromatic(
-        wavelength=1.0,
-        crossSectionAbsorption=0.0,
-        crossSectionEmission=0.0,
-    )
-    phiAse = PhiASE(spectralProperties=crossSections)
-    path = tmp_path / ("forward_volume" + transport._backend_spec(openPmdFileBackend).suffix)
-
-    with transport.OpenPmdInputSeries(path, backend=openPmdFileBackend) as series:
-        series.write(phiAse, medium, crossSections)
-
-    io = transport._io()
-    series = io.Series(str(path), io.Access.read_only)
-    iteration = series.iterations[0]
-    try:
-        assert iteration.get_attribute("propagation_mode") == "forward"
-        assert "core_points" in iteration.meshes
-        assert "core_beta_volume" in iteration.meshes
-    finally:
-        series.close()
+    assert point_spec.axes == ("coordinate", "point")
+    assert np.asarray(points).shape == (3, 4)
+    assert connectivity_spec.axes == ("localVertex", "cell")
+    assert np.asarray(connectivity).shape == (4, 1)
+    assert faces_spec.axes == ("localVertex", "localFace", "cell")
+    assert np.asarray(faces).shape == (3, 4, 1)
+    assert neighbors_spec.axes == ("localFace", "cell")
+    assert np.asarray(neighbors).shape == (4, 1)

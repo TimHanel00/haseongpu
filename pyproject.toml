@@ -67,7 +67,7 @@ Changelog = "https://github.com/computationalradiationphysics/haseongpu/releases
 
 [tool.scikit-build]
 build-dir = ".hase-python-build/{wheel_tag}"
-wheel.packages = ["pyInclude", "material_library", "hase_units"]
+wheel.packages = ["pyInclude", "material_library", "hase_units", "hase_transport"]
 install.components = ["python"]
 
 [[tool.scikit-build.generate]]

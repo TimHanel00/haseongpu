@@ -109,7 +109,11 @@ def test_simulation_from_yaml_reuses_injected_objects_and_owns_excitation(tmp_pa
     assert simulation._backendGainMedium.get("betaVolume").value.tolist() == [0.2, 0.2]
     assert simulation.pump.sources[0].crossSections is simulation.crossSections
     assert not hasattr(simulation.pumps[0], "cross_sections")
-    assert all(isinstance(value, int) for value in simulation._pumpRegistrations[0][1].surface_domains)
+    assert all(
+        value.entityKind == "surface"
+        for value in simulation._pumpRegistrations[0].injectionMethod.surface_domains
+    )
+    assert all(isinstance(value, int) for value in simulation.pump.sources[0].surfaceDomains)
 
 
 def test_simulation_from_yaml_lowers_passive_component_outside_gain_medium(tmp_path):
