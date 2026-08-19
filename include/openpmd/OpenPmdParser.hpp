@@ -1,74 +1,61 @@
 #pragma once
 
-#include <core/mesh.hpp>
-#include <core/simulationContext.hpp>
-#include <core/simulationSnapshot.hpp>
-#include <core/types.hpp>
+#include <backend/primitives/Simulation.hpp>
 
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <string>
+#include <optional>
 
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
 #    include <mpi.h>
 #endif
 
-namespace openPMD
-{
-    class Iteration;
-    class Series;
-} // namespace openPMD
-
 namespace hase::openpmd
 {
+    struct TransportIteration
+    {
+        std::uint64_t index{};
+        backend::Simulation simulation;
+    };
+
+    class InputSession
+    {
+    public:
+        InputSession() = default;
+        InputSession(InputSession&&) noexcept = default;
+        InputSession& operator=(InputSession&&) noexcept = default;
+        InputSession(InputSession const&) = delete;
+        InputSession& operator=(InputSession const&) = delete;
+        ~InputSession();
+
+        InputSession(std::function<std::optional<TransportIteration>()> next, std::function<void()> close);
+
+        [[nodiscard]] std::optional<TransportIteration> next();
+        void close();
+
+    private:
+        std::function<std::optional<TransportIteration>()> m_next;
+        std::function<void()> m_close;
+    };
 
     class Parser
     {
     public:
-        Parser(std::filesystem::path inputPath, std::filesystem::path outputPath);
+        explicit Parser(std::filesystem::path inputPath);
 
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
-        Parser(std::filesystem::path inputPath, std::filesystem::path outputPath, MPI_Comm comm);
+        Parser(std::filesystem::path inputPath, MPI_Comm comm);
 #endif
 
-        [[nodiscard]] core::SimulationContext read();
-        void writeResult(core::Result const& result, core::HostMesh const& mesh);
-        void processRequestIterations(std::function<void(core::SimulationContext&)> process);
-        void runCoreSimulation();
+        [[nodiscard]] backend::Simulation read() const;
+        [[nodiscard]] InputSession open() const;
 
     private:
-        [[nodiscard]] bool isHeadRank() const;
-        [[nodiscard]] bool hasStaticMeshUpdate(openPMD::Iteration const& iteration) const;
-        [[nodiscard]] bool containsStaticMeshUpdate(openPMD::Iteration const& iteration) const;
-        void validateDynamicOnlyIteration(
-            openPMD::Iteration const& iteration,
-            core::SimulationContext const& simulation) const;
-        [[nodiscard]] core::SimulationContext readIteration(openPMD::Series& series, openPMD::Iteration& iteration);
-        void updateDynamicIteration(
-            openPMD::Series& series,
-            openPMD::Iteration& iteration,
-            core::SimulationContext& simulation);
-        void writeResultIteration(
-            openPMD::Series& series,
-            std::uint64_t iterationIndex,
-            core::Result const& result,
-            core::HostMesh const& mesh);
-        void writeSimulationSnapshotIteration(
-            openPMD::Series& series,
-            std::uint64_t iterationIndex,
-            core::SimulationSnapshot const& snapshot,
-            core::HostMesh const& mesh,
-            core::ExperimentParameters const& experiment,
-            bool includeStatic);
-
         std::filesystem::path m_inputPath;
-        std::filesystem::path m_outputPath;
-        std::string m_meshGroup = "core";
 
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
         MPI_Comm m_comm = MPI_COMM_WORLD;
 #endif
     };
-
 } // namespace hase::openpmd

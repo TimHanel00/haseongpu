@@ -16,6 +16,7 @@ import warnings
 
 import numpy as np
 
+from hase_transport import PrimitiveDescription, field as transportField, reference
 from hase_units import LENGTH, TEMPERATURE, TIME, Quantity, requireQuantity, units
 
 
@@ -72,6 +73,17 @@ class CrossSectionTable:
     """Non-negative stimulated-emission area per active ion at each wavelength."""
     metadata: Mapping[str, Any] = field(default_factory=dict)
     """String-keyed measurement provenance and processing history."""
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "crossSectionTable",
+            fields=(
+                transportField("wavelengths", axes=("wavelength",)),
+                transportField("absorption", axes=("wavelength",)),
+                transportField("emission", axes=("wavelength",)),
+                transportField("metadata", encoding="json"),
+            ),
+        )
 
     def __post_init__(self):
         wavelengths = requireQuantity(self.wavelengths, LENGTH, "cross-section wavelengths")
@@ -416,6 +428,24 @@ class Material:
     """Optional normalized material orientation vector for anisotropic models."""
     metadata: Mapping[str, Any] = field(default_factory=dict)
     """Merged material, state, interpolation, and resampling provenance."""
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "material",
+            fields=(
+                transportField("materialName"),
+                transportField("temperature", optional=True),
+                transportField("refractiveIndex"),
+                transportField("fluorescenceLifetime", optional=True),
+                transportField("active"),
+                transportField("bulkAttenuation", optional=True),
+                transportField("activeIonDensity"),
+                transportField("name", optional=True),
+                transportField("opticalAxis", axes=("coordinate",), optional=True),
+                transportField("metadata", encoding="json"),
+            ),
+            references=(reference("crossSections", optional=True),),
+        )
 
     def __init__(
         self,

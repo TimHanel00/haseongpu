@@ -163,10 +163,23 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
     )
     assert api_pump.profile == yaml_pump.profile
 
-    _api_physical, api_injector, api_relays = api._pumpRegistrations[0]
-    _yaml_physical, yaml_injector, yaml_relays = yaml._pumpRegistrations[0]
-    assert api_injector == yaml_injector
-    assert api_relays == yaml_relays
+    api_registration = api._pumpRegistrations[0]
+    yaml_registration = yaml._pumpRegistrations[0]
+    api_injector, api_relays = api_registration.injectionMethod, api_registration.relays
+    yaml_injector, yaml_relays = yaml_registration.injectionMethod, yaml_registration.relays
+    assert len(api_injector.surface_domains) == len(yaml_injector.surface_domains)
+    for api_domain, yaml_domain in zip(
+        api_injector.surface_domains, yaml_injector.surface_domains, strict=True
+    ):
+        assert api_domain.entityKind == yaml_domain.entityKind
+        np.testing.assert_array_equal(api_domain._shards[0][1], yaml_domain._shards[0][1])
+    assert len(api_relays) == len(yaml_relays)
+    for api_relay, yaml_relay in zip(api_relays, yaml_relays, strict=True):
+        assert api_relay.transmission == yaml_relay.transmission
+        np.testing.assert_array_equal(
+            api_relay.exit_domains[0]._shards[0][1],
+            yaml_relay.exit_domains[0]._shards[0][1],
+        )
     assert api_relays[0].transmission == 1.0
 
     for property_name in ("nTot", "crystalTFluo"):

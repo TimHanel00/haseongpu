@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import shlex
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from time import perf_counter
 
 import numpy as np
 
+from hase_transport import PrimitiveDescription, field as transportField, reference
 from .alpakaUtils import AlpakaBackends
 from .physical import Domain, GainMedium, OpticalComponent
 from .lowering import lowerGainMedium, lowerSurfaceDomain
@@ -176,6 +178,42 @@ class PhiASE:
 
     _result: object | None = field(default=None, init=False, repr=False)
     _openpmdSession: object | None = field(default=None, init=False, repr=False)
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "phiAse",
+            fields=(
+                transportField("propagationMode"),
+                transportField("minRays"),
+                transportField("maxRays"),
+                transportField("forwardRayCount", optional=True),
+                transportField("relativeStandardErrorThreshold"),
+                transportField("repetitions"),
+                transportField("adaptiveSteps"),
+                transportField("useReflections"),
+                transportField("reflectionMaxIterations"),
+                transportField("reflectionTolerance"),
+                transportField("surfaceReservoirSize"),
+                transportField("monochromatic"),
+                transportField(
+                    "backend",
+                    lambda owner: _preferredDefaultBackend() if owner.backend is None else owner.backend,
+                ),
+                transportField("parallelMode"),
+                transportField("numDevices"),
+                transportField("writeVtk"),
+                transportField(
+                    "devices",
+                    lambda owner: owner.devices if owner.devices else None,
+                    axes=("device",),
+                    optional=True,
+                ),
+                transportField("minSampleRange", optional=True),
+                transportField("maxSampleRange", optional=True),
+                transportField("rngSeed", optional=True),
+                transportField("aseSteps", "ase_steps", optional=True),
+            ),
+        )
 
     def __post_init__(self):
         if self.ase_steps is not None:
@@ -350,7 +388,7 @@ class PhiASE:
         self._openpmdSession = None
         return transport.closeStream(session)
 
-    def run(self, gainMedium=None, crossSections=None, *, openpmdSession=None):
+    def run(self, gainMedium=None, crossSections=None, *, initialExcitation=None, openpmdSession=None):
         """Run ASE for the supplied or configured ``GainMedium``.
 
         Returns ``self``. Use ``getResults()`` afterwards to access the raw
@@ -359,11 +397,13 @@ class PhiASE:
         medium = gainMedium if gainMedium is not None else self.gainMedium
         if medium is None:
             raise ValueError("PhiASE.run requires gainMedium; pass it through Simulation or run(gainMedium=...)")
-        cross_sections = crossSections if crossSections is not None else self.crossSections
-        if cross_sections is None and self.laserProperties is not None:
-            cross_sections = self.crossSections
-        if cross_sections is None:
-            raise ValueError("PhiASE.run requires crossSections")
+        if not isinstance(medium, GainMedium):
+            raise TypeError("PhiASE.run requires the physical GainMedium frontend primitive")
+        if crossSections is not None:
+            self.crossSections = crossSections
+            self.spectralProperties = crossSections
+        if initialExcitation is None:
+            initialExcitation = 0.0
 
         if openpmdSession == "persistent":
             openpmdSession = self.openStream()
@@ -374,9 +414,7 @@ class PhiASE:
 
         launch_options = {} if openpmdSession is not None else self._transportLaunchOptions()
         self._result = transport.runPhiASE(
-            self,
-            medium,
-            cross_sections,
+            _AseSimulationRequest(self, medium, initialExcitation),
             transport=self.openpmdBackend,
             openpmdSession=openpmdSession,
             **launch_options,
@@ -388,6 +426,121 @@ class PhiASE:
         if self._result is None:
             raise RuntimeError("simulation has not been run yet")
         return self._result
+
+
+@dataclass(frozen=True)
+class ExcitationState:
+    """Excited-state values associated with physical volume domains."""
+
+    domains: tuple[Domain, ...]
+    values: tuple[object, ...]
+
+    @classmethod
+    def fromValue(cls, value, gainMedium):
+        if isinstance(value, Mapping):
+            domains = tuple(value)
+            values = tuple(value[domain] for domain in domains)
+        else:
+            domains = (gainMedium.domain,)
+            values = (value,)
+        parsed = []
+        for item in values:
+            array = np.asarray(item, dtype=np.float64)
+            if np.any(~np.isfinite(array)) or np.any((array < 0.0) | (array > 1.0)):
+                raise ValueError("initial excitation must be finite and within [0, 1]")
+            parsed.append(array.reshape(-1) if array.ndim else np.asarray([float(array)]))
+        return cls(domains=domains, values=tuple(parsed))
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "excitationState",
+            fields=(transportField("values", axes=("cell",), dynamic=True, encoding="ragged"),),
+            references=(reference("domains", many=True),),
+        )
+
+
+@dataclass(frozen=True)
+class PumpRegistration:
+    """One physical pump, its injection method, and optional relay chain."""
+
+    pump: Pump
+    injectionMethod: SurfacePumpInjector
+    relays: tuple[PlanarPumpRelay, ...] = ()
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "pumpRegistration",
+            references=(
+                reference("pump"),
+                reference("injectionMethod"),
+                reference("relays", many=True),
+            ),
+        )
+
+
+def _simulationTransportDescription():
+    return PrimitiveDescription(
+        "simulation",
+        fields=(
+            transportField("timeStep"),
+            transportField(
+                "simulationSteps",
+                lambda owner: getattr(owner, "_requestedSteps", owner.simulationSteps),
+                optional=True,
+            ),
+            transportField("endTime", optional=True),
+            transportField("prePump"),
+            transportField("executionMode"),
+            transportField("outputSteps", optional=True),
+            transportField("outputFields"),
+            transportField("controlFields"),
+            transportField("currentStep"),
+            transportField("currentTime"),
+        ),
+        references=(
+            reference("opticalComponents", many=True),
+            reference("gainMedium"),
+            reference("exteriorSurface"),
+            reference("excitationState"),
+            reference("phiAse", "phiASE"),
+            reference("timeIntegrationSolver"),
+            reference("pumpRegistrations", "_pumpRegistrations", many=True),
+        ),
+    )
+
+
+class _AseSimulationRequest:
+    """Internal projection of direct ``PhiASE.run`` onto the Simulation graph."""
+
+    def __init__(self, phiAse, gainMedium, initialExcitation):
+        if not gainMedium.components:
+            raise ValueError("PhiASE.run requires a non-empty GainMedium")
+        self.opticalComponents = tuple(gainMedium.components)
+        self.gainMedium = gainMedium
+        self.exteriorSurface = gainMedium.domain.boundary()
+        self.excitationState = ExcitationState.fromValue(initialExcitation, gainMedium)
+        self.phiASE = phiAse
+        self.timeIntegrationSolver = TimeIntegrationSolver("explicit-euler")
+        self._pumpRegistrations = ()
+        self.timeStep = 1.0
+        self.simulationSteps = 1
+        self.endTime = None
+        self.prePump = False
+        self.executionMode = "autonomous"
+        self.outputSteps = None
+        self.outputFields = (
+            "phi_ase",
+            "standard_error",
+            "relative_standard_error",
+            "total_rays",
+            "dndt_ase",
+        )
+        self.controlFields = ()
+        self.currentStep = 0
+        self.currentTime = 0.0
+
+    def _transportDescription(self):
+        return _simulationTransportDescription()
 
 
 
@@ -534,7 +687,11 @@ class Simulation:
         self.initialExcitation = initialExcitation
         self.pump = None
         self.phiASE = phiASE
-        self.timeIntegrationSolver = timeIntegrator
+        self.timeIntegrationSolver = (
+            TimeIntegrationSolver(str(timeIntegrator))
+            if isinstance(timeIntegrator, str)
+            else timeIntegrator
+        )
         self.timeStep = float(timeStepSize)
         self.crossSections = None
         self.endTime = maxTime
@@ -548,6 +705,7 @@ class Simulation:
         )
         self.controlFields = tuple(str(field) for field in controlFields)
         self._pumpRegistrations = []
+        self._legacyPumpRegistrations = []
         self._time = 0.0
         self._step = 0
         self._initialized = False
@@ -608,6 +766,10 @@ class Simulation:
         self.phiASE.crossSections = self.crossSections
         self.phiASE.spectralProperties = self.crossSections
         self._ensureStateArrays()
+        self._refreshExcitationState()
+
+    def _transportDescription(self):
+        return _simulationTransportDescription()
 
     def _resolveSpectralProperties(self):
         if self.phiASE.spectralProperties is not None:
@@ -652,7 +814,8 @@ class Simulation:
             )
             for relay in relays
         )
-        self._pumpRegistrations.append((pump, backendInjection, backendRelays))
+        self._pumpRegistrations.append(PumpRegistration(pump, injectionMethod, relays))
+        self._legacyPumpRegistrations.append((pump, backendInjection, backendRelays))
         self.pump = _PumpProperties(
             sources=tuple(
                 _PumpSource(
@@ -667,7 +830,7 @@ class Simulation:
                     pumpSteps=0 if physical.pump_steps is None else int(physical.pump_steps),
                     rngSeed=int(physical.rng_seed),
                 )
-                for physical, injector, registered_relays in self._pumpRegistrations
+                for physical, injector, registered_relays in self._legacyPumpRegistrations
             ),
         )
         if self.crossSections is None:
@@ -817,13 +980,17 @@ class Simulation:
                 for callback, args, kwargs in self._before_step_callbacks:
                     callback(self, *args, **kwargs)
 
-        states = transport.runSimulation(
-            self,
-            steps=steps,
-            transport=self.phiASE.openpmdBackend,
-            on_state=consume_raw_state,
-            **self.phiASE._transportLaunchOptions(),
-        )
+        self._requestedSteps = steps
+        try:
+            states = transport.runSimulation(
+                self,
+                steps=steps,
+                transport=self.phiASE.openpmdBackend,
+                on_state=consume_raw_state,
+                **self.phiASE._transportLaunchOptions(),
+            )
+        finally:
+            del self._requestedSteps
         transport_seconds = perf_counter() - transport_started if self.reportTimings else 0.0
         if not received_states:
             for raw_state in states:
@@ -847,8 +1014,8 @@ class Simulation:
     def _derived_simulation_steps(self):
         activity_steps = [0 if self.phiASE.ase_steps is None else int(self.phiASE.ase_steps)]
         activity_steps.extend(
-            0 if pump.pump_steps is None else int(pump.pump_steps)
-            for pump, _injector, _relays in self._pumpRegistrations
+            0 if registration.pump.pump_steps is None else int(registration.pump.pump_steps)
+            for registration in self._pumpRegistrations
         )
         derived = max(activity_steps, default=0)
         if derived <= 0:
@@ -881,7 +1048,7 @@ class Simulation:
 
     @property
     def pumps(self):
-        return tuple(physical for physical, _injector, _relays in self._pumpRegistrations)
+        return tuple(registration.pump for registration in self._pumpRegistrations)
 
     def getLastState(self):
         """Return the most recent completed ``TimeStepState`` snapshot."""
@@ -918,6 +1085,28 @@ class Simulation:
                 self._backendGainMedium.get("betaVolume").expectedShape,
                 dtype=np.float64,
             )
+
+    def _refreshExcitationState(self):
+        values = np.asarray(
+            self._backendGainMedium.get("betaVolume").value,
+            dtype=np.float64,
+        ).reshape(-1, order="F")
+        domains = []
+        domainValues = []
+        cellMaps = self._backendGainMedium.__dict__["_domainCellMaps"]
+        for component in self.gainMedium.components:
+            selectedValues = []
+            for topology, mask in component.domain._shards:
+                owner, mapping = cellMaps[id(topology)]
+                if owner is not topology:
+                    raise RuntimeError("gain-medium topology identity changed during lowering")
+                indices = mapping[mask]
+                if np.any(indices < 0):
+                    raise ValueError("gain-medium Domain contains cells outside the executable assembly")
+                selectedValues.extend(values[indices].tolist())
+            domains.append(component.domain)
+            domainValues.append(np.asarray(selectedValues, dtype=np.float64))
+        self.excitationState = ExcitationState(tuple(domains), tuple(domainValues))
 
     def _run_init_callbacks(self):
         if self._initialized:

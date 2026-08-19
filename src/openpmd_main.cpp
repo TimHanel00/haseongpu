@@ -1,9 +1,14 @@
+#include <backend/legacy/LegacyBackendConverter.hpp>
 #include <core/simulation.hpp>
+#include <core/timeSteppedSimulation.hpp>
+#include <openpmd/OpenPmdOutputWriter.hpp>
 #include <openpmd/OpenPmdParser.hpp>
+#include <openpmd/SimulationSnapshotWriter.hpp>
 
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,47 +26,43 @@ namespace
     {
         std::string const prefix = "--" + std::string(name) + "=";
         if(arg.starts_with(prefix))
-        {
             return arg.substr(prefix.size());
-        }
         return std::nullopt;
     }
 
     Paths parsePaths(int argc, char** argv)
     {
         Paths paths;
-        for(int i = 1; i < argc; ++i)
+        for(int index = 1; index < argc; ++index)
         {
-            std::string_view const arg = argv[i];
-            if(auto value = valueFor(arg, "input-path"))
-            {
+            std::string_view const argument = argv[index];
+            if(auto value = valueFor(argument, "input-path"))
                 paths.input = std::string(*value);
-                continue;
-            }
-            if(auto value = valueFor(arg, "output-path"))
-            {
+            else if(auto value = valueFor(argument, "output-path"))
                 paths.output = std::string(*value);
-                continue;
-            }
-            if(arg == "--cpp-control")
-            {
+            else if(argument == "--cpp-control")
                 paths.cppControl = true;
-                continue;
-            }
-            throw std::runtime_error(
-                "Unsupported argument '" + std::string(arg)
-                + "'. calcPhiASE only accepts --input-path, --output-path, and --cpp-control.");
+            else
+                throw std::runtime_error(
+                    "Unsupported argument '" + std::string(argument)
+                    + "'. calcPhiASE only accepts --input-path, --output-path, and --cpp-control.");
         }
-
         if(paths.input.empty())
-        {
             throw std::runtime_error("Missing required --input-path=<openPMD-series>.");
-        }
         if(paths.output.empty())
-        {
             throw std::runtime_error("Missing required --output-path=<openPMD-series>.");
-        }
         return paths;
+    }
+
+    bool isHeadRank()
+    {
+#if defined(MPI_FOUND) && !defined(DISABLE_MPI)
+        int rank = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        return rank == 0;
+#else
+        return true;
+#endif
     }
 } // namespace
 
@@ -69,53 +70,91 @@ int main(int argc, char** argv)
 {
     try
     {
-        auto paths = parsePaths(argc, argv);
+        auto const paths = parsePaths(argc, argv);
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
         MPI_Init(&argc, &argv);
-        hase::openpmd::Parser openPmdParser{paths.input, paths.output, MPI_COMM_WORLD};
+        hase::openpmd::Parser parser{paths.input, MPI_COMM_WORLD};
 #else
-        hase::openpmd::Parser openPmdParser{paths.input, paths.output};
+        hase::openpmd::Parser parser{paths.input};
 #endif
-        if(paths.cppControl)
+        auto input = parser.open();
+        std::unique_ptr<hase::openpmd::OutputWriter> output;
+        if(isHeadRank())
         {
-            // C++ core owns the full pump/ASE/time-integration loop and writes snapshots.
-            openPmdParser.runCoreSimulation();
+#if defined(MPI_FOUND) && !defined(DISABLE_MPI)
+            output = std::make_unique<hase::openpmd::OutputWriter>(paths.output, MPI_COMM_SELF);
+#else
+            output = std::make_unique<hase::openpmd::OutputWriter>(paths.output);
+#endif
+        }
+
+        if(!paths.cppControl)
+        {
+            while(auto iteration = input.next())
+            {
+                auto legacyContext = hase::backend::legacy::LegacyBackendConverter::convert(iteration->simulation);
+                int const status = hase::core::startSimulation<false>(
+                    legacyContext.experiment,
+                    legacyContext.compute,
+                    legacyContext.result,
+                    legacyContext.mesh);
+                if(status != 0)
+                    throw std::runtime_error("simulation failed with return code " + std::to_string(status));
+                if(output)
+                    output->writeResult(iteration->index, legacyContext.result);
+            }
         }
         else
         {
-            // Python or another caller owns request iteration timing; C++ evaluates each request.
-            openPmdParser.processRequestIterations(
-                [](hase::core::SimulationContext& simulation)
+            auto initial = input.next();
+            if(!initial)
+                throw std::runtime_error("No simulation iteration was available in the openPMD input stream.");
+            auto legacyContext = hase::backend::legacy::LegacyBackendConverter::convert(initial->simulation);
+
+            hase::openpmd::AsyncSimulationSnapshotWriter snapshots{
+                output != nullptr,
+                [&](hase::core::SimulationSnapshot const& snapshot)
+                { output->writeSnapshot(snapshot.step - 1u, snapshot); },
+                legacyContext.compute.parallelMode != hase::core::ParallelMode::MPI};
+
+            int const status = hase::core::startTimeSteppedSimulation(
+                legacyContext.experiment,
+                legacyContext.compute,
+                legacyContext.run,
+                legacyContext.mesh,
+                [&](hase::core::SimulationSnapshot const& snapshot) { snapshots.enqueue(snapshot); },
+                [&](unsigned completedStep)
                 {
-                    int const result = hase::core::startSimulation<false>(
-                        simulation.experiment,
-                        simulation.compute,
-                        simulation.result,
-                        simulation.mesh);
-                    if(result != 0)
-                    {
-                        throw std::runtime_error("simulation failed with return code " + std::to_string(result));
-                    }
+                    auto update = input.next();
+                    if(!update || update->index != completedStep)
+                        throw std::runtime_error(
+                            "synchronized-debug expected transport iteration " + std::to_string(completedStep));
+                    auto converted = hase::backend::legacy::LegacyBackendConverter::convert(update->simulation);
+                    return converted.mesh.betaVolume;
                 });
+            snapshots.finish();
+            if(status != 0)
+                throw std::runtime_error("simulation failed with return code " + std::to_string(status));
         }
 
+        input.close();
+        if(output)
+            output->close();
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
         MPI_Finalize();
 #endif
         return 0;
     }
-    catch(std::exception const& e)
+    catch(std::exception const& error)
     {
-        std::cerr << "calcPhiASE failed: " << e.what() << '\n';
+        std::cerr << "calcPhiASE failed: " << error.what() << '\n';
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
-        int mpiInitialized = 0;
-        MPI_Initialized(&mpiInitialized);
-        int mpiFinalized = 0;
-        MPI_Finalized(&mpiFinalized);
-        if(mpiInitialized && !mpiFinalized)
-        {
+        int initialized = 0;
+        int finalized = 0;
+        MPI_Initialized(&initialized);
+        MPI_Finalized(&finalized);
+        if(initialized && !finalized)
             MPI_Finalize();
-        }
 #endif
         return 1;
     }

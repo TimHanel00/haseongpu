@@ -12,6 +12,7 @@ from collections.abc import Iterable
 
 import numpy as np
 
+from hase_transport import PrimitiveDescription, field, reference
 from material_library import Material
 from .geometry import SurfaceOptics
 
@@ -75,6 +76,30 @@ class Domain:
     """
 
     __slots__ = ("entityKind", "_shards")
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "domain",
+            fields=(
+                field("entityKind"),
+                field(
+                    "masks",
+                    lambda owner: tuple(
+                        np.asarray(mask, dtype=np.uint8).reshape(-1)
+                        for _topology, mask in owner._shards
+                    ),
+                    axes=("entity",),
+                    encoding="ragged",
+                ),
+            ),
+            references=(
+                reference(
+                    "topologies",
+                    lambda owner: tuple(topology for topology, _mask in owner._shards),
+                    many=True,
+                ),
+            ),
+        )
 
     def __setattr__(self, name, value):
         if hasattr(self, name):
@@ -310,6 +335,24 @@ class Domain:
         return result
 
 
+class SurfaceOpticsAssignment:
+    """Association between one surface domain and its optical model."""
+
+    def __init__(self, domain, optics):
+        self.domain = domain
+        self.optics = optics
+
+    def __iter__(self):
+        yield self.domain
+        yield self.optics
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "surfaceOpticsAssignment",
+            references=(reference("domain"), reference("optics")),
+        )
+
+
 class OpticalComponent:
     """Assign one optical material to a non-empty volume domain.
 
@@ -407,13 +450,24 @@ class OpticalComponent:
             internal = neighbor >= 0
             if np.any(internal & component_cells[np.maximum(neighbor, 0)]):
                 raise ValueError("surface optics may only target the component boundary")
-        self._surfaceOptics.append((selected, optics))
+        self._surfaceOptics.append(SurfaceOpticsAssignment(selected, optics))
         return self
 
     @property
     def surfaceOptics(self):
         """Immutable sequence of ``(surfaceDomain, SurfaceOptics)`` assignments."""
         return tuple(self._surfaceOptics)
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "opticalComponent",
+            fields=(field("name", optional=True), field("opticalRole", optional=True)),
+            references=(
+                reference("domain"),
+                reference("material"),
+                reference("surfaceOptics", many=True),
+            ),
+        )
 
 
 class GainMedium:
@@ -470,4 +524,18 @@ class GainMedium:
         """Return :attr:`domain`; retained as a compatibility alias."""
         return self.domain
 
-__all__ = ["Domain", "GainMedium", "OpticalComponent", "SURFACE", "VOLUME"]
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "gainMedium",
+            fields=(field("name", optional=True),),
+            references=(reference("components", many=True),),
+        )
+
+__all__ = [
+    "Domain",
+    "GainMedium",
+    "OpticalComponent",
+    "SurfaceOpticsAssignment",
+    "SURFACE",
+    "VOLUME",
+]

@@ -65,21 +65,10 @@ foreach(test_folder ${test_folders})
                 PROPERTIES CUDA_SEPARABLE_COMPILATION ON
             )
             target_link_libraries(${_test_target_name} PUBLIC hase::hase)
-            if(source_file_name STREQUAL "openpmdParserValidation")
-                target_link_libraries(
-                    ${_test_target_name}
-                    PUBLIC Catch2::Catch2
-                )
-                target_compile_definitions(
-                    ${_test_target_name}
-                    PRIVATE HASE_OPENPMD_PARSER_VALIDATION_CUSTOM_MAIN
-                )
-            else()
-                target_link_libraries(
-                    ${_test_target_name}
-                    PUBLIC Catch2::Catch2WithMain
-                )
-            endif()
+            target_link_libraries(
+                ${_test_target_name}
+                PUBLIC Catch2::Catch2WithMain
+            )
             target_compile_definitions(
                 ${_test_target_name}
                 PRIVATE

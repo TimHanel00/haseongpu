@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from hase_transport import PrimitiveDescription, field as transportField, reference
 from .geometry import OpenPmdScalarField
 from .openpmd import fieldSpec
 
@@ -350,6 +351,15 @@ class PumpSpectrum:
     wavelengths: object
     weights: object
 
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "pumpSpectrum",
+            fields=(
+                transportField("wavelengths", axes=("spectralSample",)),
+                transportField("weights", axes=("spectralSample",)),
+            ),
+        )
+
     def __post_init__(self):
         wavelengths = np.asarray(self.wavelengths, dtype=np.float64).reshape(-1)
         weights = _positive_normalized(self.weights, "pump spectrum weights")
@@ -372,6 +382,16 @@ class PumpAngularDistribution:
     polar_angles: object
     azimuthal_angles: object
     weights: object
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "pumpAngularDistribution",
+            fields=(
+                transportField("polarAngles", "polar_angles", axes=("angularSample",)),
+                transportField("azimuthalAngles", "azimuthal_angles", axes=("angularSample",)),
+                transportField("weights", axes=("angularSample",)),
+            ),
+        )
 
     def __post_init__(self):
         polar = np.asarray(self.polar_angles, dtype=np.float64).reshape(-1)
@@ -416,6 +436,9 @@ class UniformPumpProfile:
 
     kind: str = field(default="uniform", init=False)
 
+    def _transportDescription(self):
+        return PrimitiveDescription("uniformPumpProfile", fields=(transportField("kind"),))
+
 
 @dataclass(frozen=True)
 class SuperGaussianPumpProfile:
@@ -428,6 +451,20 @@ class SuperGaussianPumpProfile:
     axis_u: object = (1.0, 0.0, 0.0)
     axis_v: object = (0.0, 1.0, 0.0)
     kind: str = field(default="super-gaussian", init=False)
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "superGaussianPumpProfile",
+            fields=(
+                transportField("kind"),
+                transportField("radiusU", "radius_u"),
+                transportField("radiusV", "radius_v"),
+                transportField("exponent"),
+                transportField("center", axes=("coordinate",)),
+                transportField("axisU", "axis_u", axes=("coordinate",)),
+                transportField("axisV", "axis_v", axes=("coordinate",)),
+            ),
+        )
 
     def __post_init__(self):
         radius_v = self.radius_u if self.radius_v is None else self.radius_v
@@ -481,6 +518,23 @@ class Pump:
     profile: object = field(default_factory=UniformPumpProfile)
     angular_distribution: PumpAngularDistribution = field(default_factory=PumpAngularDistribution.collimated)
     name: str | None = None
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "pump",
+            fields=(
+                transportField("totalPower", "total_power"),
+                transportField("rayCount", "ray_count"),
+                transportField("pumpSteps", "pump_steps", optional=True),
+                transportField("rngSeed", "rng_seed"),
+                transportField("name", optional=True),
+            ),
+            references=(
+                reference("spectrum"),
+                reference("profile"),
+                reference("angularDistribution", "angular_distribution"),
+            ),
+        )
 
     def __post_init__(self):
         if not np.isfinite(self.total_power) or self.total_power <= 0.0:
@@ -557,6 +611,12 @@ class SurfacePumpInjector:
 
     surface_domains: object
 
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "surfacePumpInjector",
+            references=(reference("surfaceDomains", "surface_domains", many=True),),
+        )
+
     def __post_init__(self):
         from .physical import Domain
 
@@ -589,6 +649,24 @@ class PlanarPumpRelay:
     magnification: float = 1.0
     transmission: float = 1.0
     """Dimensionless relay throughput; one means lossless return reinjection."""
+
+    def _transportDescription(self):
+        return PrimitiveDescription(
+            "planarPumpRelay",
+            fields=(
+                transportField("flipU", "flip_u"),
+                transportField("flipV", "flip_v"),
+                transportField("rotation"),
+                transportField("offset", axes=("coordinate",)),
+                transportField("tilt", axes=("coordinate",)),
+                transportField("magnification"),
+                transportField("transmission"),
+            ),
+            references=(
+                reference("exitDomains", "exit_domains", many=True),
+                reference("entryDomains", "entry_domains", many=True),
+            ),
+        )
 
     def __post_init__(self):
         from .physical import Domain
