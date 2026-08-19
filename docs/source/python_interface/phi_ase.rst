@@ -23,12 +23,13 @@ evolving excitation state.
    )
 
 Normal applications pass it to ``Simulation``. The direct ``run`` entry point
-is a low-level backend interface and accepts an already lowered medium plus
-``CrossSectionData``:
+accepts the same physical ``GainMedium`` graph. Spectra are obtained from the
+``Material`` referenced by its ``OpticalComponent`` objects; ``PhiASE`` does
+not create a second transport copy:
 
 .. code-block:: python
 
-   phi_ase.run(gainMedium=medium, crossSections=spectra)
+   phi_ase.run(gainMedium=medium, initialExcitation=0.25)
    result = phi_ase.getResults()
    phi = np.asarray(result.phiAse)
 
