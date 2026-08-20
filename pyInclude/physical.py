@@ -20,6 +20,15 @@ from .geometry import SurfaceOptics
 VOLUME = "volume"
 SURFACE = "surface"
 
+_TETRAHEDRON_FACES = np.asarray(
+    ((0, 1, 2), (0, 3, 1), (0, 2, 3), (1, 3, 2)),
+    dtype=np.int64,
+)
+_TETRAHEDRON_EDGES = np.asarray(
+    ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)),
+    dtype=np.int64,
+)
+
 
 def _numberOfCells(topology):
     try:
@@ -43,6 +52,96 @@ def _neighborCells(topology):
             f"(numberOfCells, numberOfFacesPerCell), got {neighbors.shape}"
         )
     return neighbors
+
+
+def _selectedTetrahedra(topology, selected):
+    try:
+        points = np.asarray(topology.points, dtype=np.float64)
+        cells = np.asarray(topology.cellPointIndices, dtype=np.int64)
+    except AttributeError as exc:
+        raise TypeError(
+            "cross-topology overlap validation requires points and cellPointIndices"
+        ) from exc
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("cross-topology overlap validation requires three-dimensional points")
+    if cells.ndim != 2 or cells.shape[1] != 4:
+        raise NotImplementedError(
+            "cross-topology overlap validation currently supports Tet4 cells"
+        )
+    return points[cells[np.flatnonzero(selected)]]
+
+
+def _hasPositiveTetrahedronIntersection(left, right, tolerance):
+    leftEdges = left[_TETRAHEDRON_EDGES[:, 1]] - left[_TETRAHEDRON_EDGES[:, 0]]
+    rightEdges = right[_TETRAHEDRON_EDGES[:, 1]] - right[_TETRAHEDRON_EDGES[:, 0]]
+    leftFaces = left[_TETRAHEDRON_FACES]
+    rightFaces = right[_TETRAHEDRON_FACES]
+    axes = [
+        *np.cross(leftFaces[:, 1] - leftFaces[:, 0], leftFaces[:, 2] - leftFaces[:, 0]),
+        *np.cross(rightFaces[:, 1] - rightFaces[:, 0], rightFaces[:, 2] - rightFaces[:, 0]),
+        *(np.cross(leftEdge, rightEdge) for leftEdge in leftEdges for rightEdge in rightEdges),
+    ]
+    for axis in axes:
+        norm = float(np.linalg.norm(axis))
+        if norm <= tolerance:
+            continue
+        direction = axis / norm
+        leftProjection = left @ direction
+        rightProjection = right @ direction
+        penetration = min(leftProjection.max(), rightProjection.max()) - max(
+            leftProjection.min(), rightProjection.min()
+        )
+        if penetration <= tolerance:
+            return False
+    return True
+
+
+def validateComponentOverlap(components):
+    """Reject shared cells or positive-volume cross-topology intersections.
+
+    Coincident vertices, edges, and faces have zero penetration and are valid
+    component contacts.
+    """
+    components = tuple(components)
+    for leftIndex, left in enumerate(components):
+        for right in components[leftIndex + 1 :]:
+            for leftTopology, leftMask in left.domain._shards:
+                for rightTopology, rightMask in right.domain._shards:
+                    if leftTopology is rightTopology:
+                        if np.any(leftMask & rightMask):
+                            raise ValueError(
+                                "OpticalComponent volume domains must not overlap"
+                            )
+                        continue
+                    leftTetrahedra = _selectedTetrahedra(leftTopology, leftMask)
+                    rightTetrahedra = _selectedTetrahedra(rightTopology, rightMask)
+                    if not leftTetrahedra.size or not rightTetrahedra.size:
+                        continue
+                    scale = max(
+                        1.0,
+                        float(np.max(np.abs(leftTetrahedra))),
+                        float(np.max(np.abs(rightTetrahedra))),
+                    )
+                    tolerance = scale * 1.0e-12
+                    rightMinimum = rightTetrahedra.min(axis=1)
+                    rightMaximum = rightTetrahedra.max(axis=1)
+                    for leftTetrahedron in leftTetrahedra:
+                        leftMinimum = leftTetrahedron.min(axis=0)
+                        leftMaximum = leftTetrahedron.max(axis=0)
+                        candidates = np.flatnonzero(
+                            np.all(rightMaximum > leftMinimum + tolerance, axis=1)
+                            & np.all(rightMinimum < leftMaximum - tolerance, axis=1)
+                        )
+                        for candidate in candidates:
+                            if _hasPositiveTetrahedronIntersection(
+                                leftTetrahedron,
+                                rightTetrahedra[candidate],
+                                tolerance,
+                            ):
+                                raise ValueError(
+                                    "OpticalComponent volumes from different topologies "
+                                    "must not overlap with positive volume"
+                                )
 
 
 def _entity_shape(topology, entityKind):
@@ -393,10 +492,6 @@ class OpticalComponent:
         """Volume region occupied by this optical component."""
         return self._domain
 
-    def getDomain(self):
-        """Return :attr:`domain`; retained as a compatibility alias."""
-        return self.domain
-
     @property
     def exteriorCells(self):
         """Volume cells touching the boundary of this component domain."""
@@ -411,11 +506,6 @@ class OpticalComponent:
             cells = selected & np.any(local_boundary, axis=1)
             result = result + Domain(entityKind=VOLUME, topology=topology, mask=cells)
         return result
-
-    @property
-    def exteriorTets(self):
-        """Compatibility alias for :attr:`exteriorCells`."""
-        return self.exteriorCells
 
     def assignSurfaceOptics(self, domain, optics):
         """Assign an optical boundary model to part of the component surface.
@@ -438,6 +528,12 @@ class OpticalComponent:
             raise ValueError("surface optics require a non-empty surface Domain")
         if not isinstance(optics, SurfaceOptics):
             raise TypeError("optics must be SurfaceOptics")
+        for existing in self._surfaceOptics:
+            for topology, faces in selected._shards:
+                if np.any(faces & existing.domain.maskFor(topology)):
+                    raise ValueError(
+                        "surface-optics assignments must not overlap on the same face"
+                    )
         for topology, faces in selected._shards:
             component_cells = self._domain.maskFor(topology)
             if not np.any(component_cells):
@@ -520,10 +616,6 @@ class GainMedium:
             return Domain(entityKind=VOLUME)
         return Domain(component.domain for component in self._components)
 
-    def getDomain(self):
-        """Return :attr:`domain`; retained as a compatibility alias."""
-        return self.domain
-
     def _transportDescription(self):
         return PrimitiveDescription(
             "gainMedium",
@@ -538,4 +630,5 @@ __all__ = [
     "SurfaceOpticsAssignment",
     "SURFACE",
     "VOLUME",
+    "validateComponentOverlap",
 ]

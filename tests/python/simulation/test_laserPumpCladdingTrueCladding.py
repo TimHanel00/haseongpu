@@ -23,7 +23,7 @@ from HASEonGPU import (
     units,
 )
 from alpaka_backend_matrix import alpaka_runtime_backend
-from pyInclude.lowering import lowerGainMedium
+from pyInclude.frontendState import projectFrontendState
 
 
 repoRoot = Path(__file__).resolve().parents[3]
@@ -124,7 +124,7 @@ def _tet_types(reference):
     return np.repeat(reference["wedgeCladdingCellTypes"], 3).astype(np.uint32)
 
 
-def _make_current_medium(reference, absorptionCoefficient):
+def _make_current_medium(reference, bulkAttenuation):
     metadata = reference["metadata"]["material"]
     active = Material(
         materialName="Yb:YAG regression material",
@@ -146,7 +146,7 @@ def _make_current_medium(reference, absorptionCoefficient):
         fluorescenceLifetime=None,
         crossSections=None,
         active=False,
-        absorptionCoefficient=absorptionCoefficient / units.cm,
+        bulkAttenuation=bulkAttenuation / units.cm,
     )
     components, _bottom, _top = laserPumpCladding.laserPumpCladdingComponents(
         active,
@@ -163,7 +163,7 @@ def _make_current_medium(reference, absorptionCoefficient):
 
     # PhiASE source selection and propagation use only per-cell betaVolume;
     # cladding cells have exactly zero source.
-    backend, crossSections = lowerGainMedium(
+    backend, crossSections = projectFrontendState(
         medium,
         {component.domain: np.full(np.count_nonzero(~claddingMask), gain_beta)},
         opticalComponents=components,
@@ -276,10 +276,10 @@ def currentTrueCladdingResults(trueCladdingReference, openPmdFileBackend):
     reference = trueCladdingReference
     material = reference["metadata"]["material"]
     results = []
-    for absorptionCoefficient in material["claddingAbsorptions"]:
+    for bulkAttenuation in material["claddingAbsorptions"]:
         medium, cross_sections, _claddingDomain = _make_current_medium(
             reference,
-            absorptionCoefficient,
+            bulkAttenuation,
         )
         phi_ase = PhiASE(
             crossSections=cross_sections,
@@ -305,7 +305,7 @@ def currentTrueCladdingResults(trueCladdingReference, openPmdFileBackend):
         assert relative_standard_error.shape == phi.shape
         results.append(
             {
-                "absorptionCoefficient": absorptionCoefficient,
+                "bulkAttenuation": bulkAttenuation,
                 "phiASE": phi,
                 "integrals": _partitioned_tet_integrals(medium.topology, tet_types, phi),
                 "relativeStandardError": relative_standard_error,
@@ -329,7 +329,7 @@ def testCurrentTrueCladdingPhiAseMatchesLegacyTotalIntegral(
             legacy["total"],
             rtol=0.05,
             atol=0.0,
-            err_msg=f"absorptionCoefficient={current['absorptionCoefficient']}",
+            err_msg=f"bulkAttenuation={current['bulkAttenuation']}",
         )
 
     legacy_no_absorption = reference["metadata"]["diagnostics"][0]["integrals"]["total"]

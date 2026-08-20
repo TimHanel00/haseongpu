@@ -68,7 +68,7 @@ def testSimulationRunUsesOpenPmdTransportAndStoresResults(
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
-        spectralProperties=crossSections,
+        crossSections=crossSections,
         repetitions=1,
         adaptiveSteps=1,
         parallelMode="single",
@@ -109,7 +109,7 @@ def testPhiAseRejectsUnavailableAlpakaBackendBeforeTransport(
 
     phi_ase = PhiASE(
         backend="Host_Cpu_CpuOmpBlocks",
-        spectralProperties=crossSections,
+        crossSections=crossSections,
     )
     with pytest.raises(RuntimeError, match="Host_Cpu_CpuOmpBlocks") as error:
         phi_ase.run(gainMedium=smallGainMedium)
@@ -140,7 +140,7 @@ def testPhiAseRejectsUnavailableOpenPmdBackendBeforeTransport(
     phi_ase = PhiASE(
         backend="Host_Cpu_CpuSerial",
         openpmdBackend="hdf5",
-        spectralProperties=crossSections,
+        crossSections=crossSections,
     )
     with pytest.raises(RuntimeError, match="available backends: adios, adios-sst"):
         phi_ase.run(gainMedium=smallGainMedium)
@@ -271,7 +271,7 @@ def testPhiAseMpiRunUsesOpenPmdTransportMetadata(
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
-        spectralProperties=crossSections,
+        crossSections=crossSections,
         parallelMode="mpi",
         numDevices=4,
         nPerNode=2,
@@ -346,7 +346,7 @@ def testPhiAseRunUsesProvidedOpenPmdSession(
 
     PhiASE.fromYaml(
         phiAseTestConfigPath,
-        spectralProperties=crossSections,
+        crossSections=crossSections,
     ).run(gainMedium=smallGainMedium, openpmdSession=openpmdSession)
 
     assert captured["openpmdSession"] is openpmdSession
@@ -375,7 +375,7 @@ def testPhiAseRunForwardsConfiguredOpenPmdBackend(
     PhiASE(
         backend="Host_Cpu_CpuSerial",
         openpmdBackend="hdf5",
-        spectralProperties=crossSections,
+        crossSections=crossSections,
     ).run(gainMedium=smallGainMedium)
 
     assert captured == {"transport": "hdf5", "openpmdSession": None}
@@ -411,7 +411,7 @@ def testPhiAsePersistentOpenPmdSessionCanBeOpenedReusedAndClosed(
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
-        spectralProperties=crossSections,
+        crossSections=crossSections,
     )
     assert phiAse.openStream(transport="adios-sst") is openpmdSession
     phiAse.run(gainMedium=smallGainMedium, openpmdSession="persistent")
@@ -456,7 +456,7 @@ def testPhiAseIntervalOpenPmdSessionUsesOneShotTransport(
 
     PhiASE.fromYaml(
         phiAseTestConfigPath,
-        spectralProperties=crossSections,
+        crossSections=crossSections,
     ).run(gainMedium=smallGainMedium, openpmdSession="interval")
 
     assert captured["openpmdSession"] is None

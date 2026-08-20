@@ -62,5 +62,7 @@ namespace hase::backend
         static Simulation fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);
+
+        void updateFromTransport(transport::TransportReader const& reader, transport::TransportPath const& prefix);
     };
 } // namespace hase::backend

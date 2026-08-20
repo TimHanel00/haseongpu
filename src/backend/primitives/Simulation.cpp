@@ -1,5 +1,7 @@
 #include <backend/primitives/Simulation.hpp>
 
+#include <stdexcept>
+
 namespace hase::backend
 {
     Simulation Simulation::fromTransport(
@@ -26,5 +28,23 @@ namespace hase::backend
         reader.assign(result.timeIntegrationSolver, prefix, FieldName::timeIntegrationSolver);
         reader.assign(result.pumpRegistrations, prefix, FieldName::pumpRegistrations);
         return result;
+    }
+
+    void Simulation::updateFromTransport(
+        transport::TransportReader const& reader,
+        transport::TransportPath const& prefix)
+    {
+        if(!reader.dynamicOnly())
+            throw std::runtime_error("a full transport iteration cannot be applied as a dynamic update");
+        if(!excitationState)
+            throw std::runtime_error("simulation has no excitation state to update");
+        reader.prefetch(prefix);
+        reader.assign(currentStep, prefix, FieldName::currentStep);
+        reader.assign(currentTime, prefix, FieldName::currentTime);
+        auto const paths = reader.referencePaths(prefix.child(FieldName::excitationState).string());
+        if(paths.size() != 1u)
+            throw std::runtime_error("dynamic simulation update requires one excitation-state reference");
+        auto const statePath = transport::TransportPath{paths.front()};
+        reader.assign(excitationState->values, statePath, ExcitationState::FieldName::values);
     }
 } // namespace hase::backend

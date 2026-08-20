@@ -79,7 +79,8 @@ TEST_CASE("legacy converter lowers the primitive graph at one boundary", "[trans
     simulation.phiAse = phiAse;
     simulation.timeIntegrationSolver = solver;
 
-    auto converted = hase::backend::legacy::LegacyBackendConverter::convert(simulation);
+    auto conversion = hase::backend::legacy::LegacyBackendConverter::convertWithUpdates(simulation);
+    auto& converted = conversion.context;
 
     CHECK(converted.mesh.numberOfCells == 1u);
     CHECK(converted.mesh.numberOfMeshPoints == 4u);
@@ -90,6 +91,10 @@ TEST_CASE("legacy converter lowers the primitive graph at one boundary", "[trans
     CHECK(converted.experiment.sigmaE.front() == Catch::Approx(2.1e-20));
     CHECK(converted.run.numberOfSteps == 2u);
     CHECK(converted.run.timeIntegration.method == "explicit-euler");
+
+    excitation->values.values = {0.75};
+    conversion.excitation.apply(*excitation, converted.mesh.betaVolume);
+    CHECK(converted.mesh.betaVolume == std::vector<double>{0.75});
 }
 
 TEST_CASE("legacy converter assembles independent domain-local topology shards", "[transport][legacy][partition]")

@@ -49,10 +49,10 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC int immediateExitFace(
-        hase::core::DeviceMeshView const& mesh,
+        core::DeviceMeshView const& mesh,
         unsigned const tet,
-        hase::core::Point const point,
-        hase::core::Point const direction,
+        core::Point const point,
+        core::Point const direction,
         int const forbiddenFace)
     {
         for(unsigned localFace = 0u; localFace < mesh.numberOfFacesPerCell; ++localFace)
@@ -72,11 +72,11 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition recoverFaceTransition(
-        hase::core::DeviceMeshView const& mesh,
+        core::DeviceMeshView const& mesh,
         unsigned cell,
         int exitFace,
-        hase::core::Point const point,
-        hase::core::Point const direction)
+        core::Point const point,
+        core::Point const direction)
     {
         Tet4FaceTransition result{cell};
         constexpr unsigned invalidCell = std::numeric_limits<unsigned>::max();

@@ -67,11 +67,11 @@ An ``OpticalComponent`` accepts one non-empty volume domain and one material:
        SurfaceOptics(reflectivity=0.0, n_inside=1.83, n_outside=1.0),
    )
 
-``component.domain`` is the component's volume selection. ``getDomain()`` is a
-compatibility alias. ``exteriorCells`` returns selected cells touching the
+``component.domain`` is the component's volume selection. ``exteriorCells``
+returns selected cells touching the
 component boundary, including an interface produced by selecting only part of
-a shared topology; ``exteriorTets`` remains as a compatibility alias. Surface
-optics must target a surface domain on the component boundary.
+a shared topology. Surface optics must target a surface domain on the component
+boundary.
 
 Components in one simulation must not overlap. Gain and cladding therefore
 partition the mesh: the gain component selects the active cells and the
@@ -133,9 +133,8 @@ Pass an explicit surface to override that inference.
 
 Excitation is defined only over active ``GainMedium`` components; passive cells
 are initialized to zero during lowering and do not acquire an excited-state
-population. A passive material may define ``bulkAttenuation`` (or the exact
-``absorptionCoefficient`` alias) for volumetric loss. Omitting it selects zero
-bulk loss.
+population. A passive material may define ``bulkAttenuation`` for volumetric
+loss. Omitting it selects zero bulk loss.
 
 Backend limits
 --------------

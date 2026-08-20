@@ -4,7 +4,12 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Lower the public physical graph to the current single-material backend."""
+"""Build the legacy Python-side state view used by callbacks and diagnostics.
+
+Compiled execution does not consume this projection. The C++
+``LegacyBackendConverter`` is the sole executable lowering of the transported
+physical graph.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ from hase_units import units
 from .geometry import VolumeTopology
 from .geometry.core import GainMedium as _BackendGainMedium
 from .laser import CrossSectionData
-from .physical import Domain, GainMedium, SURFACE, VOLUME
+from .physical import Domain, GainMedium, SURFACE, VOLUME, validateComponentOverlap
 
 
 def _validateComponents(gainMedium, opticalComponents=None):
@@ -29,13 +34,7 @@ def _validateComponents(gainMedium, opticalComponents=None):
         raise ValueError("Simulation requires at least one OpticalComponent")
     if any(component not in components for component in gainMedium.components):
         raise ValueError("every GainMedium component must belong to the optical assembly")
-    occupied = {}
-    for component in components:
-        for topology, mask in component.domain._shards:
-            previous = occupied.setdefault(id(topology), np.zeros_like(mask, dtype=bool))
-            if np.any(previous & mask):
-                raise ValueError("OpticalComponent volume domains must not overlap")
-            previous |= mask
+    validateComponentOverlap(components)
     material = gainMedium.components[0].material
     if any(component.material is not material for component in gainMedium.components[1:]):
         raise NotImplementedError(
@@ -99,7 +98,7 @@ def _combineTopology(domain):
         np.concatenate(cells),
         cellDomains=np.concatenate(cell_domains),
         faceBoundaries=np.concatenate(face_boundaries),
-        metadata={"source": "OpticalComponent domain lowering"},
+        metadata={"source": "OpticalComponent frontend state projection"},
     )
     return combined, cell_maps
 
@@ -165,8 +164,8 @@ def _crossSections(material):
     )
 
 
-def lowerSurfaceDomain(backendGainMedium, domain):
-    """Assign a stable backend surface tag for one typed surface Domain."""
+def projectSurfaceDomain(backendGainMedium, domain):
+    """Assign a stable diagnostic surface tag in the frontend state view."""
     selected = domain if isinstance(domain, Domain) else Domain(domain)
     if selected.entityKind != SURFACE or selected.isEmpty:
         raise ValueError("pump and optics selections require a non-empty surface Domain")
@@ -183,22 +182,22 @@ def lowerSurfaceDomain(backendGainMedium, domain):
     for topology, faces in selected._shards:
         entry = cell_maps.get(id(topology))
         if entry is None or entry[0] is not topology:
-            raise ValueError("surface Domain is outside the executable GainMedium")
+            raise ValueError("surface Domain is outside the frontend state view")
         rows, local_faces = np.nonzero(faces)
         mapped = entry[1][rows]
         if np.any(mapped < 0):
-            raise ValueError("surface Domain is outside the executable GainMedium")
+            raise ValueError("surface Domain is outside the frontend state view")
         backendGainMedium.topology.faceBoundaries[mapped, local_faces] = identifier
     cache[key] = identifier
     return identifier
 
 
-def lowerGainMedium(gainMedium, initialExcitation=0.0, *, opticalComponents=None):
-    """Lower one active medium within its complete optical-component assembly.
+def projectFrontendState(gainMedium, initialExcitation=0.0, *, opticalComponents=None):
+    """Project one assembly for Python callbacks and legacy diagnostics.
 
     Public domains may use any compatible mesh representation. The current
-    executable backend accepts Tet4 :class:`VolumeTopology` bindings only and
-    rejects other discretizations here rather than in the physical graph.
+    frontend state containers represent Tet4 :class:`VolumeTopology` bindings
+    only. Runtime validation and physical lowering remain owned by C++.
     """
     material, components, passive = _validateComponents(gainMedium, opticalComponents)
     assembly_domain = Domain(component.domain for component in components)
@@ -242,11 +241,11 @@ def lowerGainMedium(gainMedium, initialExcitation=0.0, *, opticalComponents=None
     optics = {}
     for component in components:
         for selected, surfaceOptics in component.surfaceOptics:
-            identifier = lowerSurfaceDomain(backend, selected)
+            identifier = projectSurfaceDomain(backend, selected)
             optics[identifier] = surfaceOptics
     if optics:
         backend.with_surface_optics(optics)
     return backend, _crossSections(material)
 
 
-__all__ = ["lowerGainMedium", "lowerSurfaceDomain"]
+__all__ = ["projectFrontendState", "projectSurfaceDomain"]

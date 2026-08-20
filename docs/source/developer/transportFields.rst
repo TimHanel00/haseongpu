@@ -64,6 +64,28 @@ The generic graph composer, openPMD writer, and top-level parser obtain the
 field through these primitive declarations and require no field-specific
 change.
 
+The explicit backend member is the primitive's typed contract. ``assign`` is
+the semantic reader customization point: it preserves optional, array,
+ragged-array, reference, and scalar behavior without making the primitive
+depend on openPMD. Keeping the transport name in ``FieldName`` also lets the
+compiler diagnose member/type changes independently of the frontend writer.
+
+Dynamic fields
+--------------
+
+Mark fields that may change during synchronized control exchange with
+``dynamic=True``:
+
+.. code-block:: python
+
+   transportField("currentStep", dynamic=True),
+
+Transport iteration zero writes the full graph. Later dynamic iterations omit
+all fields without this declaration. The owning C++ primitive must provide an
+update path that assigns only its declared dynamic members into an existing
+backend context; do not reconstruct static topology or material state for a
+control update.
+
 Optional fields
 ---------------
 
@@ -174,5 +196,5 @@ Run the focused tests extended for the field:
    python3 -m pytest tests/python/transport/test_description.py --tb=short
    cmake --build build/<task> --target tests_transportReader
    ctest --test-dir build/<task> \
-     -R '^tests_transportReader$' \
+     -R '^transport reader' \
      --output-on-failure

@@ -599,6 +599,9 @@ def _write_input_iteration(
     series,
     iteration_index,
     root,
+    *,
+    dynamic_only=False,
+    graph=None,
 ):
     refresh = getattr(root, "_refreshExcitationState", None)
     if refresh is not None:
@@ -607,7 +610,12 @@ def _write_input_iteration(
     iteration.time = float(getattr(root, "currentTime", 0.0))
     iteration.dt = float(getattr(root, "timeStep", 1.0))
     iteration.time_unit_SI = 1.0
-    writeGraph(iteration, TransportComposer().compose(root), _io())
+    writeGraph(
+        iteration,
+        TransportComposer().compose(root) if graph is None else graph,
+        _io(),
+        dynamicOnly=dynamic_only,
+    )
     iteration.close()
 
 
@@ -619,6 +627,8 @@ class OpenPmdInputSeries:
         self.backend = backend
         self._series = None
         self._next_iteration = 0
+        self._graph = None
+        self._root = None
 
     def __enter__(self):
         if self.backend is not None:
@@ -635,11 +645,23 @@ class OpenPmdInputSeries:
         root,
         *,
         iteration_index=None,
+        dynamic_only=False,
     ):
         if self._series is None:
             raise RuntimeError("OpenPmdInputSeries must be used as a context manager before writing")
+        if self._graph is None:
+            self._graph = TransportComposer().compose(root)
+            self._root = root
+        elif root is not self._root:
+            raise ValueError("one OpenPmdInputSeries cannot change its transport root")
         index = self._next_iteration if iteration_index is None else int(iteration_index)
-        _write_input_iteration(self._series, index, root)
+        _write_input_iteration(
+            self._series,
+            index,
+            root,
+            dynamic_only=dynamic_only,
+            graph=self._graph,
+        )
         self._next_iteration = max(self._next_iteration, index + 1)
         return index
 
@@ -647,6 +669,8 @@ class OpenPmdInputSeries:
         if self._series is not None:
             self._series.close()
             self._series = None
+            self._graph = None
+            self._root = None
 
 
 
@@ -1322,7 +1346,11 @@ def _run_streaming_simulation(
                                 f"synchronized-debug expected completed step {expected_step}, "
                                 f"received {completed_step}"
                             )
-                        writer.write(simulation, iteration_index=completed_step)
+                        writer.write(
+                            simulation,
+                            iteration_index=completed_step,
+                            dynamic_only=True,
+                        )
                         control_ack_queue.put(completed_step)
                     backend_finished.wait()
             input_queue.put((True, None))

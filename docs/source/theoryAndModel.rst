@@ -45,7 +45,7 @@ mapping is the bridge between a physical model and a runnable input:
      - ``component.material.crossSections``
      - Wavelength-dependent absorption and emission cross sections.
    * - :math:`\alpha_{\mathrm{bulk}}`
-     - ``passiveComponent.material.absorptionCoefficient``
+     - ``passiveComponent.material.bulkAttenuation``
      - Constant passive intensity attenuation coefficient.
    * - :math:`\Phi_j`
      - ``TimeStepState.phiAse``
@@ -129,8 +129,8 @@ Cells belonging to a passive optical component instead use
    g_j = -\alpha_{\mathrm{bulk}}.
 
 The frontend obtains this coefficient from the passive material's
-``bulkAttenuation`` or its material-facing alias ``absorptionCoefficient``, then
-converts it to the legacy backend field ``claddingAbsorption``. The material
+``bulkAttenuation``, then converts it to the legacy backend field
+``claddingAbsorption``. The material
 coefficient is constant and wavelength-independent in the current backend; it
 is distinct from the active-ion absorption cross section
 :math:`\sigma_a(\lambda)`. An omitted coefficient contributes

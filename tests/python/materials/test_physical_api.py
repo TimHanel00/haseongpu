@@ -4,8 +4,15 @@ import pytest
 from hase_units import units
 from material_library import CrossSectionTable, Material
 from pyInclude.geometry import SurfaceOptics, VolumeTopology
-from pyInclude.physical import Domain, GainMedium, OpticalComponent, SURFACE, VOLUME
-from pyInclude.lowering import lowerGainMedium
+from pyInclude.physical import (
+    Domain,
+    GainMedium,
+    OpticalComponent,
+    SURFACE,
+    VOLUME,
+    validateComponentOverlap,
+)
+from pyInclude.frontendState import projectFrontendState
 from pyInclude.simulation import PhiASE, Simulation
 from pyInclude.timeIntegration import ExplicitEuler
 
@@ -28,6 +35,18 @@ def topology(offset=0.0):
     )
 
 
+def singleTetrahedron(offset=0.0):
+    return VolumeTopology.fromTetrahedra(
+        np.asarray(
+            [
+                [offset + 0.0, 0.0, 0.0],
+                [offset + 1.0, 0.0, 0.0],
+                [offset + 0.0, 1.0, 0.0],
+                [offset + 0.0, 0.0, 1.0],
+            ]
+        ),
+        [[0, 1, 2, 3]],
+    )
 class HexRegionTopology:
     """Minimal six-face topology used to exercise the generic domain layer."""
 
@@ -129,7 +148,6 @@ def test_components_may_span_regions_or_select_a_shared_mesh():
     assert all(component.opticalRole == "gainElement" for component in medium.components)
     assert len(medium.domain.topologies) == 2
     np.testing.assert_array_equal(left.exteriorCells.maskFor(mesh), [True, False])
-    np.testing.assert_array_equal(left.exteriorTets.maskFor(mesh), [True, False])
 
 
 def test_one_component_may_span_independent_domain_bindings():
@@ -140,7 +158,7 @@ def test_one_component_may_span_independent_domain_bindings():
     assert len(component.domain.topologies) == 2
 
 
-def test_domain_frontend_accepts_non_tet_regions_but_lowering_rejects_them():
+def test_domain_frontend_accepts_non_tet_regions_but_state_projection_rejects_them():
     topology = HexRegionTopology()
     complete = Domain.fromTopology(topology)
     component = OpticalComponent(domain=complete, material=material())
@@ -148,7 +166,7 @@ def test_domain_frontend_accepts_non_tet_regions_but_lowering_rejects_them():
     assert complete.maskFor(topology).tolist() == [True, True]
     assert np.count_nonzero(complete.boundary().maskFor(topology)) == 10
     with pytest.raises(NotImplementedError, match="Tet4 VolumeTopology"):
-        lowerGainMedium(GainMedium([component]))
+        projectFrontendState(GainMedium([component]))
 
 
 def test_component_surface_optics_must_target_its_boundary():
@@ -161,6 +179,25 @@ def test_component_surface_optics_must_target_its_boundary():
 
     assert component.assignSurfaceOptics(exterior, SurfaceOptics(reflectivity=0.5)) is component
     assert len(component.surfaceOptics) == 1
+    with pytest.raises(ValueError, match="must not overlap"):
+        component.assignSurfaceOptics(exterior, SurfaceOptics(reflectivity=0.25))
+
+
+def test_components_on_different_topologies_may_touch_but_not_overlap():
+    leftTopology = singleTetrahedron()
+    touchingTopology = singleTetrahedron(1.0)
+    overlappingTopology = singleTetrahedron(1.0 - 1.0e-6)
+    left = OpticalComponent(material=material(), domain=Domain.fromTopology(leftTopology))
+    touching = OpticalComponent(
+        material=material(), domain=Domain.fromTopology(touchingTopology)
+    )
+    overlapping = OpticalComponent(
+        material=material(), domain=Domain.fromTopology(overlappingTopology)
+    )
+
+    validateComponentOverlap((left, touching))
+    with pytest.raises(ValueError, match="positive volume"):
+        validateComponentOverlap((left, overlapping))
 
 
 def test_resolved_material_remains_mutable_and_revalidatable():
@@ -184,7 +221,7 @@ def test_material_activity_is_authoritative_for_population_dynamics():
         domain=Domain.fromTopology(topology()),
     )
     with pytest.raises(ValueError, match="positive activeIonDensity"):
-        lowerGainMedium(GainMedium([component]))
+        projectFrontendState(GainMedium([component]))
 
     with pytest.raises(ValueError, match="passive materials require zero"):
         Material(
@@ -198,7 +235,7 @@ def test_material_activity_is_authoritative_for_population_dynamics():
         )
 
 
-def test_lowering_preserves_shared_adjacency_and_concatenates_independent_meshes():
+def test_frontend_state_projection_preserves_shared_adjacency_and_concatenates_independent_meshes():
     shared = topology()
     shared_material = material()
     left = OpticalComponent(material=shared_material, domain=Domain.fromGmsh(shared, "left"))
@@ -208,7 +245,7 @@ def test_lowering_preserves_shared_adjacency_and_concatenates_independent_meshes
         domain=Domain.fromTopology(topology(10.0)),
     )
 
-    backend, spectra = lowerGainMedium(GainMedium([left, right, remote]), initialExcitation=0.25)
+    backend, spectra = projectFrontendState(GainMedium([left, right, remote]), initialExcitation=0.25)
 
     assert backend.topology.numberOfCells == 4
     assert backend.topology.numberOfPoints == 10
@@ -218,7 +255,7 @@ def test_lowering_preserves_shared_adjacency_and_concatenates_independent_meshes
     assert spectra.resolution == 1
 
 
-def test_lowering_preserves_full_component_point_layout_including_unused_points():
+def test_frontend_state_projection_preserves_full_component_point_layout_including_unused_points():
     source = topology()
     mesh = VolumeTopology.fromTetrahedra(
         np.vstack((source.points, [[99.0, 99.0, 99.0]])),
@@ -226,7 +263,7 @@ def test_lowering_preserves_full_component_point_layout_including_unused_points(
     )
     resolved = material()
 
-    backend, _spectra = lowerGainMedium(
+    backend, _spectra = projectFrontendState(
         GainMedium(
             [
                 OpticalComponent(
@@ -241,17 +278,17 @@ def test_lowering_preserves_full_component_point_layout_including_unused_points(
     np.testing.assert_array_equal(backend.topology.cellPointIndices, mesh.cellPointIndices)
 
 
-def test_lowering_rejects_overlaps_and_distinct_material_instances():
+def test_frontend_state_projection_rejects_overlaps_and_distinct_material_instances():
     mesh = topology()
     selected = Domain.fromGmsh(mesh, "left")
     first = OpticalComponent(material=material(), domain=selected)
     overlap = OpticalComponent(material=first.material, domain=selected)
     with pytest.raises(ValueError, match="must not overlap"):
-        lowerGainMedium(GainMedium([first, overlap]))
+        projectFrontendState(GainMedium([first, overlap]))
 
     second = OpticalComponent(material=material(), domain=Domain.fromGmsh(mesh, "right"))
     with pytest.raises(NotImplementedError, match="same Material object"):
-        lowerGainMedium(GainMedium([first, second]))
+        projectFrontendState(GainMedium([first, second]))
 
 
 def test_passive_component_lowers_one_attenuation_and_cell_selection():
@@ -268,7 +305,7 @@ def test_passive_component_lowers_one_attenuation_and_cell_selection():
         fluorescenceLifetime=None,
         crossSections=None,
         active=False,
-        absorptionCoefficient=5.5 / units.cm,
+        bulkAttenuation=5.5 / units.cm,
     )
     claddingComponent = OpticalComponent(
         material=passive,
@@ -276,7 +313,7 @@ def test_passive_component_lowers_one_attenuation_and_cell_selection():
     )
     medium = GainMedium([gainComponent])
 
-    backend, _spectra = lowerGainMedium(
+    backend, _spectra = projectFrontendState(
         medium,
         initialExcitation=0.25,
         opticalComponents=[gainComponent, claddingComponent],
@@ -286,24 +323,11 @@ def test_passive_component_lowers_one_attenuation_and_cell_selection():
     np.testing.assert_array_equal(backend.get("betaVolume").value, [0.0, 0.25])
     assert backend.get("claddingAbsorption").value == pytest.approx(5.5)
     assert passive.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
-    assert passive.absorptionCoefficient is passive.bulkAttenuation
-    passive.absorptionCoefficient = 4.0 / units.cm
+    passive.bulkAttenuation = 4.0 / units.cm
     assert passive.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(4.0)
 
 
-def test_material_attenuation_alias_and_lossless_passive_lowering():
-    with pytest.raises(TypeError, match="either bulkAttenuation or absorptionCoefficient"):
-        Material(
-            materialName="ambiguous",
-            temperature=293.15 * units.K,
-            refractiveIndex=1.45,
-            fluorescenceLifetime=None,
-            crossSections=None,
-            active=False,
-            bulkAttenuation=1.0 / units.cm,
-            absorptionCoefficient=1.0 / units.cm,
-        )
-
+def test_lossless_passive_state_projection():
     mesh = topology()
     gainComponent = OpticalComponent(
         material=material(), domain=Domain.fromGmsh(mesh, "right")
@@ -320,7 +344,7 @@ def test_material_attenuation_alias_and_lossless_passive_lowering():
         material=unspecified, domain=Domain.fromGmsh(mesh, "left")
     )
 
-    backend, _spectra = lowerGainMedium(
+    backend, _spectra = projectFrontendState(
         GainMedium([gainComponent]),
         opticalComponents=[gainComponent, passiveComponent],
     )
@@ -330,7 +354,7 @@ def test_material_attenuation_alias_and_lossless_passive_lowering():
     np.testing.assert_array_equal(backend.get("claddingCellTypes").value, [1, 0])
 
 
-def test_lowering_rejects_heterogeneous_passive_attenuation():
+def test_frontend_state_projection_rejects_heterogeneous_passive_attenuation():
     gainComponent = OpticalComponent(
         material=material(),
         domain=Domain.fromTopology(topology()),
@@ -352,7 +376,7 @@ def test_lowering_rejects_heterogeneous_passive_attenuation():
     ]
 
     with pytest.raises(NotImplementedError, match="one passive bulkAttenuation"):
-        lowerGainMedium(
+        projectFrontendState(
             GainMedium([gainComponent]),
             opticalComponents=[gainComponent, *passiveComponents],
         )

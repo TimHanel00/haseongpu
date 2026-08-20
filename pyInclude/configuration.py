@@ -22,7 +22,7 @@ from .laser import (
     SurfacePumpInjector,
     UniformPumpProfile,
 )
-from .lowering import _crossSections
+from .frontendState import _crossSections
 from .physical import Domain, GainMedium, OpticalComponent
 from .simulation import PhiASE
 from .timeIntegration import (
@@ -366,7 +366,7 @@ def _phiAse(spec, spectra):
     unchanged = {"repetitions", "monochromatic", "backend", "ase_steps"}
     _rejectUnknown(spec, set(aliases) | unchanged, "simulation.phi_ase")
     values = {aliases.get(name, name): value for name, value in spec.items()}
-    return PhiASE(crossSections=spectra, spectralProperties=spectra, **values)
+    return PhiASE(crossSections=spectra, **values)
 
 
 def _pumpSpectrum(spec):

@@ -39,9 +39,8 @@ run-specific quantitative condition. Unit-bearing ``Material`` and
 ``CrossSectionTable`` values are assigned to typed ``Domain`` selections
 through disjoint ``OpticalComponent`` volumes. ``GainMedium`` selects the
 active subset, while passive components remain part of the complete optical
-assembly and may carry material-level bulk attenuation;
-``absorptionCoefficient`` is the material-facing alias for
-``bulkAttenuation``. Domains expose generic region algebra independently of the
+assembly and may carry material-level ``bulkAttenuation``. Domains expose
+generic region algebra independently of the
 concrete cell structure; the current backend lowers Tet4 bindings only.
 ``Simulation`` accepts an optional declared exterior surface; when omitted, it
 infers the boundary of all component domains without exposing an aggregate

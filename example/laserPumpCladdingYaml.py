@@ -44,7 +44,7 @@ def runExample(
         backendMedium.get("claddingCellTypes").value,
         dtype=np.uint32,
     ) == np.uint32(backendMedium.get("claddingNumber").value)
-    absorptionCoefficient = float(
+    bulkAttenuation = float(
         backendMedium.get("claddingAbsorption").value
     )
 
@@ -54,7 +54,7 @@ def runExample(
     simulation.onStep(
         writeVtkFields,
         Path(vtkOutputDir),
-        absorptionCoefficient,
+        bulkAttenuation,
         claddingMask,
         simulation.crossSections,
         material.activeIonDensity.toValue(units.cm**-3),
@@ -63,7 +63,7 @@ def runExample(
         simulation.onStep(
             writeParaviewState,
             Path(openPmdOutputDir),
-            absorptionCoefficient,
+            bulkAttenuation,
             claddingMask,
         )
     simulation.step()

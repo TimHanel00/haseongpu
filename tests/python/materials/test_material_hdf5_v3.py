@@ -39,7 +39,7 @@ def test_builtin_activity_is_independent_of_run_specific_ion_density():
     assert active.isActive
     assert active.activeIonDensity.toValue(units.cm**-3) == 0.0
     assert passive.isPassive
-    assert passive.absorptionCoefficient.toValue(units.cm**-1) == pytest.approx(5.5)
+    assert passive.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
 
 
 def test_resolved_material_hdf5_roundtrip_preserves_units(tmp_path):

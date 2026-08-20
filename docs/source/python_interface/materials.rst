@@ -94,7 +94,7 @@ cross sections:
        fluorescenceLifetime=None,
        crossSections=None,
        active=False,
-       absorptionCoefficient=5.5 / units.cm,
+       bulkAttenuation=5.5 / units.cm,
    )
 
 ``bulkAttenuation`` is the wavelength-independent passive intensity-loss
@@ -115,11 +115,10 @@ when a measured material record should state the zero coefficient.
 ``isActive`` and ``isPassive`` report the explicit material classification;
 ``isTransparent`` identifies a passive condition with no bulk-loss
 contribution.
-``bulkAttenuation`` is the canonical material property and HDF5 field.
-``absorptionCoefficient`` is an exact read/write alias, including as a
-``Material`` constructor keyword. It describes the same wavelength-independent
-bulk intensity loss; it is not the wavelength-dependent active-ion absorption
-cross section stored in ``crossSections.absorption``.
+``bulkAttenuation`` is the canonical material property, constructor keyword,
+and HDF5 field. It describes the wavelength-independent bulk intensity loss;
+it is not the wavelength-dependent active-ion absorption cross section stored
+in ``crossSections.absorption``.
 
 Units
 -----

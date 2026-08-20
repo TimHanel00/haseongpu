@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from typing import Callable, Iterable
 
 
@@ -88,6 +88,7 @@ def reference(
 class TransportNode:
     """One resolved object in a composed transport graph."""
 
+    owner: object = dataclass_field(compare=False, repr=False)
     path: str
     typeName: str
     fields: dict[str, tuple[FieldDescription, object]]
@@ -178,6 +179,7 @@ class TransportComposer:
             resolved_references[spec.name] = tuple(self._include(item) for item in values)
 
         self._nodes[node_index] = TransportNode(
+            owner=owner,
             path=path,
             typeName=description.typeName,
             fields=field_values,

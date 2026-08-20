@@ -99,26 +99,35 @@ Topology arrays use structure-of-arrays order:
 Stored representation
 ---------------------
 
-Each input iteration contains a complete, versioned primitive graph. Iteration
-attributes identify the transport version, root path, node paths, node types,
-and references between nodes.
+Transport version 1.1 distinguishes ``full`` and ``dynamic`` input iterations.
+The initial iteration contains the complete primitive graph. Later control
+iterations retain the graph identity and references, but write only fields
+declared with ``dynamic=True``. Iteration attributes identify the transport
+version, update mode, root path, node paths, node types, and references between
+nodes.
 
 Numeric scalar and array fields are stored as openPMD mesh records. Each record
 carries its logical graph path, owning primitive type, field name, axes, shape,
 dynamic flag, encoding, and physical-unit metadata. ``Quantity`` values retain
-their ``unitSI`` and ``unitDimension`` information. Strings, string sequences,
-references, and JSON metadata are stored as namespaced attributes.
+their ``unitSI`` and ``unitDimension`` information. Strings use native string
+attributes; string sequences and references use native string-vector
+attributes, so provider APIs perform Unicode handling without a second JSON
+decoder. JSON metadata remains serialized in namespaced string attributes.
 
 Logical paths are encoded into provider-safe record and attribute keys. A
 consumer uses the stored logical path rather than assigning meaning to the
 physical key. Primitive definitions consequently do not depend on ADIOS2 or
 HDF5 naming restrictions.
 
-The C++ reader reconstructs the root ``Simulation`` and delegates each
-referenced namespace to the corresponding backend primitive's
-``fromTransport(reader, prefix)`` function. Numeric loading is prefetched by
-subtree; following one primitive does not require loading unrelated numeric
-fields.
+The C++ reader reconstructs the root ``Simulation`` for a full iteration and
+delegates each referenced namespace to the corresponding backend primitive's
+``fromTransport(reader, prefix)`` function. A dynamic iteration updates the
+existing simulation and backend excitation plan instead of reconstructing the
+topology or material context. Numeric loading is prefetched by subtree;
+following one primitive does not require loading unrelated numeric fields.
+The Python ``frontendState`` projection exists only for callback topology and
+legacy diagnostics; it is not transported as executable state. Consequently
+the C++ ``LegacyBackendConverter`` is the single physical lowering boundary.
 
 Direct ASE sessions
 -------------------
@@ -169,10 +178,11 @@ not supported.
 
 ``synchronized-debug`` mode requires ``adios-sst``. After output step *N*,
 Python runs the registered ``onStep`` and ``beforeStep`` callbacks, refreshes
-the frontend ``ExcitationState``, and writes graph iteration *N*. The backend
-waits for that iteration before starting step *N+1*. Every input iteration is
-self-describing and complete; the changed state remains owned by
-``ExcitationState`` rather than by a separate update schema.
+the frontend ``ExcitationState``, and writes dynamic iteration *N*. The backend
+waits for that iteration before starting step *N+1*. Dynamic iterations contain
+``Simulation.currentStep``, ``Simulation.currentTime``, and
+``ExcitationState.values``; topology and other static graph fields remain in
+the backend context created from iteration zero.
 
 ``controlFields`` declares which supported state Python may update between
 steps. It is transport data owned by ``Simulation``; the generic writer stores

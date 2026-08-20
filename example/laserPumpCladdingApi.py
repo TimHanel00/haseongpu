@@ -58,7 +58,7 @@ def laserPumpCladdingMaterial(spectralResolution=1000):
     )
 
 
-def laserPumpCladdingPassiveMaterial(absorptionCoefficient=None):
+def laserPumpCladdingPassiveMaterial(bulkAttenuation=None):
     """Resolve the passive glass used for the radial cladding component."""
     material = Material.fromHdf5(
         materialDatabase,
@@ -67,8 +67,8 @@ def laserPumpCladdingPassiveMaterial(absorptionCoefficient=None):
         interpolation="exact",
         name="cladding_glass",
     )
-    if absorptionCoefficient is not None:
-        material.absorptionCoefficient = absorptionCoefficient
+    if bulkAttenuation is not None:
+        material.bulkAttenuation = bulkAttenuation
     return material.validate()
 
 
@@ -161,17 +161,17 @@ def buildSimulation(
     reportTimings=False,
     outputSteps=None,
     useCladding=True,
-    absorptionCoefficient=None,
+    bulkAttenuation=None,
     **aseOverrides,
 ):
     """Construct the complete physical graph without running it.
 
-    ``useCladding`` defaults to true. ``absorptionCoefficient`` optionally
+    ``useCladding`` defaults to true. ``bulkAttenuation`` optionally
     replaces the passive material's stored bulk attenuation coefficient.
     """
     material = laserPumpCladdingMaterial(spectralResolution)
     claddingMaterial = (
-        laserPumpCladdingPassiveMaterial(absorptionCoefficient)
+        laserPumpCladdingPassiveMaterial(bulkAttenuation)
         if useCladding
         else None
     )
@@ -296,7 +296,7 @@ def _writeTet4StateVtk(path, state, fields):
 def writeVtkFields(
     state,
     vtkOutputDir=scriptDir,
-    absorptionCoefficient=0.0,
+    bulkAttenuation=0.0,
     claddingMask=None,
     crossSections=None,
     nTot=None,
@@ -320,7 +320,7 @@ def writeVtkFields(
         "dndtPump": state.dndtPump,
         "cladAbs": (
             state.phiAse
-            * np.float64(absorptionCoefficient)
+            * np.float64(bulkAttenuation)
             * claddingMask
         ),
         "localGain": calcGainFromState(state, crossSections, nTot),
@@ -346,7 +346,7 @@ def runExample(
     reportTimings=False,
     outputSteps=None,
     useCladding=True,
-    absorptionCoefficient=None,
+    bulkAttenuation=None,
     **aseOverrides,
 ):
     simulation = buildSimulation(
@@ -362,7 +362,7 @@ def runExample(
         reportTimings=reportTimings,
         outputSteps=outputSteps,
         useCladding=useCladding,
-        absorptionCoefficient=absorptionCoefficient,
+        bulkAttenuation=bulkAttenuation,
         **aseOverrides,
     )
     material = simulation.gainMedium.components[0].material
@@ -372,7 +372,7 @@ def runExample(
         backendMedium.get("claddingCellTypes").value,
         dtype=np.uint32,
     ) == np.uint32(backendMedium.get("claddingNumber").value)
-    absorptionCoefficient = float(
+    bulkAttenuation = float(
         backendMedium.get("claddingAbsorption").value
     )
     print(f"Running simulation with backend {simulation.phiASE.backend}")
@@ -381,7 +381,7 @@ def runExample(
     simulation.onStep(
         writeVtkFields,
         Path(vtkOutputDir),
-        absorptionCoefficient,
+        bulkAttenuation,
         claddingMask,
         simulation.crossSections,
         nTot,
@@ -390,7 +390,7 @@ def runExample(
         simulation.onStep(
             writeParaviewState,
             Path(openPmdOutputDir),
-            absorptionCoefficient,
+            bulkAttenuation,
             claddingMask,
         )
     simulation.step()

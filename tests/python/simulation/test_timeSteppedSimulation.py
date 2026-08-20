@@ -103,7 +103,7 @@ def fakeCppSimulation(monkeypatch):
 
 
 def realPhiAse(crossSections, *, openpmdBackend="adios"):
-    return PhiASE(spectralProperties=crossSections, openpmdBackend=openpmdBackend, ase_steps=100)
+    return PhiASE(crossSections=crossSections, openpmdBackend=openpmdBackend, ase_steps=100)
 
 
 def _physicalGraph(crossSections):
@@ -242,7 +242,7 @@ def testCompiledSimulationUsesPhiAseMpiLaunchOptions(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HASE_MPIEXEC_EXTRA_ARGS", "--oversubscribe")
     phi_ase = PhiASE(
-        spectralProperties=crossSections,
+        crossSections=crossSections,
         openpmdBackend="adios",
         parallelMode="mpi",
         nPerNode=3,
@@ -283,7 +283,7 @@ def testCompiledSimulationMpiRanksShareOneDeviceAndAdvanceAse(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HASE_MPIEXEC_EXTRA_ARGS", "--oversubscribe")
     phi_ase = PhiASE(
-        spectralProperties=crossSections,
+        crossSections=crossSections,
         backend=alpakaRuntimeBackend,
         openpmdBackend=openPmdRuntimeBackend,
         parallelMode="mpi",
@@ -397,7 +397,7 @@ def testSimulationDerivesStepCountFromLongestActivityWindow(
     simulation = configuredSimulation(
         setup,
         gainMedium=smallGainMedium,
-        phiASE=PhiASE(spectralProperties=crossSections, openpmdBackend="adios", ase_steps=5),
+        phiASE=PhiASE(crossSections=crossSections, openpmdBackend="adios", ase_steps=5),
         timeIntegrator=ExponentialEuler(),
         timeStepSize=1e-5,
     )
@@ -421,7 +421,7 @@ def testZeroActivityCountsDisablePumpAndAse(
     simulation = configuredSimulation(
         setup,
         gainMedium=smallGainMedium,
-        phiASE=PhiASE(spectralProperties=crossSections, openpmdBackend="adios", ase_steps=0),
+        phiASE=PhiASE(crossSections=crossSections, openpmdBackend="adios", ase_steps=0),
         timeIntegrator=ExponentialEuler(),
         timeStepSize=1e-5,
         simulationSteps=2,
@@ -445,7 +445,7 @@ def testDisabledActivitiesRequireExplicitSimulationSteps(
     simulation = configuredSimulation(
         setup,
         gainMedium=smallGainMedium,
-        phiASE=PhiASE(spectralProperties=crossSections, openpmdBackend="adios", ase_steps=0),
+        phiASE=PhiASE(crossSections=crossSections, openpmdBackend="adios", ase_steps=0),
         timeIntegrator=ExponentialEuler(),
         timeStepSize=1e-5,
     )

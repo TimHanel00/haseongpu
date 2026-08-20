@@ -394,8 +394,7 @@ class Material:
         Whether the material participates in active-ion population dynamics.
         This classification is independent of the selected ion density.
     bulkAttenuation
-        Optional passive intensity attenuation coefficient. The name
-        ``absorptionCoefficient`` aliases this property.
+        Optional passive intensity attenuation coefficient.
     activeIonDensity
         Non-negative total active-ion number density for the selected run.
     name
@@ -461,10 +460,7 @@ class Material:
         metadata=None,
         *,
         active,
-        absorptionCoefficient=None,
     ):
-        if bulkAttenuation is not None and absorptionCoefficient is not None:
-            raise TypeError("provide either bulkAttenuation or absorptionCoefficient, not both")
         self.materialName = materialName
         self.temperature = temperature
         self.refractiveIndex = refractiveIndex
@@ -472,9 +468,7 @@ class Material:
         self.crossSections = crossSections
         self.active = active
         self.activeIonDensity = activeIonDensity
-        self.bulkAttenuation = (
-            absorptionCoefficient if bulkAttenuation is None else bulkAttenuation
-        )
+        self.bulkAttenuation = bulkAttenuation
         self.name = name
         self.opticalAxis = opticalAxis
         self.metadata = {} if metadata is None else metadata
@@ -538,15 +532,6 @@ class Material:
                 or float(self.bulkAttenuation.toValue(units.m**-1)) == 0.0
             )
         )
-
-    @property
-    def absorptionCoefficient(self):
-        """Read or write :attr:`bulkAttenuation` through its physical alias."""
-        return self.bulkAttenuation
-
-    @absorptionCoefficient.setter
-    def absorptionCoefficient(self, value):
-        self.bulkAttenuation = value
 
     def validate(self):
         """Revalidate this mutable material after direct API-side edits."""
@@ -650,7 +635,6 @@ class _MaterialRecord:
         fluorescenceLifetime=None,
         crossSections=None,
         bulkAttenuation=None,
-        absorptionCoefficient=None,
         metadata=None,
     ):
         """Add one measured or modelled temperature state.
@@ -668,8 +652,6 @@ class _MaterialRecord:
             Optional :class:`CrossSectionTable`.
         bulkAttenuation
             Optional non-negative inverse-length passive loss coefficient.
-        absorptionCoefficient
-            Alias for ``bulkAttenuation``; provide at most one of the two.
         metadata
             Optional state-specific provenance; it overrides same-named
             material metadata after selection.
@@ -679,18 +661,12 @@ class _MaterialRecord:
         _MaterialRecord
             ``self`` for chained state definitions.
         """
-        if bulkAttenuation is not None and absorptionCoefficient is not None:
-            raise TypeError("provide either bulkAttenuation or absorptionCoefficient, not both")
         state = _MaterialState(
             temperature=temperature,
             refractiveIndex=refractiveIndex,
             fluorescenceLifetime=fluorescenceLifetime,
             crossSections=crossSections,
-            bulkAttenuation=(
-                absorptionCoefficient
-                if bulkAttenuation is None
-                else bulkAttenuation
-            ),
+            bulkAttenuation=bulkAttenuation,
             metadata={} if metadata is None else metadata,
         )
         self._append_state(state)
