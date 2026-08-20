@@ -71,7 +71,7 @@ The passive glass is resolved separately:
    :pyobject: laserPumpCladdingPassiveMaterial
 
 Its HDF5 record has ``active=False`` and an
-``absorptionCoefficient`` of :math:`5.5\,\mathrm{cm}^{-1}`. Consequently the
+``bulkAttenuation`` of :math:`5.5\,\mathrm{cm}^{-1}`. Consequently the
 backend transports rays through these cells and applies bulk attenuation, but
 does not evolve an excited-state population there.
 
@@ -152,7 +152,7 @@ including excitation, ASE flux, statistical error, and pump/ASE derivatives.
 
 The example's VTK callback also evaluates the local small-signal gain from the
 material-derived cross sections and active-ion density. ``cladAbs`` is computed
-from the cladding material's ``absorptionCoefficient`` and is zero outside the
+from the cladding material's ``bulkAttenuation`` and is zero outside the
 passive cells. ``outputSteps`` limits the snapshots transferred to Python; it
 does not change the number of compiled time steps.
 

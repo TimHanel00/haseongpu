@@ -80,7 +80,7 @@ def buildMaterialLibrary():
             fluorescenceLifetime=None,
             crossSections=None,
             active=False,
-            absorptionCoefficient=5.5 / units.cm,
+            bulkAttenuation=5.5 / units.cm,
             metadata={
                 "source": "HASEonGPU laserPumpCladding reference condition",
                 "generator": "python3 -m material_library.data.generate",

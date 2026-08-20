@@ -15,6 +15,7 @@
 #include <typeinfo>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace openPMD
@@ -44,8 +45,24 @@ namespace hase::backend::transport
     public:
         struct NumericValue
         {
-            std::vector<double> values;
+            using Values = std::variant<
+                std::vector<char>,
+                std::vector<signed char>,
+                std::vector<unsigned char>,
+                std::vector<short>,
+                std::vector<unsigned short>,
+                std::vector<int>,
+                std::vector<unsigned>,
+                std::vector<long>,
+                std::vector<unsigned long>,
+                std::vector<long long>,
+                std::vector<unsigned long long>,
+                std::vector<float>,
+                std::vector<double>>;
+
+            Values values;
             std::vector<std::uint64_t> shape;
+            double unitSI{1.0};
         };
 
         struct NumericSource
@@ -61,6 +78,7 @@ namespace hase::backend::transport
         TransportReader& operator=(TransportReader&&) = delete;
 
         [[nodiscard]] TransportPath root() const;
+        [[nodiscard]] bool dynamicOnly() const;
         [[nodiscard]] std::string typeName(TransportPath const& path) const;
         [[nodiscard]] bool contains(TransportPath const& prefix, char const* name) const;
         void prefetch(TransportPath const& prefix) const;
@@ -90,7 +108,7 @@ namespace hase::backend::transport
         {
             auto const path = prefix.child(name).string();
             auto const& value = numeric(path);
-            destination.values = cast<T>(value.values, path);
+            destination.values = cast<T>(value, path);
             destination.shape = value.shape;
         }
 
@@ -111,8 +129,8 @@ namespace hase::backend::transport
         void assign(RaggedArray<T>& destination, TransportPath const& prefix, char const* name) const
         {
             auto const path = prefix.child(name).string();
-            destination.values = cast<T>(numeric(path + "/values").values, path + "/values");
-            destination.offsets = cast<std::uint64_t>(numeric(path + "/offsets").values, path + "/offsets");
+            destination.values = cast<T>(numeric(path + "/values"), path + "/values");
+            destination.offsets = cast<std::uint64_t>(numeric(path + "/offsets"), path + "/offsets");
         }
 
         void assign(std::vector<std::string>& destination, TransportPath const& prefix, char const* name) const;
@@ -165,27 +183,53 @@ namespace hase::backend::transport
         [[nodiscard]] std::string text(std::string const& path) const;
 
         template<typename T>
-        static std::vector<T> cast(std::vector<double> const& values, std::string const& path)
+        static std::vector<T> cast(NumericValue const& numericValue, std::string const& path)
         {
             std::vector<T> result;
-            result.reserve(values.size());
-            for(double const value : values)
-            {
-                if constexpr(std::is_integral_v<T>)
+            std::visit(
+                [&](auto const& values)
                 {
-                    if(!std::isfinite(value) || std::trunc(value) != value)
+                    result.reserve(values.size());
+                    for(auto const value : values)
                     {
-                        throw std::runtime_error("transport field '" + path + "' is not integral");
+                        if constexpr(std::is_integral_v<T>)
+                        {
+                            if constexpr(std::is_integral_v<std::remove_cvref_t<decltype(value)>>)
+                            {
+                                if(numericValue.unitSI == 1.0)
+                                {
+                                    bool inRange;
+                                    if constexpr(std::is_same_v<std::remove_cvref_t<decltype(value)>, char>)
+                                    {
+                                        using NormalizedChar
+                                            = std::conditional_t<std::is_signed_v<char>, signed char, unsigned char>;
+                                        inRange = std::in_range<T>(static_cast<NormalizedChar>(value));
+                                    }
+                                    else
+                                        inRange = std::in_range<T>(value);
+                                    if(!inRange)
+                                        throw std::runtime_error(
+                                            "transport field '" + path + "' is outside its integer range");
+                                    result.push_back(static_cast<T>(value));
+                                    continue;
+                                }
+                            }
+                            auto const scaled = static_cast<double>(value) * numericValue.unitSI;
+                            if(!std::isfinite(scaled) || std::trunc(scaled) != scaled)
+                                throw std::runtime_error("transport field '" + path + "' is not integral");
+                            auto const lowerBound
+                                = std::is_signed_v<T> ? -std::ldexp(1.0, std::numeric_limits<T>::digits) : 0.0;
+                            auto const upperBound = std::ldexp(1.0, std::numeric_limits<T>::digits);
+                            if(scaled < lowerBound || scaled >= upperBound)
+                                throw std::runtime_error(
+                                    "transport field '" + path + "' is outside its integer range");
+                            result.push_back(static_cast<T>(scaled));
+                        }
+                        else
+                            result.push_back(static_cast<T>(value) * static_cast<T>(numericValue.unitSI));
                     }
-                    auto const lowest = static_cast<long double>(std::numeric_limits<T>::lowest());
-                    auto const highest = static_cast<long double>(std::numeric_limits<T>::max());
-                    if(static_cast<long double>(value) < lowest || static_cast<long double>(value) > highest)
-                    {
-                        throw std::runtime_error("transport field '" + path + "' is outside its integer range");
-                    }
-                }
-                result.push_back(static_cast<T>(value));
-            }
+                },
+                numericValue.values);
             return result;
         }
 
@@ -198,14 +242,14 @@ namespace hase::backend::transport
             }
             else if constexpr(std::is_same_v<T, bool>)
             {
-                auto const& values = numeric(path).values;
-                if(values.size() != 1u || (values.front() != 0.0 && values.front() != 1.0))
+                auto values = cast<unsigned char>(numeric(path), path);
+                if(values.size() != 1u || (values.front() != 0u && values.front() != 1u))
                     throw std::runtime_error("transport field '" + path + "' is not boolean");
-                destination = values.front() != 0.0;
+                destination = values.front() != 0u;
             }
             else if constexpr(std::is_arithmetic_v<T>)
             {
-                auto values = cast<T>(numeric(path).values, path);
+                auto values = cast<T>(numeric(path), path);
                 if(values.size() != 1u)
                     throw std::runtime_error("transport field '" + path + "' is not scalar");
                 destination = values.front();
@@ -217,10 +261,12 @@ namespace hase::backend::transport
         }
 
         std::string m_root;
+        bool m_dynamicOnly{};
         openPMD::Series* m_series;
         std::vector<NumericSource> m_numericSources;
         mutable std::unordered_map<std::string, NumericValue> m_numeric;
         std::unordered_map<std::string, std::string> m_text;
+        std::unordered_map<std::string, std::vector<std::string>> m_stringArrays;
         std::unordered_map<std::string, std::vector<std::string>> m_references;
         std::unordered_map<std::string, std::string> m_types;
         mutable std::unordered_map<std::string, std::shared_ptr<void>> m_objects;

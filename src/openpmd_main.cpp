@@ -13,7 +13,7 @@
 #include <string>
 #include <string_view>
 
-namespace
+namespace hase::internal::openpmdMain
 {
     struct Paths
     {
@@ -64,10 +64,11 @@ namespace
         return true;
 #endif
     }
-} // namespace
+} // namespace hase::internal::openpmdMain
 
 int main(int argc, char** argv)
 {
+    using namespace hase::internal::openpmdMain;
     try
     {
         auto const paths = parsePaths(argc, argv);
@@ -109,7 +110,8 @@ int main(int argc, char** argv)
             auto initial = input.next();
             if(!initial)
                 throw std::runtime_error("No simulation iteration was available in the openPMD input stream.");
-            auto legacyContext = hase::backend::legacy::LegacyBackendConverter::convert(initial->simulation);
+            auto converted = hase::backend::legacy::LegacyBackendConverter::convertWithUpdates(initial->simulation);
+            auto& legacyContext = converted.context;
 
             hase::openpmd::AsyncSimulationSnapshotWriter snapshots{
                 output != nullptr,
@@ -129,8 +131,9 @@ int main(int argc, char** argv)
                     if(!update || update->index != completedStep)
                         throw std::runtime_error(
                             "synchronized-debug expected transport iteration " + std::to_string(completedStep));
-                    auto converted = hase::backend::legacy::LegacyBackendConverter::convert(update->simulation);
-                    return converted.mesh.betaVolume;
+                    if(!update->simulation.excitationState)
+                        throw std::runtime_error("dynamic transport update has no excitation state");
+                    return converted.excitation.values(*update->simulation.excitationState);
                 });
             snapshots.finish();
             if(status != 0)

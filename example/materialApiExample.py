@@ -65,7 +65,7 @@ def buildSimulation():
             fluorescenceLifetime=None,
             crossSections=None,
             active=False,
-            absorptionCoefficient=5.5 / units.cm,
+            bulkAttenuation=5.5 / units.cm,
         ),
         name="cladding",
     )

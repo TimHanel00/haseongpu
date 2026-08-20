@@ -20,19 +20,11 @@ namespace hase::kernels
 {
     struct BuildBetaVolumeWeights
     {
-        ALPAKA_FN_ACC void operator()(
-            auto const& acc,
-            core::DeviceMeshView const mesh,
-            auto betaVolume,
-            auto betaVolumeWeights) const
+        ALPAKA_FN_ACC constexpr auto operator()(
+            alpaka::concepts::Simd auto const& betaVolume,
+            alpaka::concepts::Simd auto const& cellVolume) const
         {
-            for(auto [cell] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfCells}))
-            {
-                betaVolumeWeights[cell] = betaVolume[cell] * static_cast<double>(mesh.cellVolumes[cell]);
-            }
+            return betaVolume * alpaka::lpCast<double>(cellVolume);
         }
     };
 

@@ -11,7 +11,7 @@ from hase_transport import TransportGraph
 from hase_units import DIMENSIONLESS, Quantity
 
 
-TRANSPORT_VERSION = "1.0"
+TRANSPORT_VERSION = "1.1"
 _RECORD_PREFIX = "hase__"
 _ATTRIBUTE_PREFIX = "hase__attribute__"
 _REFERENCE_PREFIX = "hase__reference__"
@@ -67,8 +67,8 @@ def _setRecordMetadata(record, *, path, typeName, spec, numeric, shape):
     record.set_attribute("hasePath", path)
     record.set_attribute("haseOwnerType", typeName)
     record.set_attribute("haseFieldName", spec.name)
-    record.set_attribute("haseAxes", json.dumps(spec.axes, separators=(",", ":")))
-    record.set_attribute("haseShape", json.dumps(tuple(shape), separators=(",", ":")))
+    record.set_attribute("haseAxes", list(spec.axes))
+    record.set_attribute("haseShape", [int(extent) for extent in shape])
     record.set_attribute("haseDynamic", bool(spec.dynamic))
     record.set_attribute("haseEncoding", spec.encoding)
     record.set_attribute("haseUnit", numeric.unit)
@@ -161,44 +161,70 @@ def _writeRagged(iteration, io, *, path, typeName, spec, value):
     )
 
 
-def writeGraph(iteration, graph: TransportGraph, io) -> None:
-    """Write every field/reference without inspecting concrete frontend types."""
+def _selectedFields(graph: TransportGraph, *, dynamicOnly: bool):
+    for node in graph.nodes:
+        for name, (spec, value) in node.fields.items():
+            if dynamicOnly and not spec.dynamic:
+                continue
+            if dynamicOnly:
+                value = spec.value(node.owner)
+                if value is None and not spec.optional:
+                    raise ValueError(
+                        f"required dynamic transport field {node.typeName}.{name} is None"
+                    )
+            yield node, name, spec, value
+
+
+def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> None:
+    """Write selected fields/references without inspecting concrete frontend types."""
+    selectedFields = list(_selectedFields(graph, dynamicOnly=dynamicOnly))
+    selectedNodes = (
+        {node.path: node for node, _name, _spec, _value in selectedFields}
+        if dynamicOnly
+        else {node.path: node for node in graph.nodes}
+    )
     iteration.set_attribute("haseTransportVersion", TRANSPORT_VERSION)
+    iteration.set_attribute("haseUpdateMode", "dynamic" if dynamicOnly else "full")
     iteration.set_attribute("haseRoot", graph.root)
-    iteration.set_attribute("haseNodePaths", json.dumps([node.path for node in graph.nodes], separators=(",", ":")))
-    iteration.set_attribute("haseNodeTypes", json.dumps([node.typeName for node in graph.nodes], separators=(",", ":")))
+    iteration.set_attribute("haseNodePaths", list(selectedNodes))
+    iteration.set_attribute(
+        "haseNodeTypes", [node.typeName for node in selectedNodes.values()]
+    )
 
     pending = []
-    for node in graph.nodes:
+    for node in selectedNodes.values():
         for name, paths in node.references.items():
+            selectedPaths = [path for path in paths if path in selectedNodes]
+            if not selectedPaths:
+                continue
             iteration.set_attribute(
                 referenceName(f"{node.path}/{name}"),
-                json.dumps(paths, separators=(",", ":")),
+                selectedPaths,
             )
-        for name, (spec, value) in node.fields.items():
-            if value is None:
-                continue
-            path = f"{node.path}/{name}"
-            if spec.encoding == "ragged":
-                pending.extend(
-                    _writeRagged(iteration, io, path=path, typeName=node.typeName, spec=spec, value=value)
-                )
-                continue
-            if spec.encoding == "json":
-                iteration.set_attribute(
-                    attributeName(path),
-                    json.dumps(value, separators=(",", ":"), sort_keys=True),
-                )
-                continue
-            if isinstance(value, str) or (
-                isinstance(value, (tuple, list)) and all(isinstance(item, str) for item in value)
-            ):
-                iteration.set_attribute(
-                    attributeName(path),
-                    json.dumps(value, separators=(",", ":")),
-                )
-                continue
-            pending.append(
-                _writeNumeric(iteration, io, path=path, typeName=node.typeName, spec=spec, value=value)
+    for node, name, spec, value in selectedFields:
+        if value is None:
+            continue
+        path = f"{node.path}/{name}"
+        if spec.encoding == "ragged":
+            pending.extend(
+                _writeRagged(iteration, io, path=path, typeName=node.typeName, spec=spec, value=value)
             )
+            continue
+        if spec.encoding == "json":
+            iteration.set_attribute(
+                attributeName(path),
+                json.dumps(value, separators=(",", ":"), sort_keys=True),
+            )
+            continue
+        if isinstance(value, str) or (
+            isinstance(value, (tuple, list)) and all(isinstance(item, str) for item in value)
+        ):
+            iteration.set_attribute(
+                attributeName(path),
+                value if isinstance(value, str) else list(value),
+            )
+            continue
+        pending.append(
+            _writeNumeric(iteration, io, path=path, typeName=node.typeName, spec=spec, value=value)
+        )
     iteration.series_flush()

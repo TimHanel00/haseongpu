@@ -3,151 +3,108 @@
 
 #include <algorithm>
 #include <functional>
-#include <sstream>
 
 namespace io = openPMD;
 
+namespace hase::internal::transport
+{
+    using backend::transport::TransportReader;
+
+    constexpr char const* recordPrefix = "hase__";
+    constexpr char const* attributePrefix = "hase__attribute__";
+    constexpr char const* referencePrefix = "hase__reference__";
+
+    std::string decodePath(std::string value)
+    {
+        auto replaceAll = [&value](std::string const& from, std::string const& to)
+        {
+            std::size_t position = 0u;
+            while((position = value.find(from, position)) != std::string::npos)
+            {
+                value.replace(position, from.size(), to);
+                position += to.size();
+            }
+        };
+        replaceAll("%2F", "/");
+        replaceAll("%25", "%");
+        return value;
+    }
+
+    std::vector<std::string> stringValues(io::Attribute const& attribute)
+    {
+        if(auto values = attribute.getOptional<std::vector<std::string>>())
+            return std::move(*values);
+        return {attribute.get<std::string>()};
+    }
+
+    std::vector<std::uint64_t> extents(io::Attribute const& attribute)
+    {
+        if(auto values = attribute.getOptional<std::vector<std::uint64_t>>())
+            return std::move(*values);
+        return {attribute.get<std::uint64_t>()};
+    }
+
+    std::size_t elementCount(io::Extent const& extent)
+    {
+        std::size_t result = 1u;
+        for(auto const size : extent)
+            result *= static_cast<std::size_t>(size);
+        return result;
+    }
+
+    template<typename T>
+    TransportReader::NumericSource numericSource(
+        io::RecordComponent component,
+        std::string path,
+        double unitSI,
+        std::vector<std::uint64_t> shape,
+        std::unordered_map<std::string, TransportReader::NumericValue>& values)
+    {
+        auto const extent = component.getExtent();
+        if(elementCount(extent) != elementCount(shape))
+            throw std::runtime_error("transport field '" + path + "' has inconsistent shape metadata");
+        auto sourcePath = path;
+        return {
+            std::move(sourcePath),
+            [component, extent, path = std::move(path), unitSI, shape = std::move(shape), &values](
+                std::vector<std::function<void()>>& pending) mutable
+            {
+                auto chunk = component.loadChunk<T>();
+                pending.emplace_back(
+                    [chunk, extent, path, unitSI, shape, &values]
+                    {
+                        TransportReader::NumericValue value;
+                        value.shape = shape;
+                        value.unitSI = unitSI;
+                        auto const count = elementCount(extent);
+                        std::vector<T> loaded(count);
+                        std::copy_n(chunk.get(), count, loaded.begin());
+                        value.values = std::move(loaded);
+                        values.emplace(path, std::move(value));
+                    });
+            }};
+    }
+} // namespace hase::internal::transport
+
 namespace hase::backend::transport
 {
-    namespace
-    {
-        constexpr char const* recordPrefix = "hase__";
-        constexpr char const* attributePrefix = "hase__attribute__";
-        constexpr char const* referencePrefix = "hase__reference__";
-
-        std::string decodePath(std::string value)
-        {
-            auto replaceAll = [&value](std::string const& from, std::string const& to)
-            {
-                std::size_t position = 0u;
-                while((position = value.find(from, position)) != std::string::npos)
-                {
-                    value.replace(position, from.size(), to);
-                    position += to.size();
-                }
-            };
-            replaceAll("%2F", "/");
-            replaceAll("%25", "%");
-            return value;
-        }
-
-        std::string unquote(std::string const& value)
-        {
-            if(value.size() < 2u || value.front() != '"' || value.back() != '"')
-                return value;
-            std::string result;
-            result.reserve(value.size() - 2u);
-            bool escaped = false;
-            for(std::size_t i = 1u; i + 1u < value.size(); ++i)
-            {
-                char const current = value[i];
-                if(escaped)
-                {
-                    result.push_back(current == 'n' ? '\n' : current);
-                    escaped = false;
-                }
-                else if(current == '\\')
-                    escaped = true;
-                else
-                    result.push_back(current);
-            }
-            return result;
-        }
-
-        std::vector<std::string> parseStringArray(std::string const& value)
-        {
-            std::vector<std::string> result;
-            std::size_t position = 0u;
-            while(position < value.size())
-            {
-                position = value.find('"', position);
-                if(position == std::string::npos)
-                    break;
-                std::size_t end = position + 1u;
-                bool escaped = false;
-                for(; end < value.size(); ++end)
-                {
-                    if(!escaped && value[end] == '"')
-                        break;
-                    escaped = !escaped && value[end] == '\\';
-                    if(value[end] != '\\')
-                        escaped = false;
-                }
-                if(end >= value.size())
-                    throw std::runtime_error("invalid transport string array: " + value);
-                result.push_back(unquote(value.substr(position, end - position + 1u)));
-                position = end + 1u;
-            }
-            return result;
-        }
-
-        std::vector<std::uint64_t> parseShape(std::string const& value)
-        {
-            std::vector<std::uint64_t> result;
-            std::size_t position = 0u;
-            while(position < value.size())
-            {
-                position = value.find_first_of("0123456789", position);
-                if(position == std::string::npos)
-                    break;
-                std::size_t end = position;
-                while(end < value.size() && value[end] >= '0' && value[end] <= '9')
-                    ++end;
-                result.push_back(std::stoull(value.substr(position, end - position)));
-                position = end;
-            }
-            return result;
-        }
-
-        std::size_t elementCount(io::Extent const& extent)
-        {
-            std::size_t result = 1u;
-            for(auto const size : extent)
-                result *= static_cast<std::size_t>(size);
-            return result;
-        }
-
-        template<typename T>
-        TransportReader::NumericSource numericSource(
-            io::RecordComponent component,
-            std::string path,
-            double unitSI,
-            std::vector<std::uint64_t> shape,
-            std::unordered_map<std::string, TransportReader::NumericValue>& values)
-        {
-            auto const extent = component.getExtent();
-            if(elementCount(extent) != elementCount(shape))
-                throw std::runtime_error("transport field '" + path + "' has inconsistent shape metadata");
-            auto sourcePath = path;
-            return {
-                std::move(sourcePath),
-                [component, extent, path = std::move(path), unitSI, shape = std::move(shape), &values](
-                    std::vector<std::function<void()>>& pending) mutable
-                {
-                    auto chunk = component.loadChunk<T>();
-                    pending.emplace_back(
-                        [chunk, extent, path, unitSI, shape, &values]
-                        {
-                            TransportReader::NumericValue value;
-                            value.shape = shape;
-                            auto const count = elementCount(extent);
-                            value.values.reserve(count);
-                            for(std::size_t index = 0u; index < count; ++index)
-                                value.values.push_back(static_cast<double>(chunk.get()[index]) * unitSI);
-                            values.emplace(path, std::move(value));
-                        });
-                }};
-        }
-    } // namespace
+    using namespace hase::internal::transport;
 
     TransportReader::TransportReader(io::Series& series, io::Iteration& iteration) : m_series(&series)
     {
         if(!iteration.containsAttribute("haseTransportVersion")
-           || iteration.getAttribute("haseTransportVersion").get<std::string>() != "1.0")
+           || iteration.getAttribute("haseTransportVersion").get<std::string>() != "1.1")
             throw std::runtime_error("unsupported or missing HASE transport graph version");
+        if(iteration.containsAttribute("haseUpdateMode"))
+        {
+            auto const mode = iteration.getAttribute("haseUpdateMode").get<std::string>();
+            if(mode != "full" && mode != "dynamic")
+                throw std::runtime_error("unsupported HASE transport update mode '" + mode + "'");
+            m_dynamicOnly = mode == "dynamic";
+        }
         m_root = iteration.getAttribute("haseRoot").get<std::string>();
-        auto const nodePaths = parseStringArray(iteration.getAttribute("haseNodePaths").get<std::string>());
-        auto const nodeTypes = parseStringArray(iteration.getAttribute("haseNodeTypes").get<std::string>());
+        auto const nodePaths = stringValues(iteration.getAttribute("haseNodePaths"));
+        auto const nodeTypes = stringValues(iteration.getAttribute("haseNodeTypes"));
         if(nodePaths.size() != nodeTypes.size())
             throw std::runtime_error("transport node path/type arrays have different lengths");
         for(std::size_t index = 0u; index < nodePaths.size(); ++index)
@@ -158,12 +115,16 @@ namespace hase::backend::transport
             if(name.starts_with(attributePrefix))
             {
                 auto path = decodePath(name.substr(std::char_traits<char>::length(attributePrefix)));
-                m_text.emplace(path, iteration.getAttribute(name).get<std::string>());
+                auto const attribute = iteration.getAttribute(name);
+                if(auto values = attribute.getOptional<std::vector<std::string>>())
+                    m_stringArrays.emplace(path, std::move(*values));
+                else
+                    m_text.emplace(path, attribute.get<std::string>());
             }
             else if(name.starts_with(referencePrefix))
             {
                 auto path = decodePath(name.substr(std::char_traits<char>::length(referencePrefix)));
-                m_references.emplace(path, parseStringArray(iteration.getAttribute(name).get<std::string>()));
+                m_references.emplace(path, stringValues(iteration.getAttribute(name)));
             }
         }
 
@@ -178,7 +139,7 @@ namespace hase::backend::transport
             double const unitSI = component.unitSI();
             auto const componentExtent = component.getExtent();
             auto const shape = record.containsAttribute("haseShape")
-                                   ? parseShape(record.getAttribute("haseShape").get<std::string>())
+                                   ? extents(record.getAttribute("haseShape"))
                                    : std::vector<std::uint64_t>(componentExtent.begin(), componentExtent.end());
             switch(component.getDatatype())
             {
@@ -233,6 +194,11 @@ namespace hase::backend::transport
         return TransportPath{m_root};
     }
 
+    bool TransportReader::dynamicOnly() const
+    {
+        return m_dynamicOnly;
+    }
+
     std::string TransportReader::typeName(TransportPath const& path) const
     {
         if(auto const found = m_types.find(path.string()); found != m_types.end())
@@ -254,8 +220,8 @@ namespace hase::backend::transport
                        m_numericSources,
                        [&candidate](auto const& source) { return source.path == candidate; });
         };
-        return hasNumeric(path) || m_text.contains(path) || m_references.contains(path)
-               || hasNumeric(path + "/values");
+        return hasNumeric(path) || m_text.contains(path) || m_stringArrays.contains(path)
+               || m_references.contains(path) || hasNumeric(path + "/values");
     }
 
     void TransportReader::prefetch(TransportPath const& prefix) const
@@ -291,7 +257,13 @@ namespace hase::backend::transport
     std::string TransportReader::text(std::string const& path) const
     {
         if(auto const found = m_text.find(path); found != m_text.end())
-            return unquote(found->second);
+            return found->second;
+        if(auto const found = m_stringArrays.find(path); found != m_stringArrays.end())
+        {
+            if(found->second.size() == 1u)
+                return found->second.front();
+            throw std::runtime_error("transport field '" + path + "' is not scalar text");
+        }
         throw std::runtime_error("missing text transport field '" + path + "'");
     }
 
@@ -306,9 +278,14 @@ namespace hase::backend::transport
         const
     {
         auto const path = prefix.child(name).string();
+        if(auto const found = m_stringArrays.find(path); found != m_stringArrays.end())
+        {
+            destination = found->second;
+            return;
+        }
         if(auto const found = m_text.find(path); found != m_text.end())
         {
-            destination = parseStringArray(found->second);
+            destination = {found->second};
             return;
         }
         throw std::runtime_error("missing string-list transport field '" + path + "'");

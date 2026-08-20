@@ -1768,11 +1768,12 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
         def __exit__(self, exc_type, exc, traceback):
             pass
 
-        def write(self, root, *, iteration_index):
+        def write(self, root, *, iteration_index, dynamic_only=False):
             writes.append(
                 (
                     iteration_index,
                     float(root._backendGainMedium.beta),
+                    dynamic_only,
                 )
             )
             if iteration_index == 0:
@@ -1830,9 +1831,9 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
 
     assert states[-1].step == 3
     assert writes == [
-        (0, 0.0),
-        (1, 1.0),
-        (2, 2.0),
+        (0, 0.0, False),
+        (1, 1.0, True),
+        (2, 2.0, True),
     ]
 
 

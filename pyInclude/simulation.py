@@ -19,14 +19,13 @@ import numpy as np
 
 from hase_transport import PrimitiveDescription, field as transportField, reference
 from .alpakaUtils import AlpakaBackends
-from .physical import Domain, GainMedium, OpticalComponent
-from .lowering import lowerGainMedium, lowerSurfaceDomain
+from .physical import Domain, GainMedium, OpticalComponent, validateComponentOverlap
+from .frontendState import projectFrontendState, projectSurfaceDomain
 from .laser import (
     CrossSectionData,
     LaserProperties,
     PlanarPumpRelay,
     Pump,
-    SpectralDecomposition,
     SurfacePumpInjector,
     _PumpProperties,
     _PumpSource,
@@ -121,8 +120,6 @@ class PhiASE:
 
     crossSections: CrossSectionData | None = None
     """Absorption/emission spectra used by the ASE calculation."""
-    spectralProperties: SpectralDecomposition | None = None
-    """Alias for ``crossSections`` kept for the public spectral API."""
     laserProperties: LaserProperties | None = None
     """Lower-level laser property store accepted by legacy workflows."""
     gainMedium: GainMedium | None = None
@@ -221,13 +218,9 @@ class PhiASE:
                 raise TypeError("PhiASE.ase_steps must be an integer or None")
             if self.ase_steps < 0:
                 raise ValueError("PhiASE.ase_steps must be non-negative")
-        self._syncCrossSections()
+        self._resolveCrossSections()
 
-    def _syncCrossSections(self):
-        if self.crossSections is None and self.spectralProperties is not None:
-            self.crossSections = self.spectralProperties
-        if self.spectralProperties is None and self.crossSections is not None:
-            self.spectralProperties = self.crossSections
+    def _resolveCrossSections(self):
         if self.crossSections is None and self.laserProperties is not None:
             laser = self.laserProperties.toDict()
             self.crossSections = CrossSectionData(
@@ -237,7 +230,6 @@ class PhiASE:
                 crossSectionEmission=laser["s_ems"],
                 resolution=laser["l_res"],
             )
-            self.spectralProperties = self.crossSections
         return self
 
     @classmethod
@@ -252,7 +244,7 @@ class PhiASE:
         obj = _phiAse(simulation["phi_ase"], None)
         for name, value in overrides.items():
             setattr(obj, name, value)
-        return obj._syncCrossSections()
+        return obj._resolveCrossSections()
 
     @staticmethod
     def addArguments(parser):
@@ -401,7 +393,6 @@ class PhiASE:
             raise TypeError("PhiASE.run requires the physical GainMedium frontend primitive")
         if crossSections is not None:
             self.crossSections = crossSections
-            self.spectralProperties = crossSections
         if initialExcitation is None:
             initialExcitation = 0.0
 
@@ -494,8 +485,8 @@ def _simulationTransportDescription():
             transportField("outputSteps", optional=True),
             transportField("outputFields"),
             transportField("controlFields"),
-            transportField("currentStep"),
-            transportField("currentTime"),
+            transportField("currentStep", dynamic=True),
+            transportField("currentTime", dynamic=True),
         ),
         references=(
             reference("opticalComponents", many=True),
@@ -660,15 +651,7 @@ class Simulation:
             raise TypeError("opticalComponents must contain OpticalComponent values")
         if any(component not in self.opticalComponents for component in gainMedium.components):
             raise ValueError("every GainMedium component must be owned by Simulation")
-        occupied = {}
-        for component in self.opticalComponents:
-            for topology, mask in component.domain._shards:
-                previous = occupied.setdefault(id(topology), np.zeros_like(mask, dtype=bool))
-                if np.any(previous & mask):
-                    raise ValueError(
-                        "OpticalComponent volume domains must not overlap in one Simulation"
-                    )
-                previous |= mask
+        validateComponentOverlap(self.opticalComponents)
         if exteriorSurface is None:
             occupiedDomain = Domain(entityKind="volume")
             for component in self.opticalComponents:
@@ -757,14 +740,13 @@ class Simulation:
             raise ValueError(f"unsupported control_fields: {unknown_control_fields}")
         if len(set(self.controlFields)) != len(self.controlFields):
             raise ValueError("control_fields must be unique")
-        self._backendGainMedium, self.crossSections = lowerGainMedium(
+        self._backendGainMedium, self.crossSections = projectFrontendState(
             self.gainMedium,
             self.initialExcitation,
             opticalComponents=self.opticalComponents,
         )
         self.phiASE.gainMedium = self._backendGainMedium
         self.phiASE.crossSections = self.crossSections
-        self.phiASE.spectralProperties = self.crossSections
         self._ensureStateArrays()
         self._refreshExcitationState()
 
@@ -772,8 +754,6 @@ class Simulation:
         return _simulationTransportDescription()
 
     def _resolveSpectralProperties(self):
-        if self.phiASE.spectralProperties is not None:
-            return self.phiASE.spectralProperties
         if self.phiASE.crossSections is not None:
             return self.phiASE.crossSections
         if self.pump is not None and self.pump.sources:
@@ -793,7 +773,7 @@ class Simulation:
             raise TypeError("relays must contain PlanarPumpRelay values")
         def lowerDomains(values):
             return tuple(
-                lowerSurfaceDomain(self._backendGainMedium, value)
+                projectSurfaceDomain(self._backendGainMedium, value)
                 if hasattr(value, "entityKind")
                 else value
                 for value in values
@@ -837,8 +817,6 @@ class Simulation:
             self.crossSections = self._resolveSpectralProperties()
         if self.phiASE.crossSections is None:
             self.phiASE.crossSections = self.crossSections
-        if self.phiASE.spectralProperties is None:
-            self.phiASE.spectralProperties = self.crossSections
         return self
 
     def onStep(self, callback, *args, **kwargs):
@@ -1099,14 +1077,20 @@ class Simulation:
             for topology, mask in component.domain._shards:
                 owner, mapping = cellMaps[id(topology)]
                 if owner is not topology:
-                    raise RuntimeError("gain-medium topology identity changed during lowering")
+                    raise RuntimeError("gain-medium topology identity changed after state projection")
                 indices = mapping[mask]
                 if np.any(indices < 0):
                     raise ValueError("gain-medium Domain contains cells outside the executable assembly")
                 selectedValues.extend(values[indices].tolist())
             domains.append(component.domain)
             domainValues.append(np.asarray(selectedValues, dtype=np.float64))
-        self.excitationState = ExcitationState(tuple(domains), tuple(domainValues))
+        existing = getattr(self, "excitationState", None)
+        if existing is None:
+            self.excitationState = ExcitationState(tuple(domains), tuple(domainValues))
+        else:
+            if existing.domains != tuple(domains):
+                raise RuntimeError("excitation domains cannot change after transport composition")
+            object.__setattr__(existing, "values", tuple(domainValues))
 
     def _run_init_callbacks(self):
         if self._initialized:

@@ -10,11 +10,12 @@
 
 namespace io = openPMD;
 
-namespace hase::openpmd
+namespace hase::internal::openpmd
 {
-    namespace
-    {
-        constexpr char const* sstConfig = R"(
+    using hase::openpmd::InputSession;
+    using hase::openpmd::TransportIteration;
+
+    constexpr char const* sstConfig = R"(
 {
   "backend": "adios2",
   "adios2": {
@@ -28,51 +29,63 @@ namespace hase::openpmd
   }
 })";
 
-        bool hasSuffix(std::string_view value, std::string_view suffix)
-        {
-            return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
-        }
+    bool hasSuffix(std::string_view value, std::string_view suffix)
+    {
+        return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
+    }
 
-        char const* seriesConfig(std::string const& stream)
-        {
-            if(hasSuffix(stream, ".sst"))
-                return sstConfig;
-            if(hasSuffix(stream, ".h5"))
-                return R"({"backend":"hdf5"})";
-            return "{}";
-        }
+    char const* seriesConfig(std::string const& stream)
+    {
+        if(hasSuffix(stream, ".sst"))
+            return sstConfig;
+        if(hasSuffix(stream, ".h5"))
+            return R"({"backend":"hdf5"})";
+        return "{}";
+    }
 
-        InputSession makeSession(std::shared_ptr<io::Series> series)
-        {
-            auto iterations = std::make_shared<decltype(series->readIterations())>(series->readIterations());
-            auto iterator = std::make_shared<decltype(iterations->begin())>(iterations->begin());
-            auto first = std::make_shared<bool>(true);
-            auto closed = std::make_shared<bool>(false);
+    InputSession makeSession(std::shared_ptr<io::Series> series)
+    {
+        auto iterations = std::make_shared<decltype(series->readIterations())>(series->readIterations());
+        auto iterator = std::make_shared<decltype(iterations->begin())>(iterations->begin());
+        auto first = std::make_shared<bool>(true);
+        auto closed = std::make_shared<bool>(false);
+        auto simulation = std::make_shared<std::optional<backend::Simulation>>();
 
-            return InputSession{
-                [series, iterations, iterator, first, closed]() mutable -> std::optional<TransportIteration>
+        return InputSession{
+            [series, iterations, iterator, first, closed, simulation]() mutable -> std::optional<TransportIteration>
+            {
+                if(*closed)
+                    throw std::runtime_error("openPMD input session is closed");
+                if(!*first)
+                    ++*iterator;
+                *first = false;
+                if(*iterator == iterations->end())
+                    return std::nullopt;
+                auto iteration = **iterator;
+                auto const index = iteration.iterationIndex;
+                backend::transport::TransportReader reader(*series, iteration);
+                if(reader.dynamicOnly())
                 {
-                    if(*closed)
-                        throw std::runtime_error("openPMD input session is closed");
-                    if(!*first)
-                        ++*iterator;
-                    *first = false;
-                    if(*iterator == iterations->end())
-                        return std::nullopt;
-                    auto iteration = **iterator;
-                    auto const index = iteration.iterationIndex;
-                    backend::transport::TransportReader reader(*series, iteration);
-                    auto model = backend::Simulation::fromTransport(reader, reader.root());
-                    iteration.close();
-                    return TransportIteration{index, std::move(model)};
-                },
-                [series, closed]
-                {
-                    if(!std::exchange(*closed, true))
-                        series->close();
-                }};
-        }
-    } // namespace
+                    if(!*simulation)
+                        throw std::runtime_error("dynamic transport iteration arrived before the full graph");
+                    (*simulation)->updateFromTransport(reader, reader.root());
+                }
+                else
+                    *simulation = backend::Simulation::fromTransport(reader, reader.root());
+                iteration.close();
+                return TransportIteration{index, **simulation};
+            },
+            [series, closed]
+            {
+                if(!std::exchange(*closed, true))
+                    series->close();
+            }};
+    }
+} // namespace hase::internal::openpmd
+
+namespace hase::openpmd
+{
+    using namespace hase::internal::openpmd;
 
     InputSession::InputSession(std::function<std::optional<TransportIteration>()> next, std::function<void()> close)
         : m_next(std::move(next))

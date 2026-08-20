@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -43,11 +44,13 @@ TEST_CASE("transport reader delegates a subtree to its primitive", "[transport]"
     {
         io::Series series(path.string(), io::Access::CREATE);
         auto iteration = series.snapshots()[0u];
-        iteration.setAttribute("haseTransportVersion", std::string{"1.0"});
+        iteration.setAttribute("haseTransportVersion", std::string{"1.1"});
+        iteration.setAttribute("haseUpdateMode", std::string{"full"});
         iteration.setAttribute("haseRoot", std::string{"timeIntegrationSolver"});
-        iteration.setAttribute("haseNodePaths", std::string{"[\"timeIntegrationSolver\"]"});
-        iteration.setAttribute("haseNodeTypes", std::string{"[\"timeIntegrationSolver\"]"});
-        iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Fname", std::string{"\"implicit-euler\""});
+        iteration.setAttribute("haseNodePaths", std::vector<std::string>{"timeIntegrationSolver"});
+        iteration.setAttribute("haseNodeTypes", std::vector<std::string>{"timeIntegrationSolver"});
+        iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Fname", std::string{"implicit-éuler\n🚀"});
+        iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Flabels", std::vector<std::string>{"α", "β"});
         writeScalar<std::uint64_t>(series, iteration, "iterations", 7u);
         writeScalar<double>(series, iteration, "tolerance", 1.0e-8);
         iteration.close();
@@ -59,11 +62,45 @@ TEST_CASE("transport reader delegates a subtree to its primitive", "[transport]"
         auto iteration = series.snapshots().begin()->second;
         hase::backend::transport::TransportReader reader(series, iteration);
         auto const solver = hase::backend::TimeIntegrationSolver::fromTransport(reader, reader.root());
-        CHECK(solver.name == "implicit-euler");
+        CHECK(solver.name == "implicit-éuler\n🚀");
         REQUIRE(solver.iterations);
         CHECK(*solver.iterations == 7u);
         REQUIRE(solver.tolerance);
         CHECK(*solver.tolerance == Catch::Approx(1.0e-8));
+        std::vector<std::string> labels;
+        reader.assign(labels, reader.root(), "labels");
+        CHECK(labels == std::vector<std::string>{"α", "β"});
+        series.close();
+    }
+
+    std::filesystem::remove_all(path);
+}
+
+TEST_CASE("transport reader preserves uint64 values exactly", "[transport]")
+{
+    auto const path = transportPath();
+    auto const expected = std::numeric_limits<std::uint64_t>::max() - 2u;
+    {
+        io::Series series(path.string(), io::Access::CREATE);
+        auto iteration = series.snapshots()[0u];
+        iteration.setAttribute("haseTransportVersion", std::string{"1.1"});
+        iteration.setAttribute("haseUpdateMode", std::string{"full"});
+        iteration.setAttribute("haseRoot", std::string{"timeIntegrationSolver"});
+        iteration.setAttribute("haseNodePaths", std::vector<std::string>{"timeIntegrationSolver"});
+        iteration.setAttribute("haseNodeTypes", std::vector<std::string>{"timeIntegrationSolver"});
+        iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Fname", std::string{"implicit-euler"});
+        writeScalar<std::uint64_t>(series, iteration, "iterations", expected);
+        iteration.close();
+        series.close();
+    }
+
+    {
+        io::Series series(path.string(), io::Access::READ_ONLY);
+        auto iteration = series.snapshots().begin()->second;
+        hase::backend::transport::TransportReader reader(series, iteration);
+        auto const solver = hase::backend::TimeIntegrationSolver::fromTransport(reader, reader.root());
+        REQUIRE(solver.iterations);
+        CHECK(*solver.iterations == expected);
         series.close();
     }
 

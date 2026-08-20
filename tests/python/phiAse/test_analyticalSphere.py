@@ -211,7 +211,7 @@ def testForwardSphereCenterVolumeMatchesAnalyticalSolution(radius, gain, openpmd
     )
     rayCount = analyticalSphereRayCount()
     phiAse = PhiASE(
-        spectralProperties=crossSections,
+        crossSections=crossSections,
         maxRays=rayCount,
         forwardRayCount=rayCount,
         repetitions=1,

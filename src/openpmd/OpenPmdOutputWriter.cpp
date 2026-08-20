@@ -9,89 +9,89 @@
 
 namespace io = openPMD;
 
+namespace hase::internal::openpmd::output
+{
+    constexpr char const* transportVersion = "1.0";
+
+    bool hasSuffix(std::string_view value, std::string_view suffix)
+    {
+        return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
+    }
+
+    std::string seriesConfig(std::string const& stream)
+    {
+        if(hasSuffix(stream, ".sst"))
+            return R"({"backend":"adios2","adios2":{"engine":{"type":"sst","parameters":{"DataTransport":"WAN","OpenTimeoutSecs":"600"}}}})";
+        if(hasSuffix(stream, ".h5"))
+            return R"({"backend":"hdf5"})";
+        return "{}";
+    }
+
+    std::string encodePath(std::string const& path)
+    {
+        std::string result;
+        result.reserve(path.size());
+        for(char character : path)
+        {
+            if(character == '%')
+                result += "%25";
+            else if(character == '/')
+                result += "%2F";
+            else
+                result += character;
+        }
+        return result;
+    }
+
+    template<typename T>
+    void writeArray(io::Iteration& iteration, std::string const& path, std::vector<T> const& values)
+    {
+        auto record = iteration.meshes["hase__" + encodePath(path)];
+        record.setAttribute("haseTransportVersion", std::string{transportVersion});
+        record.setAttribute("hasePath", path);
+        record.setAttribute("haseFieldName", path.substr(path.rfind('/') + 1u));
+        record.setAttribute("haseDynamic", true);
+        record.setAttribute("haseShape", "[" + std::to_string(values.size()) + "]");
+        record.setAxisLabels({"flatIndex"});
+        record.setGridSpacing(std::vector<double>{1.0});
+        record.setGridGlobalOffset(std::vector<double>{0.0});
+        record.setGridUnitSI(1.0);
+        auto& component = record[io::MeshRecordComponent::SCALAR];
+        component.setUnitSI(1.0);
+        component.setPosition(std::vector<double>{0.0});
+        component.resetDataset(io::Dataset{io::determineDatatype<T>(), io::Extent{values.size()}});
+        auto data = std::shared_ptr<T[]>(new T[values.size()]);
+        std::copy(values.begin(), values.end(), data.get());
+        component.storeChunk(data, io::Offset{0u}, io::Extent{values.size()});
+    }
+
+    void writeResultStatus(io::Iteration& iteration, std::string const& root, core::Result const& result)
+    {
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/srmStatus"),
+            std::string{core::toString(result.srmStatus)});
+        iteration.setAttribute("hase__attribute__" + encodePath(root + "/srmPasses"), result.srmPasses);
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/srmRemainingFraction"),
+            result.srmRemainingFraction);
+        iteration.setAttribute("hase__attribute__" + encodePath(root + "/srmMaxIterations"), result.srmMaxIterations);
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/srmDivergenceStreak"),
+            result.srmDivergenceStreak);
+    }
+
+    void setRoot(io::Iteration& iteration, std::string const& root)
+    {
+        iteration.setAttribute("haseTransportVersion", std::string{transportVersion});
+        iteration.setAttribute("haseRoot", root);
+        iteration.setAttribute("haseNodePaths", "[\"" + root + "\"]");
+        iteration.setAttribute("haseNodeTypes", "[\"" + root + "\"]");
+    }
+} // namespace hase::internal::openpmd::output
+
 namespace hase::openpmd
 {
-    namespace
-    {
-        constexpr char const* transportVersion = "1.0";
-
-        bool hasSuffix(std::string_view value, std::string_view suffix)
-        {
-            return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
-        }
-
-        std::string seriesConfig(std::string const& stream)
-        {
-            if(hasSuffix(stream, ".sst"))
-                return R"({"backend":"adios2","adios2":{"engine":{"type":"sst","parameters":{"DataTransport":"WAN","OpenTimeoutSecs":"600"}}}})";
-            if(hasSuffix(stream, ".h5"))
-                return R"({"backend":"hdf5"})";
-            return "{}";
-        }
-
-        std::string encodePath(std::string const& path)
-        {
-            std::string result;
-            result.reserve(path.size());
-            for(char character : path)
-            {
-                if(character == '%')
-                    result += "%25";
-                else if(character == '/')
-                    result += "%2F";
-                else
-                    result += character;
-            }
-            return result;
-        }
-
-        template<typename T>
-        void writeArray(io::Iteration& iteration, std::string const& path, std::vector<T> const& values)
-        {
-            auto record = iteration.meshes["hase__" + encodePath(path)];
-            record.setAttribute("haseTransportVersion", std::string{transportVersion});
-            record.setAttribute("hasePath", path);
-            record.setAttribute("haseFieldName", path.substr(path.rfind('/') + 1u));
-            record.setAttribute("haseDynamic", true);
-            record.setAttribute("haseShape", "[" + std::to_string(values.size()) + "]");
-            record.setAxisLabels({"flatIndex"});
-            record.setGridSpacing(std::vector<double>{1.0});
-            record.setGridGlobalOffset(std::vector<double>{0.0});
-            record.setGridUnitSI(1.0);
-            auto& component = record[io::MeshRecordComponent::SCALAR];
-            component.setUnitSI(1.0);
-            component.setPosition(std::vector<double>{0.0});
-            component.resetDataset(io::Dataset{io::determineDatatype<T>(), io::Extent{values.size()}});
-            auto data = std::shared_ptr<T[]>(new T[values.size()]);
-            std::copy(values.begin(), values.end(), data.get());
-            component.storeChunk(data, io::Offset{0u}, io::Extent{values.size()});
-        }
-
-        void writeResultStatus(io::Iteration& iteration, std::string const& root, core::Result const& result)
-        {
-            iteration.setAttribute(
-                "hase__attribute__" + encodePath(root + "/srmStatus"),
-                std::string{core::toString(result.srmStatus)});
-            iteration.setAttribute("hase__attribute__" + encodePath(root + "/srmPasses"), result.srmPasses);
-            iteration.setAttribute(
-                "hase__attribute__" + encodePath(root + "/srmRemainingFraction"),
-                result.srmRemainingFraction);
-            iteration.setAttribute(
-                "hase__attribute__" + encodePath(root + "/srmMaxIterations"),
-                result.srmMaxIterations);
-            iteration.setAttribute(
-                "hase__attribute__" + encodePath(root + "/srmDivergenceStreak"),
-                result.srmDivergenceStreak);
-        }
-
-        void setRoot(io::Iteration& iteration, std::string const& root)
-        {
-            iteration.setAttribute("haseTransportVersion", std::string{transportVersion});
-            iteration.setAttribute("haseRoot", root);
-            iteration.setAttribute("haseNodePaths", "[\"" + root + "\"]");
-            iteration.setAttribute("haseNodeTypes", "[\"" + root + "\"]");
-        }
-    } // namespace
+    using namespace hase::internal::openpmd::output;
 
     class OutputWriter::Impl
     {

@@ -344,27 +344,21 @@ namespace hase::core
             }
             else
             {
-                auto const cellFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                    m_devBundle.device,
+                alpaka::onHost::transform(
+                    m_queue,
                     m_devBundle.executor,
-                    alpaka::Vec{mesh.numberOfCells});
-                m_queue.enqueue(
-                    cellFrameSpec,
-                    alpaka::KernelBundle{
-                        hase::kernels::BuildBetaVolumeWeights{},
-                        mesh,
-                        betaVolume,
-                        m_betaVolumeWeights});
+                    m_betaVolumeWeights,
+                    hase::kernels::BuildBetaVolumeWeights{},
+                    betaVolume,
+                    meshContainer.cellVolumes);
                 alpaka::onHost::inclusiveScan(
                     m_queue,
                     m_devBundle.executor,
                     m_betaVolumePrefixScanBuffer,
                     meshContainer.betaVolumePrefix,
                     m_betaVolumeWeights);
-                auto const scalarFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                    m_devBundle.device,
-                    m_devBundle.executor,
-                    alpaka::Vec{1u});
+                auto const scalarFrameSpec
+                    = alpaka::onHost::getFrameSpec(m_devBundle.device, m_devBundle.executor, alpaka::Vec{1u});
                 m_queue.enqueue(
                     scalarFrameSpec,
                     alpaka::KernelBundle{
