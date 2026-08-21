@@ -186,7 +186,10 @@ the backend context created from iteration zero.
 
 ``controlFields`` declares which supported state Python may update between
 steps. It is transport data owned by ``Simulation``; the generic writer stores
-the string sequence without interpreting its simulation meaning.
+all HASE-owned sequence metadata, including ``controlFields``, ``outputFields``,
+and numeric field shapes, as scalar JSON so its representation is portable
+across ADIOS BP, ADIOS SST, and HDF5 without interpreting its simulation
+meaning.
 
 Results and snapshots
 ---------------------

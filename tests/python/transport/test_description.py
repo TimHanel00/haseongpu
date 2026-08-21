@@ -129,6 +129,9 @@ def test_physical_graph_serializes_shared_material_data_once():
         assert np.asarray(connectivity).shape == (4, 1)
     phi_ase = next(node for node in graph.nodes if node.typeName == "phiAse")
     assert "crossSections" not in phi_ase.references
+    simulation_node = next(node for node in graph.nodes if node.typeName == "simulation")
+    assert simulation_node.fields["outputFields"][0].encoding == "json"
+    assert simulation_node.fields["controlFields"][0].encoding == "json"
 
     dynamic_paths = {
         f"{node.path}/{name}"

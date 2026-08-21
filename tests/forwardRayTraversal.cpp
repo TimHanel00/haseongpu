@@ -1,6 +1,7 @@
 #include <alpaka/math.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_template_test_macros.hpp>
@@ -139,16 +140,21 @@ namespace hase::tests
         hase::core::Point const direction)
     {
         auto queue = device.makeQueue(alpaka::queueKind::blocking);
-        auto deviceMesh = hostMesh.toDevice(device);
-        std::vector<TraversalResult> result(1u);
-        auto deviceResult = hase::alpakaUtils::toDevice(queue, result);
+        auto deviceMesh = hostMesh.makeDeviceContainer(device);
+        deviceMesh.toDevice(queue);
+        auto result = hase::alpakaUtils::getHybridBuffer(device, std::vector<TraversalResult>(1u));
         auto const frameSpec = hase::alpakaUtils::getFrameSpec<std::uint32_t>(device, executor, alpaka::Vec{1u});
         queue.enqueue(
             frameSpec,
-            alpaka::KernelBundle{TraverseOneRay{}, deviceMesh.toView(), startCell, origin, direction, deviceResult});
-        alpaka::onHost::memcpy(queue, result, deviceResult);
-        alpaka::onHost::wait(queue);
-        return result.front();
+            alpaka::KernelBundle{
+                TraverseOneRay{},
+                deviceMesh.toView(),
+                startCell,
+                origin,
+                direction,
+                result.toDeviceView()});
+        result.toHost(queue);
+        return result.getHostView()[0u];
     }
 
 } // namespace hase::tests

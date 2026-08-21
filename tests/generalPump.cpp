@@ -1,6 +1,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_template_test_macros.hpp>
@@ -112,21 +113,19 @@ namespace
     template<typename T_Buffer>
     std::vector<double> copyDoubleBuffer(auto const& queue, T_Buffer const& deviceBuffer)
     {
-        auto host = alpaka::onHost::allocHostLike(deviceBuffer);
-        alpaka::onHost::memcpy(queue, host, deviceBuffer);
-        alpaka::onHost::wait(queue);
-        auto const size = static_cast<std::size_t>(host.getMdSpan().getExtents().x());
-        return {alpaka::onHost::data(host), alpaka::onHost::data(host) + size};
+        std::vector<double> result(static_cast<std::size_t>(deviceBuffer.getExtents().x()));
+        auto transfer = hase::alpakaUtils::getHybridBuffer(result, deviceBuffer);
+        transfer.toHost(queue);
+        return result;
     }
 
     template<typename T_Buffer>
     std::vector<unsigned> copyUnsignedBuffer(auto const& queue, T_Buffer const& deviceBuffer)
     {
-        auto host = alpaka::onHost::allocHostLike(deviceBuffer);
-        alpaka::onHost::memcpy(queue, host, deviceBuffer);
-        alpaka::onHost::wait(queue);
-        auto const size = static_cast<std::size_t>(host.getMdSpan().getExtents().x());
-        return {alpaka::onHost::data(host), alpaka::onHost::data(host) + size};
+        std::vector<unsigned> result(static_cast<std::size_t>(deviceBuffer.getExtents().x()));
+        auto transfer = hase::alpakaUtils::getHybridBuffer(result, deviceBuffer);
+        transfer.toHost(queue);
+        return result;
     }
 } // namespace
 
@@ -165,7 +164,8 @@ TEMPLATE_LIST_TEST_CASE(
 
     auto project = [&](hase::core::HostMesh& mesh)
     {
-        auto deviceMesh = mesh.toDevice(device);
+        auto deviceMesh = mesh.makeDeviceContainer(device);
+        deviceMesh.toDevice(queue);
         std::vector<double> vertexValues(mesh.numberOfMeshPoints, 0.0);
         vertexValues[0] = 1.0;
         auto vertexIntegral = hase::alpakaUtils::toDevice(queue, vertexValues);
@@ -441,7 +441,8 @@ TEMPLATE_LIST_TEST_CASE(
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
     auto mesh = makeSingleTetMesh();
-    auto deviceMesh = mesh.toDevice(device);
+    auto deviceMesh = mesh.makeDeviceContainer(device);
+    deviceMesh.toDevice(queue);
     auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
     auto vertexIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>(mesh.numberOfMeshPoints, 0.0));
 
@@ -535,7 +536,8 @@ TEMPLATE_LIST_TEST_CASE(
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
     auto mesh = makeSingleTetMesh();
-    auto deviceMesh = mesh.toDevice(device);
+    auto deviceMesh = mesh.makeDeviceContainer(device);
+    deviceMesh.toDevice(queue);
     auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
     auto vertexIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>(mesh.numberOfMeshPoints, 0.0));
     auto const lumpedVolumes = hase::kernels::makeLumpedGainVertexVolumes(mesh);
@@ -592,7 +594,8 @@ TEMPLATE_LIST_TEST_CASE(
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
     hase::alpakaUtils::DevBundle devBundle(device, executor);
     auto mesh = makeSingleTetMesh();
-    auto deviceMesh = mesh.toDevice(device);
+    auto deviceMesh = mesh.makeDeviceContainer(device);
+    deviceMesh.toDevice(queue);
 
     auto source = uniformSource(10u);
     source.wavelengths = {940e-9};

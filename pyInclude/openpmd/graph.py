@@ -67,8 +67,11 @@ def _setRecordMetadata(record, *, path, typeName, spec, numeric, shape):
     record.set_attribute("hasePath", path)
     record.set_attribute("haseOwnerType", typeName)
     record.set_attribute("haseFieldName", spec.name)
-    record.set_attribute("haseAxes", list(spec.axes))
-    record.set_attribute("haseShape", [int(extent) for extent in shape])
+    record.set_attribute("haseAxes", json.dumps(list(spec.axes), separators=(",", ":")))
+    record.set_attribute(
+        "haseShape",
+        json.dumps([int(extent) for extent in shape], separators=(",", ":")),
+    )
     record.set_attribute("haseDynamic", bool(spec.dynamic))
     record.set_attribute("haseEncoding", spec.encoding)
     record.set_attribute("haseUnit", numeric.unit)
@@ -186,20 +189,27 @@ def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> No
     iteration.set_attribute("haseTransportVersion", TRANSPORT_VERSION)
     iteration.set_attribute("haseUpdateMode", "dynamic" if dynamicOnly else "full")
     iteration.set_attribute("haseRoot", graph.root)
-    iteration.set_attribute("haseNodePaths", list(selectedNodes))
     iteration.set_attribute(
-        "haseNodeTypes", [node.typeName for node in selectedNodes.values()]
+        "haseNodePaths",
+        json.dumps(list(selectedNodes), separators=(",", ":")),
+    )
+    iteration.set_attribute(
+        "haseNodeTypes",
+        json.dumps(
+            [node.typeName for node in selectedNodes.values()],
+            separators=(",", ":"),
+        ),
     )
 
     pending = []
     for node in selectedNodes.values():
         for name, paths in node.references.items():
             selectedPaths = [path for path in paths if path in selectedNodes]
-            if not selectedPaths:
+            if dynamicOnly and not selectedPaths:
                 continue
             iteration.set_attribute(
                 referenceName(f"{node.path}/{name}"),
-                selectedPaths,
+                json.dumps(selectedPaths, separators=(",", ":")),
             )
     for node, name, spec, value in selectedFields:
         if value is None:
@@ -221,7 +231,9 @@ def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> No
         ):
             iteration.set_attribute(
                 attributeName(path),
-                value if isinstance(value, str) else list(value),
+                value
+                if isinstance(value, str)
+                else json.dumps(list(value), separators=(",", ":")),
             )
             continue
         pending.append(

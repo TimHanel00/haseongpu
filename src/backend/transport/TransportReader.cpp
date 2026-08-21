@@ -2,6 +2,8 @@
 #include <openPMD/openPMD.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <functional>
 
 namespace io = openPMD;
@@ -30,17 +32,174 @@ namespace hase::internal::transport
         return value;
     }
 
+    std::vector<std::string> jsonStringValues(std::string const& value, std::string const& path)
+    {
+        auto fail = [&path](std::string const& detail) -> void
+        {
+            throw std::runtime_error("transport field '" + path + "' contains an invalid JSON string list: " + detail);
+        };
+        std::size_t position = 0u;
+        auto skipWhitespace = [&]
+        {
+            while(position < value.size() && std::isspace(static_cast<unsigned char>(value[position])))
+                ++position;
+        };
+        skipWhitespace();
+        if(position == value.size() || value[position++] != '[')
+            fail("expected '['");
+        skipWhitespace();
+        std::vector<std::string> result;
+        if(position < value.size() && value[position] == ']')
+            ++position;
+        else
+        {
+            while(true)
+            {
+                if(position == value.size() || value[position++] != '"')
+                    fail("expected a string value");
+                std::string item;
+                bool closed = false;
+                while(position < value.size())
+                {
+                    auto const character = value[position++];
+                    if(character == '"')
+                    {
+                        closed = true;
+                        break;
+                    }
+                    if(static_cast<unsigned char>(character) < 0x20u)
+                        fail("unescaped control character");
+                    if(character != '\\')
+                    {
+                        item.push_back(character);
+                        continue;
+                    }
+                    if(position == value.size())
+                        fail("incomplete escape sequence");
+                    switch(value[position++])
+                    {
+                    case '"':
+                        item.push_back('"');
+                        break;
+                    case '\\':
+                        item.push_back('\\');
+                        break;
+                    case '/':
+                        item.push_back('/');
+                        break;
+                    case 'b':
+                        item.push_back('\b');
+                        break;
+                    case 'f':
+                        item.push_back('\f');
+                        break;
+                    case 'n':
+                        item.push_back('\n');
+                        break;
+                    case 'r':
+                        item.push_back('\r');
+                        break;
+                    case 't':
+                        item.push_back('\t');
+                        break;
+                    default:
+                        fail("unsupported escape sequence");
+                    }
+                }
+                if(!closed)
+                    fail("unterminated string value");
+                result.push_back(std::move(item));
+                skipWhitespace();
+                if(position < value.size() && value[position] == ',')
+                {
+                    ++position;
+                    skipWhitespace();
+                    continue;
+                }
+                if(position < value.size() && value[position] == ']')
+                {
+                    ++position;
+                    break;
+                }
+                fail("expected ',' or ']'");
+            }
+        }
+        skipWhitespace();
+        if(position != value.size())
+            fail("unexpected trailing data");
+        return result;
+    }
+
     std::vector<std::string> stringValues(io::Attribute const& attribute)
     {
         if(auto values = attribute.getOptional<std::vector<std::string>>())
+        {
+            if(values->size() == 1u && !values->front().empty() && values->front().front() == '[')
+                return jsonStringValues(values->front(), "string-list attribute");
             return std::move(*values);
-        return {attribute.get<std::string>()};
+        }
+        auto value = attribute.get<std::string>();
+        if(!value.empty() && value.front() == '[')
+            return jsonStringValues(value, "string-list attribute");
+        return {std::move(value)};
+    }
+
+    std::vector<std::uint64_t> jsonExtents(std::string const& value)
+    {
+        auto fail = [](std::string const& detail) -> void
+        { throw std::runtime_error("transport shape metadata contains an invalid JSON extent list: " + detail); };
+        std::size_t position = 0u;
+        auto skipWhitespace = [&]
+        {
+            while(position < value.size() && std::isspace(static_cast<unsigned char>(value[position])))
+                ++position;
+        };
+        skipWhitespace();
+        if(position == value.size() || value[position++] != '[')
+            fail("expected '['");
+        skipWhitespace();
+        std::vector<std::uint64_t> result;
+        if(position < value.size() && value[position] == ']')
+            ++position;
+        else
+        {
+            while(true)
+            {
+                auto const* begin = value.data() + position;
+                auto const* end = value.data() + value.size();
+                std::uint64_t extent = 0u;
+                auto const parsed = std::from_chars(begin, end, extent);
+                if(parsed.ec != std::errc{} || parsed.ptr == begin)
+                    fail("expected an unsigned integer");
+                position = static_cast<std::size_t>(parsed.ptr - value.data());
+                result.push_back(extent);
+                skipWhitespace();
+                if(position < value.size() && value[position] == ',')
+                {
+                    ++position;
+                    skipWhitespace();
+                    continue;
+                }
+                if(position < value.size() && value[position] == ']')
+                {
+                    ++position;
+                    break;
+                }
+                fail("expected ',' or ']'");
+            }
+        }
+        skipWhitespace();
+        if(position != value.size())
+            fail("unexpected trailing data");
+        return result;
     }
 
     std::vector<std::uint64_t> extents(io::Attribute const& attribute)
     {
         if(auto values = attribute.getOptional<std::vector<std::uint64_t>>())
             return std::move(*values);
+        if(auto value = attribute.getOptional<std::string>())
+            return jsonExtents(*value);
         return {attribute.get<std::uint64_t>()};
     }
 
@@ -280,12 +439,18 @@ namespace hase::backend::transport
         auto const path = prefix.child(name).string();
         if(auto const found = m_stringArrays.find(path); found != m_stringArrays.end())
         {
-            destination = found->second;
+            if(found->second.size() == 1u && !found->second.front().empty() && found->second.front().front() == '[')
+                destination = jsonStringValues(found->second.front(), path);
+            else
+                destination = found->second;
             return;
         }
         if(auto const found = m_text.find(path); found != m_text.end())
         {
-            destination = {found->second};
+            if(!found->second.empty() && found->second.front() == '[')
+                destination = jsonStringValues(found->second, path);
+            else
+                destination = {found->second};
             return;
         }
         throw std::runtime_error("missing string-list transport field '" + path + "'");

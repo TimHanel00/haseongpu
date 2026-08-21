@@ -1027,30 +1027,36 @@ namespace hase::kernels
             , m_exitMask(hase::alpakaUtils::toDevice(queue, pumpDeviceStorage(geometry.exitMask)))
             , m_entryFaceIds(hase::alpakaUtils::toDevice(queue, pumpDeviceStorage(geometry.entryFaceIds)))
             , m_cacheState(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<unsigned>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0u)))
+                  alpaka::onHost::alloc<unsigned>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheTargetFace(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<unsigned>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0u)))
+                  alpaka::onHost::alloc<unsigned>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric0(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<double>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0.0)))
+                  alpaka::onHost::alloc<double>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric1(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<double>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0.0)))
+                  alpaka::onHost::alloc<double>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric2(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<double>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0.0)))
+                  alpaka::onHost::alloc<double>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_faceCount{geometry.faceCount}
             , m_relayCount{static_cast<unsigned>(geometry.descriptors.size())}
             , m_rayCount{static_cast<unsigned>(rays.size())}
             , m_pumpSteps{pumpSteps}
         {
+            auto const cacheExtent = alpaka::Vec{std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())};
+            alpaka::onHost::fill(queue, m_cacheState, 0u, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheTargetFace, 0u, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheBarycentric0, 0.0, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheBarycentric1, 0.0, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheBarycentric2, 0.0, cacheExtent);
         }
 
         [[nodiscard]] unsigned rayCount() const

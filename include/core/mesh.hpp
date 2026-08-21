@@ -32,7 +32,7 @@
 #include <alpaka/alpaka.hpp>
 #include <alpaka/core/common.hpp>
 
-#include <alpakaUtils/memory.hpp>
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/utils.hpp>
 #include <core/geometry.hpp>
 
@@ -335,8 +335,6 @@ namespace hase::core
     template<alpaka::onHost::concepts::Device T_Device>
     class DeviceMeshContainer
     {
-        using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::blocking));
-
     public:
         DeviceMeshContainer(
             T_Device device,
@@ -353,48 +351,48 @@ namespace hase::core
             unsigned numberOfLevels,
             float thickness,
             bool samplePointsAreMeshPoints,
-            std::vector<double> points,
-            std::vector<double> betaVolume,
-            std::vector<unsigned> claddingCellTypes,
-            std::vector<float> refractiveIndices,
-            std::vector<float> reflectivities,
-            std::vector<float> surfaceReflectivities,
-            std::vector<float> surfaceRefractiveIndexInside,
-            std::vector<float> surfaceRefractiveIndexOutside,
-            std::vector<unsigned> cellPointIndices,
-            std::vector<unsigned> cellTypes,
-            std::vector<int> cellFaces,
-            std::vector<double> barycentricFacePlanes,
-            std::vector<int> cellNeighborCells,
-            std::vector<int> cellNeighborLocalFaces,
-            std::vector<int> cellFaceBoundaries,
-            std::vector<float> cellVolumes,
-            std::vector<double> cellVolumePrefix,
-            std::vector<double> betaVolumePrefix,
-            std::vector<double> cellCenters,
-            std::vector<double> samplePoints)
+            std::vector<double>& points,
+            std::vector<double>& betaVolume,
+            std::vector<unsigned>& claddingCellTypes,
+            std::vector<float>& refractiveIndices,
+            std::vector<float>& reflectivities,
+            std::vector<float>& surfaceReflectivities,
+            std::vector<float>& surfaceRefractiveIndexInside,
+            std::vector<float>& surfaceRefractiveIndexOutside,
+            std::vector<unsigned>& cellPointIndices,
+            std::vector<unsigned>& cellTypes,
+            std::vector<int>& cellFaces,
+            std::vector<double>& barycentricFacePlanes,
+            std::vector<int>& cellNeighborCells,
+            std::vector<int>& cellNeighborLocalFaces,
+            std::vector<int>& cellFaceBoundaries,
+            std::vector<float>& cellVolumes,
+            std::vector<double>& cellVolumePrefix,
+            std::vector<double>& betaVolumePrefix,
+            std::vector<double>& cellCenters,
+            std::vector<double>& samplePoints)
             : m_device(device)
-            , m_queue(device.makeQueue(alpaka::queueKind::blocking))
-            , points(hase::alpakaUtils::toDevice(m_queue, points))
-            , betaVolume(hase::alpakaUtils::toDevice(m_queue, betaVolume))
-            , claddingCellTypes(hase::alpakaUtils::toDevice(m_queue, claddingCellTypes))
-            , refractiveIndices(hase::alpakaUtils::toDevice(m_queue, refractiveIndices))
-            , reflectivities(hase::alpakaUtils::toDevice(m_queue, reflectivities))
-            , surfaceReflectivities(hase::alpakaUtils::toDevice(m_queue, surfaceReflectivities))
-            , surfaceRefractiveIndexInside(hase::alpakaUtils::toDevice(m_queue, surfaceRefractiveIndexInside))
-            , surfaceRefractiveIndexOutside(hase::alpakaUtils::toDevice(m_queue, surfaceRefractiveIndexOutside))
-            , cellPointIndices(hase::alpakaUtils::toDevice(m_queue, cellPointIndices))
-            , cellTypes(hase::alpakaUtils::toDevice(m_queue, cellTypes))
-            , cellFaces(hase::alpakaUtils::toDevice(m_queue, cellFaces))
-            , barycentricFacePlanes(hase::alpakaUtils::toDevice(m_queue, barycentricFacePlanes))
-            , cellNeighborCells(hase::alpakaUtils::toDevice(m_queue, cellNeighborCells))
-            , cellNeighborLocalFaces(hase::alpakaUtils::toDevice(m_queue, cellNeighborLocalFaces))
-            , cellFaceBoundaries(hase::alpakaUtils::toDevice(m_queue, cellFaceBoundaries))
-            , cellVolumes(hase::alpakaUtils::toDevice(m_queue, cellVolumes))
-            , cellVolumePrefix(hase::alpakaUtils::toDevice(m_queue, cellVolumePrefix))
-            , betaVolumePrefix(hase::alpakaUtils::toDevice(m_queue, betaVolumePrefix))
-            , cellCenters(hase::alpakaUtils::toDevice(m_queue, cellCenters))
-            , samplePoints(hase::alpakaUtils::toDevice(m_queue, samplePoints))
+            , points(hase::alpakaUtils::getHybridBuffer(m_device, points))
+            , betaVolume(hase::alpakaUtils::getHybridBuffer(m_device, betaVolume))
+            , claddingCellTypes(hase::alpakaUtils::getHybridBuffer(m_device, claddingCellTypes))
+            , refractiveIndices(hase::alpakaUtils::getHybridBuffer(m_device, refractiveIndices))
+            , reflectivities(hase::alpakaUtils::getHybridBuffer(m_device, reflectivities))
+            , surfaceReflectivities(hase::alpakaUtils::getHybridBuffer(m_device, surfaceReflectivities))
+            , surfaceRefractiveIndexInside(hase::alpakaUtils::getHybridBuffer(m_device, surfaceRefractiveIndexInside))
+            , surfaceRefractiveIndexOutside(
+                  hase::alpakaUtils::getHybridBuffer(m_device, surfaceRefractiveIndexOutside))
+            , cellPointIndices(hase::alpakaUtils::getHybridBuffer(m_device, cellPointIndices))
+            , cellTypes(hase::alpakaUtils::getHybridBuffer(m_device, cellTypes))
+            , cellFaces(hase::alpakaUtils::getHybridBuffer(m_device, cellFaces))
+            , barycentricFacePlanes(hase::alpakaUtils::getHybridBuffer(m_device, barycentricFacePlanes))
+            , cellNeighborCells(hase::alpakaUtils::getHybridBuffer(m_device, cellNeighborCells))
+            , cellNeighborLocalFaces(hase::alpakaUtils::getHybridBuffer(m_device, cellNeighborLocalFaces))
+            , cellFaceBoundaries(hase::alpakaUtils::getHybridBuffer(m_device, cellFaceBoundaries))
+            , cellVolumes(hase::alpakaUtils::getHybridBuffer(m_device, cellVolumes))
+            , cellVolumePrefix(hase::alpakaUtils::getHybridBuffer(m_device, cellVolumePrefix))
+            , betaVolumePrefix(hase::alpakaUtils::getHybridBuffer(m_device, betaVolumePrefix))
+            , cellCenters(hase::alpakaUtils::getHybridBuffer(m_device, cellCenters))
+            , samplePoints(hase::alpakaUtils::getHybridBuffer(m_device, samplePoints))
             , claddingAbsorption(claddingAbsorption)
             , nTot(nTot)
             , crystalTFluo(crystalTFluo)
@@ -411,39 +409,63 @@ namespace hase::core
         {
         }
 
+        void toDevice(concepts::Queue auto const& queue)
+        {
+            points.toDevice(queue);
+            betaVolume.toDevice(queue);
+            claddingCellTypes.toDevice(queue);
+            refractiveIndices.toDevice(queue);
+            reflectivities.toDevice(queue);
+            surfaceReflectivities.toDevice(queue);
+            surfaceRefractiveIndexInside.toDevice(queue);
+            surfaceRefractiveIndexOutside.toDevice(queue);
+            cellPointIndices.toDevice(queue);
+            cellTypes.toDevice(queue);
+            cellFaces.toDevice(queue);
+            barycentricFacePlanes.toDevice(queue);
+            cellNeighborCells.toDevice(queue);
+            cellNeighborLocalFaces.toDevice(queue);
+            cellFaceBoundaries.toDevice(queue);
+            cellVolumes.toDevice(queue);
+            cellVolumePrefix.toDevice(queue);
+            betaVolumePrefix.toDevice(queue);
+            cellCenters.toDevice(queue);
+            samplePoints.toDevice(queue);
+        }
+
         [[nodiscard]] auto toView() const -> DeviceMeshView
         {
             return {
-                std::span<double const>(points.data(), points.getMdSpan().getExtents().x()),
-                std::span<double const>(betaVolume.data(), betaVolume.getMdSpan().getExtents().x()),
-                std::span<unsigned const>(claddingCellTypes.data(), claddingCellTypes.getMdSpan().getExtents().x()),
-                std::span<float const>(refractiveIndices.data(), refractiveIndices.getMdSpan().getExtents().x()),
-                std::span<float const>(reflectivities.data(), reflectivities.getMdSpan().getExtents().x()),
+                std::span<double const>(points.toDeviceView().data(), points.getExtents().x()),
+                std::span<double const>(betaVolume.toDeviceView().data(), betaVolume.getExtents().x()),
+                std::span<unsigned const>(claddingCellTypes.toDeviceView().data(), claddingCellTypes.getExtents().x()),
+                std::span<float const>(refractiveIndices.toDeviceView().data(), refractiveIndices.getExtents().x()),
+                std::span<float const>(reflectivities.toDeviceView().data(), reflectivities.getExtents().x()),
                 std::span<float const>(
-                    surfaceReflectivities.data(),
-                    surfaceReflectivities.getMdSpan().getExtents().x()),
+                    surfaceReflectivities.toDeviceView().data(),
+                    surfaceReflectivities.getExtents().x()),
                 std::span<float const>(
-                    surfaceRefractiveIndexInside.data(),
-                    surfaceRefractiveIndexInside.getMdSpan().getExtents().x()),
+                    surfaceRefractiveIndexInside.toDeviceView().data(),
+                    surfaceRefractiveIndexInside.getExtents().x()),
                 std::span<float const>(
-                    surfaceRefractiveIndexOutside.data(),
-                    surfaceRefractiveIndexOutside.getMdSpan().getExtents().x()),
-                std::span<unsigned const>(cellPointIndices.data(), cellPointIndices.getMdSpan().getExtents().x()),
-                std::span<unsigned const>(cellTypes.data(), cellTypes.getMdSpan().getExtents().x()),
-                std::span<int const>(cellFaces.data(), cellFaces.getMdSpan().getExtents().x()),
+                    surfaceRefractiveIndexOutside.toDeviceView().data(),
+                    surfaceRefractiveIndexOutside.getExtents().x()),
+                std::span<unsigned const>(cellPointIndices.toDeviceView().data(), cellPointIndices.getExtents().x()),
+                std::span<unsigned const>(cellTypes.toDeviceView().data(), cellTypes.getExtents().x()),
+                std::span<int const>(cellFaces.toDeviceView().data(), cellFaces.getExtents().x()),
                 std::span<double const>(
-                    barycentricFacePlanes.data(),
-                    barycentricFacePlanes.getMdSpan().getExtents().x()),
-                std::span<int const>(cellNeighborCells.data(), cellNeighborCells.getMdSpan().getExtents().x()),
+                    barycentricFacePlanes.toDeviceView().data(),
+                    barycentricFacePlanes.getExtents().x()),
+                std::span<int const>(cellNeighborCells.toDeviceView().data(), cellNeighborCells.getExtents().x()),
                 std::span<int const>(
-                    cellNeighborLocalFaces.data(),
-                    cellNeighborLocalFaces.getMdSpan().getExtents().x()),
-                std::span<int const>(cellFaceBoundaries.data(), cellFaceBoundaries.getMdSpan().getExtents().x()),
-                std::span<float const>(cellVolumes.data(), cellVolumes.getMdSpan().getExtents().x()),
-                std::span<double const>(cellVolumePrefix.data(), cellVolumePrefix.getMdSpan().getExtents().x()),
-                std::span<double const>(betaVolumePrefix.data(), betaVolumePrefix.getMdSpan().getExtents().x()),
-                std::span<double const>(cellCenters.data(), cellCenters.getMdSpan().getExtents().x()),
-                std::span<double const>(samplePoints.data(), samplePoints.getMdSpan().getExtents().x()),
+                    cellNeighborLocalFaces.toDeviceView().data(),
+                    cellNeighborLocalFaces.getExtents().x()),
+                std::span<int const>(cellFaceBoundaries.toDeviceView().data(), cellFaceBoundaries.getExtents().x()),
+                std::span<float const>(cellVolumes.toDeviceView().data(), cellVolumes.getExtents().x()),
+                std::span<double const>(cellVolumePrefix.toDeviceView().data(), cellVolumePrefix.getExtents().x()),
+                std::span<double const>(betaVolumePrefix.toDeviceView().data(), betaVolumePrefix.getExtents().x()),
+                std::span<double const>(cellCenters.toDeviceView().data(), cellCenters.getExtents().x()),
+                std::span<double const>(samplePoints.toDeviceView().data(), samplePoints.getExtents().x()),
                 claddingAbsorption,
                 nTot,
                 crystalTFluo,
@@ -461,14 +483,9 @@ namespace hase::core
 
         T_Device m_device;
 
-    private:
-        T_Queue m_queue;
-
     public:
         template<typename T_Data>
-        using T_Buffer = std::remove_cvref_t<decltype(hase::alpakaUtils::toDevice(
-            std::declval<T_Queue const&>(),
-            std::declval<std::vector<T_Data> const&>()))>;
+        using T_Buffer = hase::alpakaUtils::GetHybridBuffer_t<T_Device, std::vector<T_Data>>;
 
         T_Buffer<double> points;
         T_Buffer<double> betaVolume;
@@ -727,7 +744,7 @@ namespace hase::core
         }
 
         template<typename T_Device>
-        [[nodiscard]] DeviceMeshContainer<T_Device> toDevice(T_Device& device)
+        [[nodiscard]] DeviceMeshContainer<T_Device> makeDeviceContainer(T_Device& device)
         {
             return DeviceMeshContainer<T_Device>{
                 device,

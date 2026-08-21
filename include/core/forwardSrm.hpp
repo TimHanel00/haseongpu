@@ -8,6 +8,7 @@
 #pragma once
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <concepts/concepts.hpp>
 #include <core/mesh.hpp>
 #include <core/srm.hpp>
@@ -216,7 +217,9 @@ namespace hase::core
             = hase::alpakaUtils::getFrameSpec<uint32_t>(devBundle.device, devBundle.executor, alpaka::Vec{faceCount});
         auto const scalarFrameSpec
             = hase::alpakaUtils::getFrameSpec<uint32_t>(devBundle.device, devBundle.executor, alpaka::Vec{1u});
-        auto samplingTotalWeightHost = alpaka::onHost::allocHostLike(samplingTotalWeight);
+        std::array<double, 1u> samplingTotalWeightHost{};
+        auto samplingTotalWeightBuffer
+            = hase::alpakaUtils::getHybridBuffer(samplingTotalWeightHost, samplingTotalWeight);
         auto updateSamplingCdf = [&](auto const& reservoir, unsigned const pass)
         {
             alpaka::onHost::inclusiveScan(
@@ -270,10 +273,8 @@ namespace hase::core
                         stratifiedRayOffsets,
                         stratifiedRayFaces});
             }
-            alpaka::onHost::wait(queue);
-            alpaka::onHost::memcpy(queue, samplingTotalWeightHost, samplingTotalWeight);
-            alpaka::onHost::wait(queue);
-            return alpaka::onHost::data(samplingTotalWeightHost)[0u];
+            samplingTotalWeightBuffer.toHost(queue);
+            return samplingTotalWeightBuffer.getHostView()[0u];
         };
         double const initialWeight = updateSamplingCdf(reservoirSpansA, 0u);
         if(initialWeight == 0.0)

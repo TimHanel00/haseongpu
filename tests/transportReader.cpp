@@ -47,11 +47,15 @@ TEST_CASE("transport reader delegates a subtree to its primitive", "[transport]"
         iteration.setAttribute("haseTransportVersion", std::string{"1.1"});
         iteration.setAttribute("haseUpdateMode", std::string{"full"});
         iteration.setAttribute("haseRoot", std::string{"timeIntegrationSolver"});
-        iteration.setAttribute("haseNodePaths", std::vector<std::string>{"timeIntegrationSolver"});
-        iteration.setAttribute("haseNodeTypes", std::vector<std::string>{"timeIntegrationSolver"});
+        iteration.setAttribute("haseNodePaths", std::string{R"(["timeIntegrationSolver"])"});
+        iteration.setAttribute("haseNodeTypes", std::string{R"(["timeIntegrationSolver"])"});
         iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Fname", std::string{"implicit-éuler\n🚀"});
         iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Flabels", std::vector<std::string>{"α", "β"});
+        iteration.setAttribute(
+            "hase__attribute__timeIntegrationSolver%2FjsonLabels",
+            std::string{R"(["alpha","beta"])"});
         writeScalar<std::uint64_t>(series, iteration, "iterations", 7u);
+        iteration.meshes["hase__iterations"].setAttribute("haseShape", std::string{R"([1])"});
         writeScalar<double>(series, iteration, "tolerance", 1.0e-8);
         iteration.close();
         series.close();
@@ -70,6 +74,8 @@ TEST_CASE("transport reader delegates a subtree to its primitive", "[transport]"
         std::vector<std::string> labels;
         reader.assign(labels, reader.root(), "labels");
         CHECK(labels == std::vector<std::string>{"α", "β"});
+        reader.assign(labels, reader.root(), "jsonLabels");
+        CHECK(labels == std::vector<std::string>{"alpha", "beta"});
         series.close();
     }
 

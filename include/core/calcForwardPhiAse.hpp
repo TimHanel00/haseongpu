@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include <alpakaUtils/HybridBuffer.hpp>
+#include <alpakaUtils/memory.hpp>
 #include <benchmark.hpp>
 #include <core/forwardSrm.hpp>
 #include <core/mesh.hpp>
@@ -15,6 +17,7 @@
 #include <random/random.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <ctime>
 #include <stdexcept>
@@ -66,6 +69,8 @@ namespace hase::core
         using T_UnsignedBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), std::size_t{1}));
         using T_CharBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), std::size_t{1}));
+        using T_RseBatchRayCounts = hase::alpakaUtils::GetHybridBuffer_t<T_Device, std::vector<unsigned>>;
+        using T_BetaVolumeTotal = hase::alpakaUtils::GetHybridBuffer_t<T_Device, std::array<double, 1u>>;
 
     public:
         ForwardPhiAseDeviceContext(
@@ -75,15 +80,15 @@ namespace hase::core
             HostMesh const& hostMesh)
             : m_devBundle(device, executor)
             , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::nonBlocking))
+            , m_rseBatchRayCounts(hase::kernels::forward::defaultForwardRseBatchCount, 0u)
+            , m_rseBatchRayCountsBuffer(hase::alpakaUtils::getHybridBuffer(m_devBundle.device, m_rseBatchRayCounts))
+            , m_betaVolumeTotalHost{}
+            , m_betaVolumeTotal(hase::alpakaUtils::getHybridBuffer(m_devBundle.device, m_betaVolumeTotalHost))
             , m_vertexBatchScoreSum(
                   alpaka::onHost::alloc<double>(
                       m_devBundle.device,
                       hase::kernels::forward::defaultForwardRseBatchCount * 2u
                           * static_cast<std::size_t>(hostMesh.numberOfMeshPoints)))
-            , m_rseBatchRayCountsDevice(
-                  alpaka::onHost::alloc<unsigned>(
-                      m_devBundle.device,
-                      static_cast<std::size_t>(hase::kernels::forward::defaultForwardRseBatchCount)))
             , m_volumeRayVisits(
                   alpaka::onHost::alloc<unsigned>(
                       m_devBundle.device,
@@ -104,7 +109,6 @@ namespace hase::core
                   alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(hostMesh.numberOfCells)))
             , m_volumeDndtAse(
                   alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(hostMesh.numberOfCells)))
-            , m_betaVolumeTotal(alpaka::onHost::alloc<double>(m_devBundle.device, std::size_t{1}))
             , m_betaVolumeWeights(
                   alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(hostMesh.numberOfCells)))
             , m_betaVolumePrefixScanBuffer(
@@ -116,7 +120,6 @@ namespace hase::core
             , m_vertexCount(hostMesh.numberOfMeshPoints)
             , m_spectralCount(static_cast<unsigned>(experiment.sigmaA.size()))
             , m_batchCount(hase::kernels::forward::defaultForwardRseBatchCount)
-            , m_rseBatchRayCounts(m_batchCount, 0u)
         {
             if(experiment.useReflections)
             {
@@ -139,10 +142,9 @@ namespace hase::core
             m_vertexBatchScoreSum = alpaka::onHost::alloc<double>(
                 m_devBundle.device,
                 batchCount * 2u * static_cast<std::size_t>(m_vertexCount));
-            m_rseBatchRayCountsDevice
-                = alpaka::onHost::alloc<unsigned>(m_devBundle.device, static_cast<std::size_t>(batchCount));
             m_batchCount = batchCount;
             m_rseBatchRayCounts.assign(batchCount, 0u);
+            m_rseBatchRayCountsBuffer = hase::alpakaUtils::getHybridBuffer(m_devBundle.device, m_rseBatchRayCounts);
         }
 
         void begin(
@@ -285,13 +287,13 @@ namespace hase::core
             double sigmaA,
             double sigmaE)
         {
-            alpaka::onHost::memcpy(m_queue, m_rseBatchRayCountsDevice, m_rseBatchRayCounts);
+            m_rseBatchRayCountsBuffer.toDevice(m_queue);
             hase::kernels::enqueueFinalizeForwardCellPhiAse(
                 m_devBundle,
                 m_queue,
                 mesh,
                 m_vertexBatchScoreSum,
-                m_rseBatchRayCountsDevice,
+                m_rseBatchRayCountsBuffer.toDeviceView(),
                 m_lumpedMaterialVertexVolume,
                 m_droppedRays,
                 m_volumePhiAse,
@@ -337,10 +339,10 @@ namespace hase::core
         double rebuildBetaVolumePrefix(DeviceMeshContainer<T_Device>& meshContainer, auto const& betaVolume)
         {
             auto mesh = meshContainer.toView();
-            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getMdSpan().getExtents().x());
+            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getExtents().x());
             if(mesh.numberOfCells == 0u)
             {
-                alpaka::onHost::fill(m_queue, m_betaVolumeTotal, 0.0, alpaka::Vec{std::size_t{1}});
+                alpaka::onHost::fill(m_queue, m_betaVolumeTotal.toDeviceView(), 0.0, alpaka::Vec{std::size_t{1}});
             }
             else
             {
@@ -350,12 +352,13 @@ namespace hase::core
                     m_betaVolumeWeights,
                     hase::kernels::BuildBetaVolumeWeights{},
                     betaVolume,
-                    meshContainer.cellVolumes);
+                    meshContainer.cellVolumes.toDeviceView());
+                auto betaVolumePrefix = meshContainer.betaVolumePrefix.toDeviceView();
                 alpaka::onHost::inclusiveScan(
                     m_queue,
                     m_devBundle.executor,
                     m_betaVolumePrefixScanBuffer,
-                    meshContainer.betaVolumePrefix,
+                    betaVolumePrefix,
                     m_betaVolumeWeights);
                 auto const scalarFrameSpec
                     = alpaka::onHost::getFrameSpec(m_devBundle.device, m_devBundle.executor, alpaka::Vec{1u});
@@ -364,13 +367,11 @@ namespace hase::core
                     alpaka::KernelBundle{
                         hase::kernels::CaptureBetaVolumeTotal{},
                         mesh.numberOfCells,
-                        meshContainer.betaVolumePrefix,
-                        m_betaVolumeTotal});
+                        betaVolumePrefix,
+                        m_betaVolumeTotal.toDeviceView()});
             }
-            std::vector<double> hostTotal(1u, 0.0);
-            alpaka::onHost::memcpy(m_queue, hostTotal, m_betaVolumeTotal);
-            alpaka::onHost::wait(m_queue);
-            return hostTotal.front();
+            m_betaVolumeTotal.toHost(m_queue);
+            return m_betaVolumeTotal.getHostView()[0u];
         }
 
         std::vector<double> downloadVolumeDndtAse()
@@ -427,8 +428,11 @@ namespace hase::core
     private:
         hase::alpakaUtils::DevBundle<T_Device, T_Exec> m_devBundle;
         T_Queue m_queue;
+        std::vector<unsigned> m_rseBatchRayCounts;
+        T_RseBatchRayCounts m_rseBatchRayCountsBuffer;
+        std::array<double, 1u> m_betaVolumeTotalHost;
+        T_BetaVolumeTotal m_betaVolumeTotal;
         T_DoubleBuffer m_vertexBatchScoreSum;
-        T_UnsignedBuffer m_rseBatchRayCountsDevice;
         T_UnsignedBuffer m_volumeRayVisits;
         T_UnsignedBuffer m_droppedRays;
         T_DoubleBuffer m_sigmaA;
@@ -438,7 +442,6 @@ namespace hase::core
         T_DoubleBuffer m_standardError;
         T_DoubleBuffer m_relativeStandardError;
         T_DoubleBuffer m_volumeDndtAse;
-        T_DoubleBuffer m_betaVolumeTotal;
         T_DoubleBuffer m_betaVolumeWeights;
         T_CharBuffer m_betaVolumePrefixScanBuffer;
         std::unique_ptr<ForwardSrmWorkspace<T_Device>> m_srmWorkspace;
@@ -449,7 +452,6 @@ namespace hase::core
         unsigned m_batchCount;
         unsigned m_rayCount = 0u;
         unsigned m_accumulatedRayCount = 0u;
-        std::vector<unsigned> m_rseBatchRayCounts;
         std::chrono::steady_clock::time_point m_started;
     };
 

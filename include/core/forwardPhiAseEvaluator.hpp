@@ -9,6 +9,7 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <core/calcForwardPhiAse.hpp>
 #include <core/calcPhiAseThreaded.hpp>
@@ -38,18 +39,17 @@ namespace hase::core
         template<typename T_Buffer>
         std::vector<typename T_Buffer::value_type> copyToVector(auto const& queue, T_Buffer const& buffer)
         {
-            auto hostBuffer = alpaka::onHost::allocHostLike(buffer);
-            alpaka::onHost::memcpy(queue, hostBuffer, buffer);
-            alpaka::onHost::wait(queue);
-            auto const* data = alpaka::onHost::data(hostBuffer);
-            return {data, data + buffer.getExtents().product()};
+            std::vector<typename T_Buffer::value_type> result(buffer.getExtents().product());
+            auto hybridBuffer = hase::alpakaUtils::getHybridBuffer(result, buffer);
+            hybridBuffer.toHost(queue);
+            return result;
         }
 
         template<typename T_Buffer, typename T>
         void copyVectorToBuffer(auto const& queue, std::vector<T> const& values, T_Buffer& buffer)
         {
-            auto hostView = alpaka::makeView(alpaka::api::host, values.data(), alpaka::Vec{values.size()});
-            alpaka::onHost::memcpy(queue, buffer, hostView);
+            auto hybridBuffer = hase::alpakaUtils::getHybridBuffer(values, buffer);
+            hybridBuffer.toDevice(queue);
         }
     } // namespace detail
 
@@ -192,7 +192,12 @@ namespace hase::core
                 throw std::runtime_error("forward ASE context requires at least one device");
             m_meshes.reserve(devices.size());
             for(auto& device : devices)
-                m_meshes.emplace_back(hostMesh.toDevice(device));
+            {
+                m_meshes.emplace_back(hostMesh.makeDeviceContainer(device));
+                auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+                m_meshes.back().toDevice(queue);
+                alpaka::onHost::wait(queue);
+            }
             m_deviceContexts.reserve(m_meshes.size());
             for(auto const& mesh : m_meshes)
                 m_deviceContexts.emplace_back(
@@ -213,9 +218,9 @@ namespace hase::core
             return m_meshes.front();
         }
 
-        [[nodiscard]] auto& primaryBetaVolume()
+        [[nodiscard]] auto primaryBetaVolume()
         {
-            return m_meshes.front().betaVolume;
+            return m_meshes.front().betaVolume.toDeviceView();
         }
 
         [[nodiscard]] bool requiresHostBetaVolume() const
@@ -400,7 +405,7 @@ namespace hase::core
         [[nodiscard]] DeviceMeshView primaryMeshView(auto const& betaVolume) const
         {
             auto mesh = m_meshes.front().toView();
-            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getMdSpan().getExtents().x());
+            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getExtents().x());
             return mesh;
         }
 
@@ -415,20 +420,24 @@ namespace hase::core
                 return;
 
             auto queue = m_meshes.front().m_device.makeQueue(alpaka::queueKind::nonBlocking);
-            hostMesh.setBetaVolume(detail::copyToVector(queue, betaVolume));
+            auto synchronizedBetaVolume = hase::alpakaUtils::getHybridBuffer(hostMesh.betaVolume, betaVolume);
+            synchronizedBetaVolume.toHost(queue);
+            hostMesh.rebuildBetaVolumePrefix();
             if(synchronizePrimaryMesh)
             {
-                detail::copyVectorToBuffer(queue, hostMesh.betaVolume, m_meshes.front().betaVolume);
+                m_meshes.front().betaVolume.toDevice(queue);
                 alpaka::onHost::wait(queue);
-                m_deviceContexts.front()->rebuildBetaVolumePrefix(m_meshes.front(), m_meshes.front().betaVolume);
+                m_deviceContexts.front()->rebuildBetaVolumePrefix(
+                    m_meshes.front(),
+                    m_meshes.front().betaVolume.toDeviceView());
             }
             for(std::size_t index = 1u; index < m_meshes.size(); ++index)
             {
                 auto& mesh = m_meshes[index];
                 auto secondaryQueue = mesh.m_device.makeQueue(alpaka::queueKind::nonBlocking);
-                detail::copyVectorToBuffer(secondaryQueue, hostMesh.betaVolume, mesh.betaVolume);
+                mesh.betaVolume.toDevice(secondaryQueue);
                 alpaka::onHost::wait(secondaryQueue);
-                m_deviceContexts[index]->rebuildBetaVolumePrefix(mesh, mesh.betaVolume);
+                m_deviceContexts[index]->rebuildBetaVolumePrefix(mesh, mesh.betaVolume.toDeviceView());
             }
         }
 
