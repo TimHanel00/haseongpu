@@ -65,5 +65,5 @@ assert gain_medium.domain.maskFor(topology).tolist() == [True]
 assert result.phiAse == []
 assert phi_ase.minRays == 100000
 
-for legacy_name in ("HostMesh", "ExperimentParameters", "ComputeParameters", "Mesh"):
+for legacy_name in ("TraceData", "AseTraceControls", "ExecutionPolicy", "Mesh"):
     assert not hasattr(HASEonGPU, legacy_name), legacy_name

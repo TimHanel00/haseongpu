@@ -43,7 +43,7 @@ def fakeCppSimulation(monkeypatch):
     captured = []
 
     def make_state(step, simulation):
-        volume_shape = simulation._backendGainMedium.get("betaVolume").expectedShape
+        volume_shape = simulation._simulationState.get("betaVolume").expectedShape
         simulation_step = simulation.currentStep + step - 1
         pump_active = any(
             simulation_step < source.pumpSteps for source in simulation.pump.sources
@@ -103,7 +103,8 @@ def fakeCppSimulation(monkeypatch):
 
 
 def realPhiAse(crossSections, *, openpmdBackend="adios"):
-    return PhiASE(crossSections=crossSections, openpmdBackend=openpmdBackend, ase_steps=100)
+    _component, gainMedium = _physicalGraph(crossSections)
+    return PhiASE(gainMedium=gainMedium, openpmdBackend=openpmdBackend, ase_steps=100)
 
 
 def _physicalGraph(crossSections):
@@ -141,8 +142,8 @@ def _physicalGraph(crossSections):
 
 def configuredSimulation(pumpSetup, **kwargs):
     kwargs.pop("gainMedium", None)
-    component, gainMedium = _physicalGraph(kwargs["phiASE"].crossSections)
-    kwargs["opticalComponents"] = [component]
+    gainMedium = kwargs["phiASE"].gainMedium
+    kwargs["opticalComponents"] = list(gainMedium.components)
     kwargs["gainMedium"] = gainMedium
     return Simulation(**kwargs).addPump(
         pumpSetup.physical, injectionMethod=pumpSetup.injector
@@ -175,7 +176,7 @@ def testCompiledSimulationDelegatesRunStepsToCppTransport(
     ]
     assert state.step == 1
     assert np.allclose(state.betaVolume, 0.125)
-    assert np.allclose(simulation._backendGainMedium.get("betaVolume").value, 0.125)
+    assert np.allclose(simulation._simulationState.get("betaVolume").value, 0.125)
 
 
 def testCompiledSimulationRejectsUnavailableAlpakaBackendBeforeTransport(
@@ -241,12 +242,10 @@ def testCompiledSimulationUsesPhiAseMpiLaunchOptions(
 ):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HASE_MPIEXEC_EXTRA_ARGS", "--oversubscribe")
-    phi_ase = PhiASE(
-        crossSections=crossSections,
-        openpmdBackend="adios",
-        parallelMode="mpi",
-        nPerNode=3,
-    )
+    phi_ase = realPhiAse(crossSections)
+    phi_ase.openpmdBackend = "adios"
+    phi_ase.parallelMode = "mpi"
+    phi_ase.nPerNode = 3
     simulation = configuredSimulation(
         pumpProperties,
         gainMedium=smallGainMedium,
@@ -282,20 +281,17 @@ def testCompiledSimulationMpiRanksShareOneDeviceAndAdvanceAse(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HASE_MPIEXEC_EXTRA_ARGS", "--oversubscribe")
-    phi_ase = PhiASE(
-        crossSections=crossSections,
-        backend=alpakaRuntimeBackend,
-        openpmdBackend=openPmdRuntimeBackend,
-        parallelMode="mpi",
-        nPerNode=rank_count,
-        numDevices=1,
-        minRays=256,
-        maxRays=256,
-        adaptiveSteps=1,
-        rngSeed=1234,
-        useReflections=False,
-        ase_steps=2,
-    )
+    phi_ase = realPhiAse(crossSections, openpmdBackend=openPmdRuntimeBackend)
+    phi_ase.backend = alpakaRuntimeBackend
+    phi_ase.parallelMode = "mpi"
+    phi_ase.nPerNode = rank_count
+    phi_ase.numDevices = 1
+    phi_ase.minRays = 256
+    phi_ase.maxRays = 256
+    phi_ase.adaptiveSteps = 1
+    phi_ase.rngSeed = 1234
+    phi_ase.useReflections = False
+    phi_ase.ase_steps = 2
     simulation = configuredSimulation(
         pumpProperties,
         phiASE=phi_ase,
@@ -397,7 +393,7 @@ def testSimulationDerivesStepCountFromLongestActivityWindow(
     simulation = configuredSimulation(
         setup,
         gainMedium=smallGainMedium,
-        phiASE=PhiASE(crossSections=crossSections, openpmdBackend="adios", ase_steps=5),
+        phiASE=replace(realPhiAse(crossSections), ase_steps=5),
         timeIntegrator=ExponentialEuler(),
         timeStepSize=1e-5,
     )
@@ -421,7 +417,7 @@ def testZeroActivityCountsDisablePumpAndAse(
     simulation = configuredSimulation(
         setup,
         gainMedium=smallGainMedium,
-        phiASE=PhiASE(crossSections=crossSections, openpmdBackend="adios", ase_steps=0),
+        phiASE=replace(realPhiAse(crossSections), ase_steps=0),
         timeIntegrator=ExponentialEuler(),
         timeStepSize=1e-5,
         simulationSteps=2,
@@ -445,7 +441,7 @@ def testDisabledActivitiesRequireExplicitSimulationSteps(
     simulation = configuredSimulation(
         setup,
         gainMedium=smallGainMedium,
-        phiASE=PhiASE(crossSections=crossSections, openpmdBackend="adios", ase_steps=0),
+        phiASE=replace(realPhiAse(crossSections), ase_steps=0),
         timeIntegrator=ExponentialEuler(),
         timeStepSize=1e-5,
     )
@@ -585,7 +581,7 @@ def testSynchronizedDebugExchangesSelectedControlAfterEveryNonfinalStep(
 
     def control(simulation):
         controlled_after.append(simulation.currentStep)
-        simulation._backendGainMedium.get("betaVolume").value[...] = 0.75
+        simulation._simulationState.get("betaVolume").value[...] = 0.75
 
     simulation = configuredSimulation(
         pumpProperties,

@@ -245,14 +245,14 @@ def test_frontend_state_projection_preserves_shared_adjacency_and_concatenates_i
         domain=Domain.fromTopology(topology(10.0)),
     )
 
-    backend, spectra = projectFrontendState(GainMedium([left, right, remote]), initialExcitation=0.25)
+    state = projectFrontendState(GainMedium([left, right, remote]), initialExcitation=0.25)
 
-    assert backend.topology.numberOfCells == 4
-    assert backend.topology.numberOfPoints == 10
-    assert backend.topology.neighborCells[0, 2] == 1
-    assert np.all(backend.get("betaVolume").value == 0.25)
-    assert backend.get("nTot").value == pytest.approx(2.776e20)
-    assert spectra.resolution == 1
+    assert state.topology.numberOfCells == 4
+    assert state.topology.numberOfPoints == 10
+    assert state.topology.neighborCells[0, 2] == 1
+    assert np.all(state.get("betaVolume").value == 0.25)
+    assert shared_material.activeIonDensity.toValue(units.cm**-3) == pytest.approx(2.776e20)
+    assert shared_material.crossSections.wavelengths.size == 1
 
 
 def test_frontend_state_projection_preserves_full_component_point_layout_including_unused_points():
@@ -263,7 +263,7 @@ def test_frontend_state_projection_preserves_full_component_point_layout_includi
     )
     resolved = material()
 
-    backend, _spectra = projectFrontendState(
+    state = projectFrontendState(
         GainMedium(
             [
                 OpticalComponent(
@@ -274,11 +274,11 @@ def test_frontend_state_projection_preserves_full_component_point_layout_includi
         )
     )
 
-    assert backend.topology.numberOfPoints == mesh.numberOfPoints
-    np.testing.assert_array_equal(backend.topology.cellPointIndices, mesh.cellPointIndices)
+    assert state.topology.numberOfPoints == mesh.numberOfPoints
+    np.testing.assert_array_equal(state.topology.cellPointIndices, mesh.cellPointIndices)
 
 
-def test_frontend_state_projection_rejects_overlaps_and_distinct_material_instances():
+def test_frontend_state_projection_rejects_overlaps_and_accepts_distinct_materials():
     mesh = topology()
     selected = Domain.fromGmsh(mesh, "left")
     first = OpticalComponent(material=material(), domain=selected)
@@ -286,12 +286,18 @@ def test_frontend_state_projection_rejects_overlaps_and_distinct_material_instan
     with pytest.raises(ValueError, match="must not overlap"):
         projectFrontendState(GainMedium([first, overlap]))
 
-    second = OpticalComponent(material=material(), domain=Domain.fromGmsh(mesh, "right"))
-    with pytest.raises(NotImplementedError, match="same Material object"):
-        projectFrontendState(GainMedium([first, second]))
+    secondMaterial = material("second material")
+    secondMaterial.refractiveIndex = 1.7
+    second = OpticalComponent(material=secondMaterial, domain=Domain.fromGmsh(mesh, "right"))
+    state = projectFrontendState(GainMedium([first, second]))
+    assert state.topology.numberOfCells == 2
+    assert first.material is not second.material
+    assert first.material.refractiveIndex == pytest.approx(1.83)
+    assert second.material.refractiveIndex == pytest.approx(1.7)
+    assert first.material.crossSections is not second.material.crossSections
 
 
-def test_passive_component_lowers_one_attenuation_and_cell_selection():
+def test_passive_component_material_stays_on_physical_graph():
     mesh = topology()
     active = material()
     gainComponent = OpticalComponent(
@@ -313,15 +319,15 @@ def test_passive_component_lowers_one_attenuation_and_cell_selection():
     )
     medium = GainMedium([gainComponent])
 
-    backend, _spectra = projectFrontendState(
+    state = projectFrontendState(
         medium,
         initialExcitation=0.25,
         opticalComponents=[gainComponent, claddingComponent],
     )
 
-    np.testing.assert_array_equal(backend.get("claddingCellTypes").value, [1, 0])
-    np.testing.assert_array_equal(backend.get("betaVolume").value, [0.0, 0.25])
-    assert backend.get("claddingAbsorption").value == pytest.approx(5.5)
+    np.testing.assert_array_equal(state.get("betaVolume").value, [0.0, 0.25])
+    assert claddingComponent.material is passive
+    assert not claddingComponent.material.isActive
     assert passive.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
     passive.bulkAttenuation = 4.0 / units.cm
     assert passive.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(4.0)
@@ -344,17 +350,17 @@ def test_lossless_passive_state_projection():
         material=unspecified, domain=Domain.fromGmsh(mesh, "left")
     )
 
-    backend, _spectra = projectFrontendState(
+    state = projectFrontendState(
         GainMedium([gainComponent]),
         opticalComponents=[gainComponent, passiveComponent],
     )
 
     assert unspecified.isTransparent
-    assert backend.get("claddingAbsorption").value == pytest.approx(0.0)
-    np.testing.assert_array_equal(backend.get("claddingCellTypes").value, [1, 0])
+    np.testing.assert_array_equal(state.get("betaVolume").value, [0.0, 0.0])
+    assert passiveComponent.material.bulkAttenuation is None
 
 
-def test_frontend_state_projection_rejects_heterogeneous_passive_attenuation():
+def test_frontend_state_projection_accepts_heterogeneous_passive_attenuation():
     gainComponent = OpticalComponent(
         material=material(),
         domain=Domain.fromTopology(topology()),
@@ -375,11 +381,15 @@ def test_frontend_state_projection_rejects_heterogeneous_passive_attenuation():
         for index, attenuation in enumerate((1.0, 2.0), start=1)
     ]
 
-    with pytest.raises(NotImplementedError, match="one passive bulkAttenuation"):
-        projectFrontendState(
-            GainMedium([gainComponent]),
-            opticalComponents=[gainComponent, *passiveComponents],
-        )
+    state = projectFrontendState(
+        GainMedium([gainComponent]),
+        opticalComponents=[gainComponent, *passiveComponents],
+    )
+    assert state.topology.numberOfCells == 6
+    assert [
+        component.material.bulkAttenuation.toValue(units.cm**-1)
+        for component in passiveComponents
+    ] == pytest.approx([1.0, 2.0])
 
 
 def test_simulation_keeps_non_gain_components_and_requires_exact_excitation_coverage():
@@ -415,14 +425,15 @@ def test_simulation_keeps_non_gain_components_and_requires_exact_excitation_cove
     )
     assert simulation.opticalComponents == (gainComponent, window)
     assert window.opticalRole is None
+    assert simulation.opticalComponents[1].material is windowMaterial
+    assert simulation.opticalComponents[1].material.refractiveIndex == pytest.approx(1.5)
+    assert simulation.opticalComponents[1].material.isTransparent
     np.testing.assert_array_equal(
-        simulation._backendGainMedium.get("claddingCellTypes").value,
-        [0, 0, 1, 1],
-    )
-    np.testing.assert_array_equal(
-        simulation._backendGainMedium.get("betaVolume").value,
+        simulation._simulationState.get("betaVolume").value,
         [0.1, 0.1, 0.0, 0.0],
     )
+    np.testing.assert_array_equal(simulation.cellMask(gainComponent.domain), [True, True, False, False])
+    np.testing.assert_array_equal(simulation.cellMask(window.domain), [False, False, True, True])
     assert simulation.exteriorSurface.entityKind == SURFACE
     assert len(simulation.exteriorSurface.topologies) == 2
     assert not np.any(

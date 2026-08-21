@@ -11,7 +11,7 @@ from hase_transport import TransportGraph
 from hase_units import DIMENSIONLESS, Quantity
 
 
-TRANSPORT_VERSION = "1.1"
+TRANSPORT_VERSION = "1.2"
 _RECORD_PREFIX = "hase__"
 _ATTRIBUTE_PREFIX = "hase__attribute__"
 _REFERENCE_PREFIX = "hase__reference__"
@@ -67,8 +67,10 @@ def _setRecordMetadata(record, *, path, typeName, spec, numeric, shape):
     record.set_attribute("hasePath", path)
     record.set_attribute("haseOwnerType", typeName)
     record.set_attribute("haseFieldName", spec.name)
-    record.set_attribute("haseAxes", list(spec.axes))
-    record.set_attribute("haseShape", [int(extent) for extent in shape])
+    if spec.axes:
+        record.set_attribute("haseAxes", list(spec.axes))
+    if shape:
+        record.set_attribute("haseShape", [int(extent) for extent in shape])
     record.set_attribute("haseDynamic", bool(spec.dynamic))
     record.set_attribute("haseEncoding", spec.encoding)
     record.set_attribute("haseUnit", numeric.unit)
@@ -144,6 +146,7 @@ def _writeRagged(iteration, io, *, path, typeName, spec, value):
         getter=spec.getter,
         axes=("value",),
         dynamic=spec.dynamic,
+        controlField=spec.controlField,
         optional=spec.optional,
         encoding="raggedValues",
     )
@@ -152,6 +155,7 @@ def _writeRagged(iteration, io, *, path, typeName, spec, value):
         getter=spec.getter,
         axes=("offset",),
         dynamic=spec.dynamic,
+        controlField=spec.controlField,
         optional=spec.optional,
         encoding="raggedOffsets",
     )
@@ -162,11 +166,22 @@ def _writeRagged(iteration, io, *, path, typeName, spec, value):
 
 
 def _selectedFields(graph: TransportGraph, *, dynamicOnly: bool):
+    controlFields = None
+    if dynamicOnly:
+        rootFields = graph.node(graph.root).fields
+        if "controlFields" in rootFields:
+            controlFields = set(rootFields["controlFields"][0].value(graph.node(graph.root).owner))
     for node in graph.nodes:
         for name, (spec, value) in node.fields.items():
             if dynamicOnly and not spec.dynamic:
                 continue
             if dynamicOnly:
+                if (
+                    controlFields is not None
+                    and spec.controlField is not None
+                    and spec.controlField not in controlFields
+                ):
+                    continue
                 value = spec.value(node.owner)
                 if value is None and not spec.optional:
                     raise ValueError(
@@ -195,6 +210,12 @@ def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> No
     for node in selectedNodes.values():
         for name, paths in node.references.items():
             selectedPaths = [path for path in paths if path in selectedNodes]
+            if not paths:
+                iteration.set_attribute(
+                    referenceName(f"{node.path}/{name}"),
+                    "[]",
+                )
+                continue
             if not selectedPaths:
                 continue
             iteration.set_attribute(
@@ -219,9 +240,16 @@ def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> No
         if isinstance(value, str) or (
             isinstance(value, (tuple, list)) and all(isinstance(item, str) for item in value)
         ):
+            # ADIOS2 cannot round-trip an empty string-vector attribute. A
+            # scalar marker remains distinguishable from the non-empty vector
+            # representation, including a real one-element list containing
+            # the literal string "[]".
+            encodedValue = value
+            if not isinstance(value, str):
+                encodedValue = "[]" if not value else list(value)
             iteration.set_attribute(
                 attributeName(path),
-                value if isinstance(value, str) else list(value),
+                encodedValue,
             )
             continue
         pending.append(

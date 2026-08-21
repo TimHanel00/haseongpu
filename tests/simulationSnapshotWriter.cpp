@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include <core/simulationRunControl.hpp>
+#include <core/SimulationControls.hpp>
 #include <openpmd/SimulationSnapshotWriter.hpp>
 
 #include <chrono>
@@ -18,10 +18,10 @@ namespace
 
 TEST_CASE("simulation snapshots contain dynamic state instead of a host mesh", "[openpmd]")
 {
-    STATIC_REQUIRE_FALSE(ContainsMeshMember<hase::core::SimulationSnapshot>);
-    STATIC_REQUIRE_FALSE(ContainsPointBetaMember<hase::core::SimulationSnapshot>);
-    STATIC_REQUIRE(std::is_same_v<decltype(hase::core::SimulationSnapshot::betaVolume), std::vector<double>>);
-    STATIC_REQUIRE(std::is_same_v<decltype(hase::core::SimulationSnapshot::aseResult), hase::core::Result>);
+    STATIC_REQUIRE_FALSE(ContainsMeshMember<hase::data::SimulationSnapshot>);
+    STATIC_REQUIRE_FALSE(ContainsPointBetaMember<hase::data::SimulationSnapshot>);
+    STATIC_REQUIRE(std::is_same_v<decltype(hase::data::SimulationSnapshot::betaVolume), std::vector<double>>);
+    STATIC_REQUIRE(std::is_same_v<decltype(hase::data::SimulationSnapshot::aseResult), hase::data::PhiAseResult>);
 }
 
 TEST_CASE("simulation run fields expose only cell-centered state", "[simulation]")
@@ -49,14 +49,14 @@ TEST_CASE("simulation snapshot writer runs synchronously when requested", "[open
     std::vector<unsigned> writtenSteps;
     hase::openpmd::AsyncSimulationSnapshotWriter writer{
         true,
-        [&](hase::core::SimulationSnapshot const& snapshot)
+        [&](hase::data::SimulationSnapshot const& snapshot)
         {
             writerThread = std::this_thread::get_id();
             writtenSteps.push_back(snapshot.step);
         },
         false};
 
-    hase::core::SimulationSnapshot snapshot;
+    hase::data::SimulationSnapshot snapshot;
     snapshot.step = 7u;
     writer.enqueue(snapshot);
 
@@ -72,15 +72,15 @@ TEST_CASE("simulation snapshot writer retains asynchronous mode", "[openpmd]")
     std::vector<unsigned> writtenSteps;
     hase::openpmd::AsyncSimulationSnapshotWriter writer{
         true,
-        [&](hase::core::SimulationSnapshot const& snapshot)
+        [&](hase::data::SimulationSnapshot const& snapshot)
         {
             writerThread = std::this_thread::get_id();
             writtenSteps.push_back(snapshot.step);
         }};
 
-    hase::core::SimulationSnapshot first;
+    hase::data::SimulationSnapshot first;
     first.step = 3u;
-    hase::core::SimulationSnapshot second;
+    hase::data::SimulationSnapshot second;
     second.step = 4u;
     writer.enqueue(first);
     writer.enqueue(second);
@@ -101,7 +101,7 @@ TEST_CASE("simulation snapshot writer bounds pending output", "[openpmd]")
     std::vector<unsigned> writtenSteps;
     hase::openpmd::AsyncSimulationSnapshotWriter writer{
         true,
-        [&](hase::core::SimulationSnapshot const& snapshot)
+        [&](hase::data::SimulationSnapshot const& snapshot)
         {
             if(snapshot.step == 1u)
             {
@@ -111,11 +111,11 @@ TEST_CASE("simulation snapshot writer bounds pending output", "[openpmd]")
             writtenSteps.push_back(snapshot.step);
         }};
 
-    hase::core::SimulationSnapshot first;
+    hase::data::SimulationSnapshot first;
     first.step = 1u;
-    hase::core::SimulationSnapshot second;
+    hase::data::SimulationSnapshot second;
     second.step = 2u;
-    hase::core::SimulationSnapshot third;
+    hase::data::SimulationSnapshot third;
     third.step = 3u;
 
     writer.enqueue(first);

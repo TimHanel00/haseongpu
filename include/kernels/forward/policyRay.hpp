@@ -9,7 +9,7 @@
 
 #include <alpaka/alpaka.hpp>
 
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/rayTransition.hpp>
 
 #include <array>
@@ -24,7 +24,7 @@ namespace hase::kernels::forward::ray
     using TriangleBarycentric = std::array<double, 3u>;
 
     [[nodiscard]] ALPAKA_FN_ACC inline TriangleBarycentric triangleBarycentricCoordinates(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const cell,
         unsigned const localFace,
         hase::core::Point const point)
@@ -49,7 +49,7 @@ namespace hase::kernels::forward::ray
     }
 
     [[nodiscard]] ALPAKA_FN_ACC inline hase::core::Point positionFromTriangleBarycentric(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const cell,
         unsigned const localFace,
         TriangleBarycentric const coordinates)
@@ -69,7 +69,7 @@ namespace hase::kernels::forward::ray
             static constexpr bool storesBarycentric = false;
 
             [[nodiscard]] ALPAKA_FN_ACC static hase::core::Point restore(
-                hase::core::DeviceMeshView const& mesh,
+                hase::data::TraceView const& mesh,
                 unsigned const cell,
                 unsigned const localFace)
             {
@@ -157,7 +157,7 @@ namespace hase::kernels::forward::ray
                         && requires(
                             T_Term& term,
                             T_Acc const& acc,
-                            hase::core::DeviceMeshView const& mesh,
+                            hase::data::TraceView const& mesh,
                             T_RayState& rayState,
                             unsigned const cell,
                             Tet4FaceIntersection const intersection) {
@@ -169,7 +169,7 @@ namespace hase::kernels::forward::ray
                             && requires(
                                 T_Term& term,
                                 T_Acc const& acc,
-                                hase::core::DeviceMeshView const& mesh,
+                                hase::data::TraceView const& mesh,
                                 T_RayState& rayState,
                                 unsigned const cell,
                                 unsigned const localFace) {
@@ -200,7 +200,7 @@ namespace hase::kernels::forward::ray
 
     ALPAKA_FN_ACC inline void captureSrmPosition(
         srmPosition::Centroid,
-        hase::core::DeviceMeshView const&,
+        hase::data::TraceView const&,
         unsigned,
         unsigned,
         hase::core::Point const,
@@ -210,7 +210,7 @@ namespace hase::kernels::forward::ray
 
     ALPAKA_FN_ACC inline void captureSrmPosition(
         srmPosition::Barycentric,
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const cell,
         unsigned const localFace,
         hase::core::Point const position,
@@ -221,7 +221,7 @@ namespace hase::kernels::forward::ray
 
     [[nodiscard]] ALPAKA_FN_ACC inline hase::core::Point restoreSrmPosition(
         srmPosition::Centroid,
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const cell,
         unsigned const localFace)
     {
@@ -230,7 +230,7 @@ namespace hase::kernels::forward::ray
 
     [[nodiscard]] ALPAKA_FN_ACC inline hase::core::Point restoreSrmPosition(
         srmPosition::Barycentric,
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const cell,
         unsigned const localFace,
         BarycentricSrmPositionStorage const& storage)
@@ -254,6 +254,14 @@ namespace hase::kernels::forward::ray
         rayState.forbiddenFace;
     };
 
+    /**
+     * @brief Terminate a domain-local walk at an exterior boundary.
+     *
+     * Boundary behavior is deliberately separate from cell propagation. A
+     * later scheduler can replace this policy with one that records a compact
+     * ray handoff for another component without making the local walk recurse
+     * into that component.
+     */
     struct BoundaryPolicyEscape : behaviourDimension::Boundary
     {
         ALPAKA_FN_ACC BoundaryResult operator()(auto const&, auto const&, auto&, unsigned, unsigned)
@@ -283,7 +291,7 @@ namespace hase::kernels::forward::ray
 
         ALPAKA_FN_ACC bool onCell(
             auto const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             auto& rayState,
             unsigned const cell,
             Tet4FaceIntersection const intersection)
@@ -293,7 +301,7 @@ namespace hase::kernels::forward::ray
 
         ALPAKA_FN_ACC BoundaryResult onBoundary(
             auto const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             auto& rayState,
             unsigned const cell,
             unsigned const localFace)
@@ -311,7 +319,7 @@ namespace hase::kernels::forward::ray
         ALPAKA_FN_ACC static bool invokeCell(
             T_Term& term,
             T_Acc const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             T_RayState& rayState,
             unsigned const cell,
             Tet4FaceIntersection const intersection)
@@ -324,7 +332,7 @@ namespace hase::kernels::forward::ray
         ALPAKA_FN_ACC static bool invokeCell(
             T_Term&,
             T_Acc const&,
-            hase::core::DeviceMeshView const&,
+            hase::data::TraceView const&,
             T_RayState&,
             unsigned,
             Tet4FaceIntersection)
@@ -337,7 +345,7 @@ namespace hase::kernels::forward::ray
         ALPAKA_FN_ACC static BoundaryResult invokeBoundary(
             T_Term& term,
             T_Acc const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             T_RayState& rayState,
             unsigned const cell,
             unsigned const localFace)
@@ -350,7 +358,7 @@ namespace hase::kernels::forward::ray
         ALPAKA_FN_ACC static BoundaryResult invokeBoundary(
             T_Term&,
             T_Acc const&,
-            hase::core::DeviceMeshView const&,
+            hase::data::TraceView const&,
             T_RayState&,
             unsigned,
             unsigned)
@@ -379,7 +387,7 @@ namespace hase::kernels::forward::ray
     template<State T_Ray, typename T_Behaviour>
     [[nodiscard]] ALPAKA_FN_ACC WalkResult walk(
         auto const& acc,
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         T_Ray& rayState,
         T_Behaviour behaviour)
     {

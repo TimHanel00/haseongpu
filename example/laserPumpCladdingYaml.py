@@ -39,13 +39,20 @@ def runExample(
     """Run the YAML-defined simulation and return its final state."""
     simulation = buildSimulation(configPath)
     material = simulation.gainMedium.components[0].material
-    backendMedium = simulation._backendGainMedium
-    claddingMask = np.asarray(
-        backendMedium.get("claddingCellTypes").value,
-        dtype=np.uint32,
-    ) == np.uint32(backendMedium.get("claddingNumber").value)
-    bulkAttenuation = float(
-        backendMedium.get("claddingAbsorption").value
+    passiveComponents = tuple(
+        component
+        for component in simulation.opticalComponents
+        if component not in simulation.gainMedium.components
+    )
+    claddingMask = (
+        simulation.cellMask(passiveComponents[0].domain)
+        if passiveComponents
+        else np.zeros(simulation._simulationState.topology.numberOfCells, dtype=bool)
+    )
+    bulkAttenuation = (
+        0.0
+        if not passiveComponents or passiveComponents[0].material.bulkAttenuation is None
+        else passiveComponents[0].material.bulkAttenuation.toValue(units.cm**-1)
     )
 
     print(f"Running simulation with backend {simulation.phiASE.backend}")
@@ -56,7 +63,7 @@ def runExample(
         Path(vtkOutputDir),
         bulkAttenuation,
         claddingMask,
-        simulation.crossSections,
+        material.crossSections,
         material.activeIonDensity.toValue(units.cm**-3),
     )
     if openPmdOutputDir is not None:

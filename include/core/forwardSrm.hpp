@@ -8,10 +8,11 @@
 #pragma once
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <concepts/concepts.hpp>
-#include <core/mesh.hpp>
+#include <core/Runtime.hpp>
 #include <core/srm.hpp>
-#include <core/types.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
 
 #include <array>
@@ -29,7 +30,7 @@ namespace hase::core
         std::vector<unsigned> totalRays;
         std::vector<unsigned> droppedRays;
         unsigned rayCount = 0u;
-        SrmStatus srmStatus = SrmStatus::DISABLED;
+        data::SrmStatus srmStatus = data::SrmStatus::disabled;
         unsigned srmPasses = 0u;
         double srmRemainingFraction = 0.0;
         unsigned srmMaxIterations = 0u;
@@ -56,8 +57,8 @@ namespace hase::core
             , dirZB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
             , weightsA(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
             , weightsB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , sigmaIndicesA(alpaka::onHost::alloc<unsigned>(device, faceCount * reservoirSize))
-            , sigmaIndicesB(alpaka::onHost::alloc<unsigned>(device, faceCount * reservoirSize))
+            , wavelengthsA(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
+            , wavelengthsB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
             , faceWeightsA(alpaka::onHost::alloc<double>(device, faceCount))
             , faceWeightsB(alpaka::onHost::alloc<double>(device, faceCount))
             , samplingCdf(alpaka::onHost::alloc<double>(device, faceCount))
@@ -90,8 +91,8 @@ namespace hase::core
         T_DoubleBuffer dirZB;
         T_DoubleBuffer weightsA;
         T_DoubleBuffer weightsB;
-        T_UnsignedBuffer sigmaIndicesA;
-        T_UnsignedBuffer sigmaIndicesB;
+        T_DoubleBuffer wavelengthsA;
+        T_DoubleBuffer wavelengthsB;
         T_DoubleBuffer faceWeightsA;
         T_DoubleBuffer faceWeightsB;
         T_DoubleBuffer samplingCdf;
@@ -111,18 +112,15 @@ namespace hase::core
     void runForwardSrm(
         alpakaUtils::DevBundle<T_Device, T_Exec>& devBundle,
         concepts::Queue auto const& queue,
-        DeviceMeshView const mesh,
-        ExperimentParameters const& experiment,
+        hase::data::TraceView const mesh,
+        AseTraceControls const& experiment,
         ForwardPhiAseRawResult& result,
         unsigned const rayCount,
         unsigned const rseBatch,
-        double const betaVolumeTotal,
+        double const sourceStrengthTotal,
         alpaka::concepts::IBuffer auto& vertexBatchScoreSum,
         alpaka::concepts::IBuffer auto& volumeRayVisits,
         alpaka::concepts::IBuffer auto& droppedRays,
-        alpaka::concepts::IBuffer auto const& sigmaA,
-        alpaka::concepts::IBuffer auto const& sigmaE,
-        unsigned const lambdaResolution,
         unsigned const threadLocalStridingRNG,
         SrmControls const srmControls,
         ForwardSrmWorkspace<T_Device>& workspace)
@@ -131,7 +129,6 @@ namespace hase::core
             vertexBatchScoreSum.getMdSpan(),
             volumeRayVisits.getMdSpan(),
             droppedRays.getMdSpan()};
-        auto spectrumSpans = hase::kernels::forward::ForwardSpectrumSpans{sigmaA, sigmaE, lambdaResolution};
         unsigned const faceCount = mesh.numberOfCells * mesh.numberOfFacesPerCell;
         if(workspace.faceCount != faceCount || workspace.reservoirSize != experiment.surfaceReservoirSize
            || rayCount > workspace.maxRayCount)
@@ -146,8 +143,8 @@ namespace hase::core
         auto& dirZB = workspace.dirZB;
         auto& weightsA = workspace.weightsA;
         auto& weightsB = workspace.weightsB;
-        auto& sigmaIndicesA = workspace.sigmaIndicesA;
-        auto& sigmaIndicesB = workspace.sigmaIndicesB;
+        auto& wavelengthsA = workspace.wavelengthsA;
+        auto& wavelengthsB = workspace.wavelengthsB;
         auto& faceWeightsA = workspace.faceWeightsA;
         auto& faceWeightsB = workspace.faceWeightsB;
         auto& samplingCdf = workspace.samplingCdf;
@@ -164,7 +161,7 @@ namespace hase::core
             dirYA,
             dirZA,
             weightsA,
-            sigmaIndicesA,
+            wavelengthsA,
             faceWeightsA,
             experiment.surfaceReservoirSize};
         auto samplingCdfSpans = hase::kernels::forward::SurfaceReservoirSamplingCdfSpans{
@@ -178,7 +175,7 @@ namespace hase::core
             dirYB,
             dirZB,
             weightsB,
-            sigmaIndicesB,
+            wavelengthsB,
             faceWeightsB,
             experiment.surfaceReservoirSize};
 
@@ -204,10 +201,9 @@ namespace hase::core
                 mesh,
                 rayCount,
                 rseBatch,
-                betaVolumeTotal,
+                sourceStrengthTotal,
                 accumulationSpans,
                 reservoirSpansA,
-                spectrumSpans,
                 threadLocalStridingRNG});
         alpaka::onHost::wait(queue);
 
@@ -216,7 +212,9 @@ namespace hase::core
             = hase::alpakaUtils::getFrameSpec<uint32_t>(devBundle.device, devBundle.executor, alpaka::Vec{faceCount});
         auto const scalarFrameSpec
             = hase::alpakaUtils::getFrameSpec<uint32_t>(devBundle.device, devBundle.executor, alpaka::Vec{1u});
-        auto samplingTotalWeightHost = alpaka::onHost::allocHostLike(samplingTotalWeight);
+        std::array<double, 1u> samplingTotalWeightHost{};
+        auto samplingTotalWeightBuffer
+            = hase::alpakaUtils::getHybridBuffer(samplingTotalWeightHost, samplingTotalWeight);
         auto updateSamplingCdf = [&](auto const& reservoir, unsigned const pass)
         {
             alpaka::onHost::inclusiveScan(
@@ -270,21 +268,19 @@ namespace hase::core
                         stratifiedRayOffsets,
                         stratifiedRayFaces});
             }
-            alpaka::onHost::wait(queue);
-            alpaka::onHost::memcpy(queue, samplingTotalWeightHost, samplingTotalWeight);
-            alpaka::onHost::wait(queue);
-            return alpaka::onHost::data(samplingTotalWeightHost)[0u];
+            samplingTotalWeightBuffer.toHost(queue);
+            return samplingTotalWeightBuffer.getHostView()[0u];
         };
         double const initialWeight = updateSamplingCdf(reservoirSpansA, 0u);
         if(initialWeight == 0.0)
         {
-            result.srmStatus = SrmStatus::CONVERGED;
+            result.srmStatus = data::SrmStatus::converged;
             return;
         }
 
         double previousWeight = initialWeight;
         unsigned growCount = 0u;
-        result.srmStatus = SrmStatus::MAX_ITERATIONS;
+        result.srmStatus = data::SrmStatus::maxIterations;
         result.srmRemainingFraction = 1.0;
         for(unsigned pass = 1u; pass <= srmControls.maxIterations; ++pass)
         {
@@ -306,7 +302,6 @@ namespace hase::core
                         reservoirSpansA,
                         samplingCdfSpans,
                         reservoirSpansB,
-                        spectrumSpans,
                         threadLocalStridingRNG,
                         pass});
             }
@@ -326,7 +321,6 @@ namespace hase::core
                         reservoirSpansB,
                         samplingCdfSpans,
                         reservoirSpansA,
-                        spectrumSpans,
                         threadLocalStridingRNG,
                         pass});
             }
@@ -341,7 +335,7 @@ namespace hase::core
                 ++growCount;
                 if(growCount >= srmControls.divergenceStreak)
                 {
-                    result.srmStatus = SrmStatus::DIVERGED;
+                    result.srmStatus = data::SrmStatus::diverged;
                     break;
                 }
             }
@@ -351,13 +345,13 @@ namespace hase::core
                 if(alpaka::math::abs(currentWeight - previousWeight) / alpaka::math::max(currentWeight, 1.0e-30)
                    < experiment.reflectionTolerance)
                 {
-                    result.srmStatus = SrmStatus::STABLE;
+                    result.srmStatus = data::SrmStatus::stable;
                     break;
                 }
             }
             if(result.srmRemainingFraction < experiment.reflectionTolerance)
             {
-                result.srmStatus = SrmStatus::CONVERGED;
+                result.srmStatus = data::SrmStatus::converged;
                 break;
             }
             previousWeight = currentWeight;

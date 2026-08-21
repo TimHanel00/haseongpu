@@ -140,7 +140,6 @@ def asymmetric_cross_sections():
 
 def asymmetric_phi_ase():
     return PhiASE(
-        crossSections=asymmetric_cross_sections(),
         minRays=1,
         maxRays=1,
         relativeStandardErrorThreshold=0.25,
@@ -205,9 +204,7 @@ def launch_smoke_cross_sections():
 
 
 def launch_smoke_phi_ase(*, parallel_mode="single"):
-    cross_sections = launch_smoke_cross_sections()
     return PhiASE(
-        crossSections=cross_sections,
         minRays=1,
         maxRays=1,
         relativeStandardErrorThreshold=0.25,
@@ -1737,7 +1734,7 @@ def test_streaming_simulation_keeps_input_series_open_until_backend_exits(monkey
     monkeypatch.setattr(transport.subprocess, "Popen", FakeProcess)
     monkeypatch.setattr(transport, "read_simulation_output", fake_read_simulation_output)
 
-    simulation = SimpleNamespace(phiASE=object(), _backendGainMedium=object(), crossSections=object())
+    simulation = SimpleNamespace(phiASE=object(), _simulationState=object(), crossSections=object())
     states = transport._run_streaming_simulation(
         ["calcPhiASE", "--cpp-control"],
         tmp_path / "input.sst",
@@ -1772,7 +1769,7 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
             writes.append(
                 (
                     iteration_index,
-                    float(root._backendGainMedium.beta),
+                    float(root._simulationState.beta),
                     dynamic_only,
                 )
             )
@@ -1806,7 +1803,7 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
         return [SimpleNamespace(step=3)]
 
     def update_control(state):
-        simulation._backendGainMedium.beta = float(state.step)
+        simulation._simulationState.beta = float(state.step)
 
     monkeypatch.setattr(transport, "OpenPmdInputSeries", FakeInputSeries)
     monkeypatch.setattr(transport.subprocess, "Popen", FakeProcess)
@@ -1816,7 +1813,7 @@ def test_streaming_synchronized_debug_exchanges_control_after_each_snapshot(monk
         executionMode="synchronized-debug",
         controlFields=("beta_volume",),
         phiASE=object(),
-        _backendGainMedium=SimpleNamespace(beta=0.0),
+        _simulationState=SimpleNamespace(beta=0.0),
         crossSections=object(),
     )
     states = transport._run_streaming_simulation(

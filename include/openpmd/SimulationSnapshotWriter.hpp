@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include <core/simulationSnapshot.hpp>
+#include <data/SimulationSnapshot.hpp>
 
 #include <condition_variable>
 #include <exception>
@@ -23,7 +23,7 @@ namespace hase::openpmd
     class AsyncSimulationSnapshotWriter
     {
     public:
-        using WriteSnapshot = std::function<void(core::SimulationSnapshot const&)>;
+        using WriteSnapshot = std::function<void(data::SimulationSnapshot const&)>;
 
         AsyncSimulationSnapshotWriter(bool enabled, WriteSnapshot writeSnapshot, bool asynchronous = true)
             : m_enabled(enabled)
@@ -53,7 +53,7 @@ namespace hase::openpmd
         AsyncSimulationSnapshotWriter(AsyncSimulationSnapshotWriter const&) = delete;
         AsyncSimulationSnapshotWriter& operator=(AsyncSimulationSnapshotWriter const&) = delete;
 
-        void enqueue(core::SimulationSnapshot const& snapshot)
+        void enqueue(data::SimulationSnapshot const& snapshot)
         {
             if(!m_enabled)
             {
@@ -120,7 +120,7 @@ namespace hase::openpmd
             {
                 while(true)
                 {
-                    core::SimulationSnapshot item;
+                    data::SimulationSnapshot item;
                     {
                         std::unique_lock lock{m_mutex};
                         m_ready.wait(lock, [&] { return !m_pending.empty() || m_finishRequested; });
@@ -141,7 +141,7 @@ namespace hase::openpmd
                     std::scoped_lock lock{m_mutex};
                     m_error = std::current_exception();
                     m_finishRequested = true;
-                    std::queue<core::SimulationSnapshot> empty;
+                    std::queue<data::SimulationSnapshot> empty;
                     m_pending.swap(empty);
                 }
                 m_spaceAvailable.notify_all();
@@ -157,7 +157,7 @@ namespace hase::openpmd
         std::mutex m_mutex;
         std::condition_variable m_ready;
         std::condition_variable m_spaceAvailable;
-        std::queue<core::SimulationSnapshot> m_pending;
+        std::queue<data::SimulationSnapshot> m_pending;
         std::thread m_thread;
         std::exception_ptr m_error;
     };

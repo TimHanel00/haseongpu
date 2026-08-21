@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from hase_units import units
 from .laser import CrossSectionData, LaserProperties
 
 
@@ -32,8 +33,23 @@ def _resolve_cross_sections(crossSections=None, spectralProperties=None, laserPr
         spectra = _cross_sections_from_laser_properties(spectra)
     if spectra is None:
         return None
+    if all(hasattr(spectra, name) for name in ("wavelengths", "absorption", "emission")):
+        wavelengths = np.asarray(spectra.wavelengths.toValue(units.m), dtype=np.float64)
+        absorption = np.asarray(spectra.absorption.toValue(units.cm**2), dtype=np.float64)
+        emission = np.asarray(spectra.emission.toValue(units.cm**2), dtype=np.float64)
+        if wavelength is None:
+            wavelength = float(wavelengths[int(np.argmax(emission))])
+        if wavelengths.size == 1:
+            return float(absorption[0]), float(emission[0])
+        return (
+            float(np.interp(float(wavelength), wavelengths, absorption)),
+            float(np.interp(float(wavelength), wavelengths, emission)),
+        )
     if not isinstance(spectra, CrossSectionData):
-        raise TypeError("crossSections must be CrossSectionData, SpectralDecomposition, or LaserProperties")
+        raise TypeError(
+            "crossSections must be a material CrossSectionTable, CrossSectionData, "
+            "SpectralDecomposition, or LaserProperties"
+        )
 
     if wavelength is None:
         peak_index = int(np.argmax(spectra.crossSectionEmission))

@@ -16,8 +16,9 @@ def test_material_example_builds_the_public_physical_graph():
     material = simulation.gainMedium.components[0].material
     assert material.materialName == "Yb:YAG"
     assert material.isActive
-    assert simulation.crossSections.resolution == material.crossSections.wavelengths.size
+    assert material.crossSections.wavelengths.size > 0
+    assert not hasattr(simulation, "crossSections")
     assert simulation.opticalComponents[1].material.isPassive
     assert simulation.exteriorSurface.entityKind == "surface"
     assert len(simulation.opticalComponents[1].surfaceOptics) == 1
-    assert simulation._backendGainMedium.get("claddingCellTypes").value.tolist() == [0, 1]
+    assert simulation.cellMask(simulation.opticalComponents[1].domain).tolist() == [False, True]

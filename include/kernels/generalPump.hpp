@@ -12,9 +12,9 @@
 #include <alpakaUtils/DevBundle.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
+#include <core/SimulationControls.hpp>
 #include <core/hostRoutineTiming.hpp>
-#include <core/mesh.hpp>
-#include <core/simulationRunControl.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/barycentric.hpp>
 #include <kernels/forward/policyRay.hpp>
 #include <kernels/forward/rayTransition.hpp>
@@ -55,8 +55,6 @@ namespace hase::kernels
     {
         double power = 0.0;
         double wavelength = 0.0;
-        double sigmaAbsorption = 0.0;
-        double sigmaEmission = 0.0;
         unsigned relayIndex = 0u;
     };
 
@@ -67,7 +65,7 @@ namespace hase::kernels
         return std::find(domains.begin(), domains.end(), domain) != domains.end();
     }
 
-    [[nodiscard]] inline hase::core::Point hostPoint(hase::core::HostMesh const& mesh, unsigned const point)
+    [[nodiscard]] inline hase::core::Point hostPoint(hase::data::TraceData const& mesh, unsigned const point)
     {
         return {
             mesh.points[point],
@@ -76,7 +74,7 @@ namespace hase::kernels
     }
 
     [[nodiscard]] inline std::vector<PumpBoundaryFace> pumpBoundaryFaces(
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         std::vector<int> const& domains)
     {
         std::vector<PumpBoundaryFace> result;
@@ -258,7 +256,7 @@ namespace hase::kernels
     }
 
     [[nodiscard]] inline std::vector<GeneralPumpRayState> samplePumpSource(
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         hase::core::PumpSourceParameters const& source,
         unsigned const globalRayCount,
         std::uint32_t const seed,
@@ -333,8 +331,6 @@ namespace hase::kernels
             rayState.direction = direction;
             rayState.power = source.totalPower / static_cast<double>(globalRayCount);
             rayState.wavelength = source.wavelengths[spectrum];
-            rayState.sigmaAbsorption = source.sigmaAbsorption[spectrum];
-            rayState.sigmaEmission = source.sigmaEmission[spectrum];
             rayState.cell = face->cell;
             rayState.forbiddenFace = static_cast<int>(face->localFace);
             rays.push_back(rayState);
@@ -347,7 +343,7 @@ namespace hase::kernels
     {
         ALPAKA_FN_ACC hase::kernels::forward::ray::BoundaryResult operator()(
             auto const&,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             auto& ray,
             unsigned const cell,
             unsigned const localFace)
@@ -393,17 +389,19 @@ namespace hase::kernels
 
             ALPAKA_FN_ACC bool operator()(
                 auto const& acc,
-                hase::core::DeviceMeshView const& mesh,
+                hase::data::TraceView const& mesh,
                 auto& ray,
                 unsigned const tet,
                 hase::kernels::forward::Tet4FaceIntersection const intersection)
             {
-                bool const gainCell = mesh.getCellType(tet) != mesh.claddingNumber;
+                bool const active = mesh.isActive(tet);
+                auto const crossSections = mesh.crossSectionsForCell(tet, ray.wavelength);
                 double const gain
-                    = gainCell
-                          ? static_cast<double>(mesh.nTot)
-                                * (betaVolume[tet] * (ray.sigmaAbsorption + ray.sigmaEmission) - ray.sigmaAbsorption)
-                          : -mesh.claddingAbsorption;
+                    = (active ? mesh.activeIonDensity(tet)
+                                    * (betaVolume[tet] * (crossSections.absorption + crossSections.emission)
+                                       - crossSections.absorption)
+                              : 0.0)
+                      - mesh.bulkAttenuation(tet);
                 double const exponent = gain * intersection.length;
                 if(!alpaka::math::isfinite(exponent) || exponent > 700.0)
                 {
@@ -411,10 +409,10 @@ namespace hase::kernels
                     return false;
                 }
                 double const nextPower = ray.power * alpaka::math::exp(exponent);
-                if(gainCell && mesh.nTot > 0.0f)
+                if(active && mesh.activeIonDensity(tet) > 0.0)
                 {
                     double const integral = (ray.power - nextPower) * ray.wavelength
-                                            / (planckConstant * speedOfLight * static_cast<double>(mesh.nTot));
+                                            / (planckConstant * speedOfLight * mesh.activeIonDensity(tet));
                     // Clamping and renormalizing protects positivity and exact integral
                     // conservation against round-off at faces.
                     auto const weights = hase::kernels::forward::segmentMidpointBarycentricVertexWeights(
@@ -423,9 +421,10 @@ namespace hase::kernels
                         ray.position,
                         ray.direction,
                         intersection.length);
-                    for(unsigned localVertex = 0u; localVertex < hase::core::tet4VertexCount; ++localVertex)
+                    for(unsigned localVertex = 0u; localVertex < hase::data::tet4VertexCount; ++localVertex)
                     {
-                        unsigned const point = mesh.cellPointIndices[tet * mesh.numberOfCellVertices + localVertex];
+                        unsigned const point = mesh.cellPointIndices[tet * mesh.numberOfCellVertices + localVertex]
+                                               + mesh.getMaterialId(tet) * mesh.numberOfMeshPoints;
                         alpaka::onAcc::atomicAdd(acc, &vertexPumpIntegral[point], integral * weights[localVertex]);
                     }
                 }
@@ -445,15 +444,13 @@ namespace hase::kernels
             typename T_DirectionZView,
             typename T_PowerView,
             typename T_WavelengthView,
-            typename T_SigmaAbsorptionView,
-            typename T_SigmaEmissionView,
             typename T_CellView,
             typename T_ForbiddenFaceView,
             typename T_BoundaryPolicyFactory,
             typename T_VertexPumpIntegralView>
         ALPAKA_FN_ACC void operator()(
             T_Acc const& acc,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             T_BetaVolumeView betaVolume,
             T_OriginXView originX,
             T_OriginYView originY,
@@ -463,8 +460,6 @@ namespace hase::kernels
             T_DirectionZView directionZ,
             T_PowerView power,
             T_WavelengthView wavelength,
-            T_SigmaAbsorptionView sigmaAbsorption,
-            T_SigmaEmissionView sigmaEmission,
             T_CellView cell,
             T_ForbiddenFaceView forbiddenFace,
             T_BoundaryPolicyFactory boundaryPolicyFactory,
@@ -482,8 +477,6 @@ namespace hase::kernels
                 rayState.forbiddenFace = forbiddenFace[rayIndex];
                 rayState.power = power[rayIndex];
                 rayState.wavelength = wavelength[rayIndex];
-                rayState.sigmaAbsorption = sigmaAbsorption[rayIndex];
-                rayState.sigmaEmission = sigmaEmission[rayIndex];
                 auto boundaryPolicy = boundaryPolicyFactory(rayIndex);
                 static_cast<void>(ray::walk(
                     acc,
@@ -586,7 +579,7 @@ namespace hase::kernels
 
         ALPAKA_FN_ACC hase::kernels::forward::ray::BoundaryResult operator()(
             auto const&,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             auto& ray,
             unsigned const cell,
             unsigned const localFace)
@@ -766,7 +759,7 @@ namespace hase::kernels
 
         ALPAKA_FN_ACC hase::kernels::forward::ray::BoundaryResult operator()(
             auto const&,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             auto& ray,
             unsigned const cell,
             unsigned const localFace)
@@ -848,7 +841,7 @@ namespace hase::kernels
         }
     };
 
-    [[nodiscard]] inline RelayFrame makeRelayFrame(hase::core::HostMesh const& mesh, std::vector<int> const& domains)
+    [[nodiscard]] inline RelayFrame makeRelayFrame(hase::data::TraceData const& mesh, std::vector<int> const& domains)
     {
         RelayFrame frame{};
         frame.faces = pumpBoundaryFaces(mesh, domains);
@@ -891,7 +884,7 @@ namespace hase::kernels
     };
 
     [[nodiscard]] inline PumpRelayGeometry preparePumpRelayGeometry(
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         std::vector<hase::core::PumpRelayParameters> const& relays)
     {
         PumpRelayGeometry result;
@@ -1007,14 +1000,6 @@ namespace hase::kernels
                   hase::alpakaUtils::toDevice(
                       queue,
                       pumpRayValues<double>(rays, [](auto const& ray) { return ray.wavelength; })))
-            , m_sigmaAbsorption(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.sigmaAbsorption; })))
-            , m_sigmaEmission(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.sigmaEmission; })))
             , m_cell(
                   hase::alpakaUtils::toDevice(
                       queue,
@@ -1027,30 +1012,36 @@ namespace hase::kernels
             , m_exitMask(hase::alpakaUtils::toDevice(queue, pumpDeviceStorage(geometry.exitMask)))
             , m_entryFaceIds(hase::alpakaUtils::toDevice(queue, pumpDeviceStorage(geometry.entryFaceIds)))
             , m_cacheState(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<unsigned>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0u)))
+                  alpaka::onHost::alloc<unsigned>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheTargetFace(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<unsigned>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0u)))
+                  alpaka::onHost::alloc<unsigned>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric0(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<double>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0.0)))
+                  alpaka::onHost::alloc<double>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric1(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<double>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0.0)))
+                  alpaka::onHost::alloc<double>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric2(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      std::vector<double>(std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size()), 0.0)))
+                  alpaka::onHost::alloc<double>(
+                      queue.getDevice(),
+                      std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_faceCount{geometry.faceCount}
             , m_relayCount{static_cast<unsigned>(geometry.descriptors.size())}
             , m_rayCount{static_cast<unsigned>(rays.size())}
             , m_pumpSteps{pumpSteps}
         {
+            auto const cacheExtent = alpaka::Vec{std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())};
+            alpaka::onHost::fill(queue, m_cacheState, 0u, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheTargetFace, 0u, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheBarycentric0, 0.0, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheBarycentric1, 0.0, cacheExtent);
+            alpaka::onHost::fill(queue, m_cacheBarycentric2, 0.0, cacheExtent);
         }
 
         [[nodiscard]] unsigned rayCount() const
@@ -1071,7 +1062,7 @@ namespace hase::kernels
         void enqueue(
             auto& devBundle,
             auto const& queue,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             auto& betaVolume,
             auto& vertexPumpIntegral,
             pumpBoundaryPolicy::Relay)
@@ -1099,7 +1090,7 @@ namespace hase::kernels
         void enqueue(
             auto& devBundle,
             auto const& queue,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             auto& betaVolume,
             auto& vertexPumpIntegral,
             pumpBoundaryPolicy::SrmBarycentric)
@@ -1127,7 +1118,7 @@ namespace hase::kernels
         void enqueueWithFactory(
             auto& devBundle,
             auto const& queue,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             auto& betaVolume,
             auto& vertexPumpIntegral,
             auto boundaryPolicyFactory)
@@ -1152,8 +1143,6 @@ namespace hase::kernels
                     m_directionZ,
                     m_power,
                     m_wavelength,
-                    m_sigmaAbsorption,
-                    m_sigmaEmission,
                     m_cell,
                     m_forbiddenFace,
                     boundaryPolicyFactory,
@@ -1163,7 +1152,7 @@ namespace hase::kernels
 
         T_DoubleBuffer m_originX, m_originY, m_originZ;
         T_DoubleBuffer m_directionX, m_directionY, m_directionZ;
-        T_DoubleBuffer m_power, m_wavelength, m_sigmaAbsorption, m_sigmaEmission;
+        T_DoubleBuffer m_power, m_wavelength;
         T_UnsignedBuffer m_cell;
         T_IntBuffer m_forbiddenFace;
         T_DescriptorBuffer m_descriptors;
@@ -1178,7 +1167,7 @@ namespace hase::kernels
     template<typename T_Device>
     [[nodiscard]] inline std::vector<GeneralPumpDeviceSource<T_Device>> prepareGeneralPumpDeviceSources(
         auto const& queue,
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         hase::core::PumpParameters const& pump,
         unsigned const firstRay = 0u,
         unsigned const localRayCount = std::numeric_limits<unsigned>::max())
@@ -1202,7 +1191,7 @@ namespace hase::kernels
     {
         ALPAKA_FN_ACC void operator()(
             auto const& acc,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             auto vertexIntegral,
             auto lumpedVertexVolume,
             auto cellRate) const
@@ -1212,7 +1201,7 @@ namespace hase::kernels
                     alpaka::onAcc::worker::threadsInGrid,
                     alpaka::IdxRange{mesh.numberOfCells}))
             {
-                if(mesh.getCellType(cell) == mesh.claddingNumber)
+                if(!mesh.isActive(cell))
                 {
                     cellRate[cell] = 0.0;
                     continue;
@@ -1221,9 +1210,11 @@ namespace hase::kernels
                 double rateSum = 0.0;
                 for(unsigned localVertex = 0u; localVertex < mesh.numberOfCellVertices; ++localVertex)
                 {
-                    unsigned const point = mesh.cellPointIndices[cell * mesh.numberOfCellVertices + localVertex];
-                    double const volume = lumpedVertexVolume[point];
-                    rateSum += volume > 0.0 ? vertexIntegral[point] / volume : 0.0;
+                    unsigned const materialVertex
+                        = mesh.getMaterialId(cell) * mesh.numberOfMeshPoints
+                          + mesh.cellPointIndices[cell * mesh.numberOfCellVertices + localVertex];
+                    double const volume = lumpedVertexVolume[materialVertex];
+                    rateSum += volume > 0.0 ? vertexIntegral[materialVertex] / volume : 0.0;
                 }
                 // Volume averaging the four lumped vertex rates preserves the deposited
                 // integral: sum_cell(V_cell * cellRate) == sum_vertex(vertexIntegral).
@@ -1241,7 +1232,7 @@ namespace hase::kernels
     void enqueueGeneralPumpIntegrals(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
         auto const& queue,
-        hase::core::DeviceMeshView const mesh,
+        hase::data::TraceView const mesh,
         std::vector<GeneralPumpDeviceSource<T_Device>>& sources,
         T_BetaBuffer& betaVolume,
         T_VertexBuffer& vertexPumpIntegral,
@@ -1253,7 +1244,7 @@ namespace hase::kernels
             queue,
             vertexPumpIntegral,
             0.0,
-            alpaka::Vec{static_cast<std::size_t>(mesh.numberOfMeshPoints)});
+            alpaka::Vec{static_cast<std::size_t>(mesh.numberOfMaterials) * mesh.numberOfMeshPoints});
         for(auto& source : sources)
         {
             if(source.active(simulationStep))
@@ -1270,7 +1261,7 @@ namespace hase::kernels
     void enqueueProjectVertexPumpRateToCells(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
         auto const& queue,
-        hase::core::DeviceMeshView const mesh,
+        hase::data::TraceView const mesh,
         T_VertexBuffer& vertexPumpIntegral,
         T_LumpedVolumeBuffer& lumpedVertexVolume,
         T_RateBuffer& cellRate)
@@ -1301,7 +1292,7 @@ namespace hase::kernels
     void enqueueGeneralPump(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
         auto const& queue,
-        hase::core::DeviceMeshView const mesh,
+        hase::data::TraceView const mesh,
         std::vector<GeneralPumpDeviceSource<T_Device>>& sources,
         T_BetaBuffer& betaVolume,
         T_VertexBuffer& vertexPumpIntegral,

@@ -23,7 +23,6 @@ from HASEonGPU import (
     units,
 )
 from alpaka_backend_matrix import alpaka_runtime_backend
-from pyInclude.frontendState import projectFrontendState
 
 
 repoRoot = Path(__file__).resolve().parents[3]
@@ -161,14 +160,10 @@ def _make_current_medium(reference, bulkAttenuation):
 
     gain_beta = float(reference["metadata"]["material"]["gainBetaVolume"])
 
-    # PhiASE source selection and propagation use only per-cell betaVolume;
-    # cladding cells have exactly zero source.
-    backend, crossSections = projectFrontendState(
-        medium,
-        {component.domain: np.full(np.count_nonzero(~claddingMask), gain_beta)},
-        opticalComponents=components,
-    )
-    return backend, crossSections, claddingDomain
+    excitation = {
+        component.domain: np.full(np.count_nonzero(~claddingMask), gain_beta)
+    }
+    return medium, components, claddingDomain, excitation
 
 
 def testTrueCladdingReferenceDocumentsStaticLegacyContract(trueCladdingReference):
@@ -222,9 +217,11 @@ def testTrueCladdingReferenceDocumentsStaticLegacyContract(trueCladdingReference
 
 def testTrueCladdingShellMapsEveryLegacyWedgeToThreeTetChildren(trueCladdingReference):
     reference = trueCladdingReference
-    medium, _crossSections, claddingDomain = _make_current_medium(reference, PHYSICAL_CLADDING_ABSORPTION)
-    topology = medium.topology
-    tet_types = np.asarray(medium.get("claddingCellTypes").value, dtype=np.uint32)
+    medium, _components, claddingDomain, excitation = _make_current_medium(
+        reference, PHYSICAL_CLADDING_ABSORPTION
+    )
+    topology = medium.components[0].domain.topologies[0]
+    tet_types = claddingDomain.maskFor(topology).astype(np.uint32)
     tet_cells = np.asarray(topology.cellPointIndices, dtype=np.uint32)
 
     assert tet_cells.shape == (21924, 4)
@@ -266,7 +263,8 @@ def testTrueCladdingShellMapsEveryLegacyWedgeToThreeTetChildren(trueCladdingRefe
         rtol=2.0e-9,
         atol=0.0,
     )
-    beta_volume = np.asarray(medium.get("betaVolume").value, dtype=np.float64)
+    beta_volume = np.zeros(topology.numberOfCells, dtype=np.float64)
+    beta_volume[~claddingDomain.maskFor(topology)] = next(iter(excitation.values()))
     assert np.count_nonzero(beta_volume[tet_types == CLADDING_NUMBER]) == 0
     assert np.all(beta_volume[tet_types != CLADDING_NUMBER] > 0.0)
 
@@ -277,12 +275,11 @@ def currentTrueCladdingResults(trueCladdingReference, openPmdFileBackend):
     material = reference["metadata"]["material"]
     results = []
     for bulkAttenuation in material["claddingAbsorptions"]:
-        medium, cross_sections, _claddingDomain = _make_current_medium(
+        medium, components, claddingDomain, excitation = _make_current_medium(
             reference,
             bulkAttenuation,
         )
         phi_ase = PhiASE(
-            crossSections=cross_sections,
             minRays=CURRENT_FORWARD_RAYS,
             maxRays=CURRENT_FORWARD_RAYS,
             forwardRayCount=CURRENT_FORWARD_RAYS,
@@ -295,19 +292,24 @@ def currentTrueCladdingResults(trueCladdingReference, openPmdFileBackend):
             openpmdBackend=openPmdFileBackend,
             rngSeed=reference["metadata"]["parameters"]["rngSeed"],
         )
-        phi_ase.run(gainMedium=medium, crossSections=cross_sections)
+        phi_ase.run(
+            gainMedium=medium,
+            opticalComponents=components,
+            initialExcitation=excitation,
+        )
         result = phi_ase.getResults()
         phi = np.asarray(result.phiAse, dtype=np.float64)
         relative_standard_error = np.asarray(result.relativeStandardError, dtype=np.float64)
-        tet_types = np.asarray(medium.get("claddingCellTypes").value, dtype=np.uint32)
-        assert phi.shape == (medium.topology.numberOfCells,)
+        topology = medium.components[0].domain.topologies[0]
+        tet_types = claddingDomain.maskFor(topology).astype(np.uint32)
+        assert phi.shape == (topology.numberOfCells,)
         assert phi.shape == (21924,)
         assert relative_standard_error.shape == phi.shape
         results.append(
             {
                 "bulkAttenuation": bulkAttenuation,
                 "phiASE": phi,
-                "integrals": _partitioned_tet_integrals(medium.topology, tet_types, phi),
+                "integrals": _partitioned_tet_integrals(topology, tet_types, phi),
                 "relativeStandardError": relative_standard_error,
             }
         )

@@ -1,11 +1,12 @@
 #include <alpaka/math.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/rayTransition.hpp>
 
 #include <algorithm>
@@ -21,15 +22,15 @@ namespace hase::tests
     using TestBackends = std::decay_t<
         decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors))>;
 
-    hase::core::HostMesh makeTraversalMesh(
+    hase::data::TraceData makeTraversalMesh(
         std::vector<hase::core::Point> const& points,
-        std::vector<std::array<unsigned, hase::core::tet4VertexCount>> const& cells)
+        std::vector<std::array<unsigned, hase::data::tet4VertexCount>> const& cells)
     {
-        hase::core::HostMesh mesh;
+        hase::data::TraceData mesh;
         mesh.numberOfCells = static_cast<unsigned>(cells.size());
         mesh.numberOfMeshPoints = static_cast<unsigned>(points.size());
-        mesh.numberOfCellVertices = hase::core::tet4VertexCount;
-        mesh.numberOfFacesPerCell = hase::core::tet4FaceCount;
+        mesh.numberOfCellVertices = hase::data::tet4VertexCount;
+        mesh.numberOfFacesPerCell = hase::data::tet4FaceCount;
         mesh.points.resize(points.size() * 3u);
         for(unsigned point = 0u; point < points.size(); ++point)
         {
@@ -38,17 +39,17 @@ namespace hase::tests
             mesh.points[point + 2u * points.size()] = points[point].z;
         }
 
-        using Face = std::array<unsigned, hase::core::tet4FaceWidth>;
+        using Face = std::array<unsigned, hase::data::tet4FaceWidth>;
         std::vector<Face> faces;
-        faces.reserve(cells.size() * hase::core::tet4FaceCount);
+        faces.reserve(cells.size() * hase::data::tet4FaceCount);
         for(auto const& cell : cells)
         {
             mesh.cellPointIndices.insert(mesh.cellPointIndices.end(), cell.cbegin(), cell.cend());
-            for(unsigned localFace = 0u; localFace < hase::core::tet4FaceCount; ++localFace)
+            for(unsigned localFace = 0u; localFace < hase::data::tet4FaceCount; ++localFace)
             {
                 Face face{};
                 unsigned faceVertex = 0u;
-                for(unsigned localVertex = 0u; localVertex < hase::core::tet4VertexCount; ++localVertex)
+                for(unsigned localVertex = 0u; localVertex < hase::data::tet4VertexCount; ++localVertex)
                 {
                     if(localVertex != localFace)
                     {
@@ -71,10 +72,10 @@ namespace hase::tests
                 {
                     continue;
                 }
-                unsigned const cell = face / hase::core::tet4FaceCount;
-                unsigned const localFace = face % hase::core::tet4FaceCount;
-                unsigned const neighbor = candidate / hase::core::tet4FaceCount;
-                unsigned const neighborLocalFace = candidate % hase::core::tet4FaceCount;
+                unsigned const cell = face / hase::data::tet4FaceCount;
+                unsigned const localFace = face % hase::data::tet4FaceCount;
+                unsigned const neighbor = candidate / hase::data::tet4FaceCount;
+                unsigned const neighborLocalFace = candidate % hase::data::tet4FaceCount;
                 mesh.cellNeighborCells[face] = static_cast<int>(neighbor);
                 mesh.cellNeighborLocalFaces[face] = static_cast<int>(neighborLocalFace);
                 mesh.cellNeighborCells[candidate] = static_cast<int>(cell);
@@ -100,7 +101,7 @@ namespace hase::tests
         template<typename TAcc, alpaka::concepts::IMdSpan TResult>
         ALPAKA_FN_ACC void operator()(
             TAcc const&,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             unsigned const startCell,
             hase::core::Point const origin,
             hase::core::Point const direction,
@@ -133,22 +134,27 @@ namespace hase::tests
     TraversalResult traverseOneRay(
         auto& device,
         auto const executor,
-        hase::core::HostMesh& hostMesh,
+        hase::data::TraceData& hostMesh,
         unsigned const startCell,
         hase::core::Point const origin,
         hase::core::Point const direction)
     {
         auto queue = device.makeQueue(alpaka::queueKind::blocking);
-        auto deviceMesh = hostMesh.toDevice(device);
-        std::vector<TraversalResult> result(1u);
-        auto deviceResult = hase::alpakaUtils::toDevice(queue, result);
+        auto deviceMesh = hostMesh.makeResident(device);
+        deviceMesh.toDevice(queue);
+        auto result = hase::alpakaUtils::getHybridBuffer(device, std::vector<TraversalResult>(1u));
         auto const frameSpec = hase::alpakaUtils::getFrameSpec<std::uint32_t>(device, executor, alpaka::Vec{1u});
         queue.enqueue(
             frameSpec,
-            alpaka::KernelBundle{TraverseOneRay{}, deviceMesh.toView(), startCell, origin, direction, deviceResult});
-        alpaka::onHost::memcpy(queue, result, deviceResult);
-        alpaka::onHost::wait(queue);
-        return result.front();
+            alpaka::KernelBundle{
+                TraverseOneRay{},
+                deviceMesh.view(),
+                startCell,
+                origin,
+                direction,
+                result.toDeviceView()});
+        result.toHost(queue);
+        return result.getHostView()[0u];
     }
 
 } // namespace hase::tests
@@ -177,7 +183,7 @@ TEMPLATE_LIST_TEST_CASE(
         points.push_back({std::cos(angle), std::sin(angle), 0.0});
     }
 
-    std::vector<std::array<unsigned, hase::core::tet4VertexCount>> cells;
+    std::vector<std::array<unsigned, hase::data::tet4VertexCount>> cells;
     cells.reserve(2u * tetrahedraPerHalf);
     for(unsigned cell = 0u; cell < tetrahedraPerHalf; ++cell)
     {

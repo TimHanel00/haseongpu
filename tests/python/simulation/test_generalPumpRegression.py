@@ -84,7 +84,7 @@ def test_general_pump_reproduces_legacy_crystal_inversion(openPmdFileBackend, al
     )
     states = []
     simulation.onStep(states.append).step(3)
-    topology = simulation._backendGainMedium.topology
+    topology = simulation._simulationState.topology
 
     beta_volume = np.stack([np.asarray(state.betaVolume) for state in states])
     relative_field_error = np.linalg.norm(beta_volume - reference["betaVolume"]) / np.linalg.norm(

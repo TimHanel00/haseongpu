@@ -78,9 +78,24 @@ class CrossSectionTable:
         return PrimitiveDescription(
             "crossSectionTable",
             fields=(
-                transportField("wavelengths", axes=("wavelength",)),
-                transportField("absorption", axes=("wavelength",)),
-                transportField("emission", axes=("wavelength",)),
+                transportField(
+                    "wavelengths",
+                    axes=("wavelength",),
+                    dynamic=True,
+                    controlField="cross_sections",
+                ),
+                transportField(
+                    "absorption",
+                    axes=("wavelength",),
+                    dynamic=True,
+                    controlField="cross_sections",
+                ),
+                transportField(
+                    "emission",
+                    axes=("wavelength",),
+                    dynamic=True,
+                    controlField="cross_sections",
+                ),
                 transportField("metadata", encoding="json"),
             ),
         )
@@ -112,6 +127,25 @@ class CrossSectionTable:
         object.__setattr__(self, "absorption", Quantity(absorption.magnitude, absorption.unit))
         object.__setattr__(self, "emission", Quantity(emission.magnitude, emission.unit))
         object.__setattr__(self, "metadata", _metadata_copy(self.metadata))
+
+    def replaceSamples(self, wavelengths, absorption, emission):
+        """Atomically replace all spectral samples while preserving identity.
+
+        Persistent transport sessions retain this table as a graph node, so an
+        explicit update must mutate the existing semantic object. Validation
+        completes on a temporary table before any field is changed, and the
+        sample count may differ from the previous table.
+        """
+        updated = type(self)(
+            wavelengths=wavelengths,
+            absorption=absorption,
+            emission=emission,
+            metadata=self.metadata,
+        )
+        object.__setattr__(self, "wavelengths", updated.wavelengths)
+        object.__setattr__(self, "absorption", updated.absorption)
+        object.__setattr__(self, "emission", updated.emission)
+        return self
 
     @classmethod
     def monochromatic(cls, *, wavelength, absorption, emission, metadata=None):

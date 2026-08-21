@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 
 #include <cstdint>
 
@@ -42,7 +42,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeByVolume(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         double const totalVolume,
         alpaka::rand::engine::Philox4x32x10& rndEngine)
     {
@@ -78,8 +78,8 @@ namespace hase::kernels::forward
         return lower < mesh.numberOfCells ? lower : mesh.numberOfCells - 1u;
     }
 
-    [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeByBetaVolumeTarget(
-        hase::core::DeviceMeshView const& mesh,
+    [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeBySourceStrengthTarget(
+        hase::data::TraceView const& mesh,
         double const target)
     {
         unsigned lower = 0u;
@@ -87,7 +87,7 @@ namespace hase::kernels::forward
         while(lower < upper)
         {
             unsigned const middle = lower + (upper - lower) / 2u;
-            if(target < mesh.betaVolumePrefix[middle])
+            if(target < mesh.sourceStrengthPrefix[middle])
             {
                 upper = middle;
             }
@@ -99,13 +99,14 @@ namespace hase::kernels::forward
         return lower < mesh.numberOfCells ? lower : mesh.numberOfCells - 1u;
     }
 
-    // Source probability is betaVolume[cell] * volume[cell] / total.
-    [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeByBetaVolume(
-        hase::core::DeviceMeshView const& mesh,
-        double const betaVolumeTotal,
+    // Source probability is beta * volume * active-ion density / fluorescence lifetime.
+    [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeBySourceStrength(
+        hase::data::TraceView const& mesh,
+        double const sourceStrengthTotal,
         alpaka::rand::engine::Philox4x32x10& rndEngine)
     {
-        if(mesh.numberOfCells == 0u || betaVolumeTotal <= 0.0 || mesh.betaVolumePrefix.size() != mesh.numberOfCells)
+        if(mesh.numberOfCells == 0u || sourceStrengthTotal <= 0.0
+           || mesh.sourceStrengthPrefix.size() != mesh.numberOfCells)
         {
             return sampleVolumeByVolume(
                 mesh,
@@ -113,31 +114,31 @@ namespace hase::kernels::forward
                 rndEngine);
         }
 
-        double const target = alpaka::rand::distribution::UniformReal<double>{}(rndEngine) *betaVolumeTotal;
-        return sampleVolumeByBetaVolumeTarget(mesh, target);
+        double const target = alpaka::rand::distribution::UniformReal<double>{}(rndEngine) *sourceStrengthTotal;
+        return sampleVolumeBySourceStrengthTarget(mesh, target);
     }
 
     // One randomized systematic CDF point per globally assigned source ray.
-    [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleStratifiedVolumeByBetaVolume(
-        hase::core::DeviceMeshView const& mesh,
-        double const betaVolumeTotal,
+    [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleStratifiedVolumeBySourceStrength(
+        hase::data::TraceView const& mesh,
+        double const sourceStrengthTotal,
         unsigned const globalRayIndex,
         unsigned const globalRayCount,
         double const shift,
         alpaka::rand::engine::Philox4x32x10& rndEngine)
     {
-        if(mesh.numberOfCells == 0u || betaVolumeTotal <= 0.0 || mesh.betaVolumePrefix.size() != mesh.numberOfCells
-           || globalRayCount == 0u)
+        if(mesh.numberOfCells == 0u || sourceStrengthTotal <= 0.0
+           || mesh.sourceStrengthPrefix.size() != mesh.numberOfCells || globalRayCount == 0u)
         {
-            return sampleVolumeByBetaVolume(mesh, betaVolumeTotal, rndEngine);
+            return sampleVolumeBySourceStrength(mesh, sourceStrengthTotal, rndEngine);
         }
-        return sampleVolumeByBetaVolumeTarget(
+        return sampleVolumeBySourceStrengthTarget(
             mesh,
-            stratifiedUnitInterval(globalRayIndex, globalRayCount, shift) * betaVolumeTotal);
+            stratifiedUnitInterval(globalRayIndex, globalRayCount, shift) * sourceStrengthTotal);
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point samplePointInVolume(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         alpaka::rand::engine::Philox4x32x10& rndEngine)
     {

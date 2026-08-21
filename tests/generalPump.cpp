@@ -1,12 +1,13 @@
 #include <alpaka/alpaka.hpp>
 
 #include <alpakaUtils/DevBundle.hpp>
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <core/mesh.hpp>
-#include <core/simulationRunControl.hpp>
+#include <core/SimulationControls.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/generalPump.hpp>
 #include <kernels/timeIntegrationUpdateKernels.hpp>
 
@@ -24,67 +25,77 @@ namespace
     using TestBackends = std::decay_t<
         decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors))>;
 
-    hase::core::HostMesh makeSingleTetMesh()
+    hase::data::TraceData makeSingleTetMesh()
     {
         // Unit right tetrahedron. Local face i is opposite local vertex i.
         std::vector<double> const meshPoints = {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0};
         std::vector<double> const samplePoints = {0.25, 0.25, 0.25};
-        return hase::core::HostMesh{
+        return hase::data::TraceData{
             {0u, 1u, 2u, 3u},
             {10u},
             {1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2},
             {-1, -1, -1, -1},
             {-1, -1, -1, -1},
             {7, 8, 9, 10},
-            {1.0f / 6.0f},
+            {1.0 / 6.0},
             meshPoints,
             samplePoints,
             {0.25, 0.25, 0.25},
             {0.0},
-            {10u},
-            {1.0f, 1.0f, 1.0f, 1.0f},
-            {0.0f, 0.0f},
+            {0u},
+            {1u},
+            {1.0},
+            {1.0e20},
+            {1.0},
+            {0.0},
+            {2.0e-20},
+            {4.0e-20},
+            {0u, 2u},
+            {900e-9, 1000e-9},
+            {1.0e-20, 2.0e-20},
+            {3.0e-20, 4.0e-20},
             std::vector<float>(11u, 0.0f),
             std::vector<float>(11u, 1.0f),
             std::vector<float>(11u, 1.0f),
-            1.0e20f,
-            1.0f,
-            99u,
-            0.0,
             4u,
             1u,
             0.0f,
             false};
     }
 
-    hase::core::HostMesh makeTwoTetMesh()
+    hase::data::TraceData makeTwoTetMesh()
     {
         // Two unit-height tetrahedra share the triangle (0, 1, 2).
         std::vector<double> const meshPoints
             = {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0};
         std::vector<double> const centers = {0.25, 0.25, 0.25, 0.25, 0.25, -0.25};
-        return hase::core::HostMesh{
+        return hase::data::TraceData{
             {0u, 1u, 2u, 3u, 0u, 2u, 1u, 4u},
             {10u, 10u},
             {1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2, 2, 1, 4, 0, 1, 4, 0, 2, 4, 0, 2, 1},
             {-1, -1, -1, 1, -1, -1, -1, 0},
             {-1, -1, -1, 3, -1, -1, -1, 3},
             {7, 8, 9, 0, 7, 8, 9, 0},
-            {1.0f / 6.0f, 1.0f / 6.0f},
+            {1.0 / 6.0, 1.0 / 6.0},
             meshPoints,
             centers,
             centers,
             {0.0, 0.0},
-            {10u, 10u},
-            {1.0f, 1.0f, 1.0f, 1.0f, 1.0f},
-            {0.0f, 0.0f},
+            {0u, 0u},
+            {1u, 0u},
+            {1.0, 1.0},
+            {1.0e20, 0.0},
+            {1.0, 0.0},
+            {0.0, 0.0},
+            {2.0e-20, 0.0},
+            {4.0e-20, 0.0},
+            {0u, 2u, 2u},
+            {900e-9, 1000e-9},
+            {1.0e-20, 2.0e-20},
+            {3.0e-20, 4.0e-20},
             std::vector<float>(11u, 0.0f),
             std::vector<float>(11u, 1.0f),
             std::vector<float>(11u, 1.0f),
-            1.0e20f,
-            1.0f,
-            99u,
-            0.0,
             5u,
             1u,
             0.0f,
@@ -101,8 +112,6 @@ namespace
         source.totalPower = 80.0;
         source.wavelengths = {900e-9, 1000e-9};
         source.spectralWeights = {1.0, 3.0};
-        source.sigmaAbsorption = {1.0e-20, 2.0e-20};
-        source.sigmaEmission = {3.0e-20, 4.0e-20};
         source.polarAngles = {0.0};
         source.azimuthalAngles = {0.0};
         source.angularWeights = {1.0};
@@ -112,38 +121,37 @@ namespace
     template<typename T_Buffer>
     std::vector<double> copyDoubleBuffer(auto const& queue, T_Buffer const& deviceBuffer)
     {
-        auto host = alpaka::onHost::allocHostLike(deviceBuffer);
-        alpaka::onHost::memcpy(queue, host, deviceBuffer);
-        alpaka::onHost::wait(queue);
-        auto const size = static_cast<std::size_t>(host.getMdSpan().getExtents().x());
-        return {alpaka::onHost::data(host), alpaka::onHost::data(host) + size};
+        std::vector<double> result(static_cast<std::size_t>(deviceBuffer.getExtents().x()));
+        auto transfer = hase::alpakaUtils::getHybridBuffer(result, deviceBuffer);
+        transfer.toHost(queue);
+        return result;
     }
 
     template<typename T_Buffer>
     std::vector<unsigned> copyUnsignedBuffer(auto const& queue, T_Buffer const& deviceBuffer)
     {
-        auto host = alpaka::onHost::allocHostLike(deviceBuffer);
-        alpaka::onHost::memcpy(queue, host, deviceBuffer);
-        alpaka::onHost::wait(queue);
-        auto const size = static_cast<std::size_t>(host.getMdSpan().getExtents().x());
-        return {alpaka::onHost::data(host), alpaka::onHost::data(host) + size};
+        std::vector<unsigned> result(static_cast<std::size_t>(deviceBuffer.getExtents().x()));
+        auto transfer = hase::alpakaUtils::getHybridBuffer(result, deviceBuffer);
+        transfer.toHost(queue);
+        return result;
     }
 } // namespace
 
-TEST_CASE("lumped pump vertex volumes exclude cladding cells", "[pump][projection]")
+TEST_CASE("lumped pump vertex volumes preserve material interfaces", "[pump][projection]")
 {
     auto mesh = makeTwoTetMesh();
     double const cellShare = static_cast<double>(mesh.cellVolumes[0]) / 4.0;
-    auto const gainVolumes = hase::kernels::makeLumpedGainVertexVolumes(mesh);
+    auto const gainVolumes = hase::kernels::makeLumpedMaterialVertexVolumes(mesh);
     CHECK(gainVolumes[0] == Catch::Approx(2.0 * cellShare));
     CHECK(gainVolumes[3] == Catch::Approx(cellShare));
     CHECK(gainVolumes[4] == Catch::Approx(cellShare));
 
-    mesh.claddingCellTypes[1] = mesh.claddingNumber;
-    auto const interfaceVolumes = hase::kernels::makeLumpedGainVertexVolumes(mesh);
+    mesh.cellMaterialIds[1] = 1u;
+    auto const interfaceVolumes = hase::kernels::makeLumpedMaterialVertexVolumes(mesh);
     CHECK(interfaceVolumes[0] == Catch::Approx(cellShare));
     CHECK(interfaceVolumes[3] == Catch::Approx(cellShare));
-    CHECK(interfaceVolumes[4] == 0.0);
+    CHECK(interfaceVolumes[mesh.numberOfMeshPoints] == Catch::Approx(cellShare));
+    CHECK(interfaceVolumes[mesh.numberOfMeshPoints + 4u] == Catch::Approx(cellShare));
 }
 
 TEMPLATE_LIST_TEST_CASE(
@@ -163,18 +171,20 @@ TEMPLATE_LIST_TEST_CASE(
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
-    auto project = [&](hase::core::HostMesh& mesh)
+    auto project = [&](hase::data::TraceData& mesh)
     {
-        auto deviceMesh = mesh.toDevice(device);
-        std::vector<double> vertexValues(mesh.numberOfMeshPoints, 0.0);
+        auto deviceMesh = mesh.makeResident(device);
+        deviceMesh.toDevice(queue);
+        std::vector<double> vertexValues(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0);
         vertexValues[0] = 1.0;
         auto vertexIntegral = hase::alpakaUtils::toDevice(queue, vertexValues);
-        auto lumpedVertexVolume = hase::alpakaUtils::toDevice(queue, hase::kernels::makeLumpedGainVertexVolumes(mesh));
+        auto lumpedVertexVolume
+            = hase::alpakaUtils::toDevice(queue, hase::kernels::makeLumpedMaterialVertexVolumes(mesh));
         auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>(mesh.numberOfCells, 0.0));
         hase::kernels::enqueueProjectVertexPumpRateToCells(
             devBundle,
             queue,
-            deviceMesh.toView(),
+            deviceMesh.view(),
             vertexIntegral,
             lumpedVertexVolume,
             cellRate);
@@ -188,7 +198,7 @@ TEMPLATE_LIST_TEST_CASE(
     double const smoothedIntegral = smoothedRate[0] * mesh.cellVolumes[0] + smoothedRate[1] * mesh.cellVolumes[1];
     CHECK(smoothedIntegral == Catch::Approx(1.0));
 
-    mesh.claddingCellTypes[1] = mesh.claddingNumber;
+    mesh.cellMaterialIds[1] = 1u;
     auto const interfaceRate = project(mesh);
     REQUIRE(interfaceRate.size() == 2u);
     CHECK(interfaceRate[1] == 0.0);
@@ -253,16 +263,9 @@ TEST_CASE("general pump samples tagged faces deterministically with conserved so
         else
             ++entryQuarterVisits[3];
         if(sampled.wavelength == source.wavelengths[0])
-        {
-            CHECK(sampled.sigmaAbsorption == source.sigmaAbsorption[0]);
-            CHECK(sampled.sigmaEmission == source.sigmaEmission[0]);
-        }
+            CHECK(sampled.wavelength == source.wavelengths[0]);
         else
-        {
             CHECK(sampled.wavelength == source.wavelengths[1]);
-            CHECK(sampled.sigmaAbsorption == source.sigmaAbsorption[1]);
-            CHECK(sampled.sigmaEmission == source.sigmaEmission[1]);
-        }
     }
     CHECK(sampledPower == Catch::Approx(source.totalPower));
     for(auto const visits : entryQuarterVisits)
@@ -441,15 +444,16 @@ TEMPLATE_LIST_TEST_CASE(
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
     auto mesh = makeSingleTetMesh();
-    auto deviceMesh = mesh.toDevice(device);
+    auto deviceMesh = mesh.makeResident(device);
+    deviceMesh.toDevice(queue);
     auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
-    auto vertexIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>(mesh.numberOfMeshPoints, 0.0));
+    auto vertexIntegral = hase::alpakaUtils::toDevice(
+        queue,
+        std::vector<double>(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0));
 
     auto source = uniformSource(10u);
     source.wavelengths = {940e-9};
     source.spectralWeights = {1.0};
-    source.sigmaAbsorption = {1.0e-20};
-    source.sigmaEmission = {0.0};
     hase::core::PumpRelayParameters relay;
     relay.exitSurfaces = {7};
     relay.entrySurfaces = {7};
@@ -465,7 +469,7 @@ TEMPLATE_LIST_TEST_CASE(
     hase::kernels::enqueueGeneralPumpIntegrals(
         devBundle,
         queue,
-        deviceMesh.toView(),
+        deviceMesh.view(),
         prepared,
         betaVolume,
         vertexIntegral,
@@ -480,7 +484,7 @@ TEMPLATE_LIST_TEST_CASE(
     hase::kernels::enqueueGeneralPumpIntegrals(
         devBundle,
         queue,
-        deviceMesh.toView(),
+        deviceMesh.view(),
         prepared,
         betaVolume,
         vertexIntegral,
@@ -535,18 +539,19 @@ TEMPLATE_LIST_TEST_CASE(
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
     auto mesh = makeSingleTetMesh();
-    auto deviceMesh = mesh.toDevice(device);
+    auto deviceMesh = mesh.makeResident(device);
+    deviceMesh.toDevice(queue);
     auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
-    auto vertexIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>(mesh.numberOfMeshPoints, 0.0));
-    auto const lumpedVolumes = hase::kernels::makeLumpedGainVertexVolumes(mesh);
+    auto vertexIntegral = hase::alpakaUtils::toDevice(
+        queue,
+        std::vector<double>(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0));
+    auto const lumpedVolumes = hase::kernels::makeLumpedMaterialVertexVolumes(mesh);
     auto lumpedVertexVolume = hase::alpakaUtils::toDevice(queue, lumpedVolumes);
     auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
 
     auto source = uniformSource(10u);
     source.wavelengths = {940e-9};
     source.spectralWeights = {1.0};
-    source.sigmaAbsorption = {1.0e-20};
-    source.sigmaEmission = {0.0};
     hase::core::PumpParameters pump;
     source.rayCount = 1024u;
     source.rngSeed = 42u;
@@ -556,7 +561,7 @@ TEMPLATE_LIST_TEST_CASE(
     hase::kernels::enqueueGeneralPump(
         devBundle,
         queue,
-        deviceMesh.toView(),
+        deviceMesh.view(),
         prepared,
         betaVolume,
         vertexIntegral,
@@ -592,13 +597,12 @@ TEMPLATE_LIST_TEST_CASE(
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
     hase::alpakaUtils::DevBundle devBundle(device, executor);
     auto mesh = makeSingleTetMesh();
-    auto deviceMesh = mesh.toDevice(device);
+    auto deviceMesh = mesh.makeResident(device);
+    deviceMesh.toDevice(queue);
 
     auto source = uniformSource(10u);
     source.wavelengths = {940e-9};
     source.spectralWeights = {1.0};
-    source.sigmaAbsorption = {1.0e-20};
-    source.sigmaEmission = {0.0};
     hase::core::PumpRelayParameters returnPass;
     returnPass.exitSurfaces = {7};
     returnPass.entrySurfaces = {7};
@@ -613,13 +617,16 @@ TEMPLATE_LIST_TEST_CASE(
     {
         auto prepared = hase::kernels::prepareGeneralPumpDeviceSources<decltype(device)>(queue, mesh, pump);
         auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.1});
-        auto vertexIntegral = hase::alpakaUtils::toDevice(queue, std::vector<double>(mesh.numberOfMeshPoints, 0.0));
-        auto lumpedVertexVolume = hase::alpakaUtils::toDevice(queue, hase::kernels::makeLumpedGainVertexVolumes(mesh));
+        auto vertexIntegral = hase::alpakaUtils::toDevice(
+            queue,
+            std::vector<double>(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0));
+        auto lumpedVertexVolume
+            = hase::alpakaUtils::toDevice(queue, hase::kernels::makeLumpedMaterialVertexVolumes(mesh));
         auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
         hase::kernels::enqueueGeneralPump(
             devBundle,
             queue,
-            deviceMesh.toView(),
+            deviceMesh.view(),
             prepared,
             betaVolume,
             vertexIntegral,

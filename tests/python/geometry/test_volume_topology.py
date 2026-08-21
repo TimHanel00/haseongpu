@@ -14,7 +14,9 @@ repoRoot = Path(__file__).resolve().parents[3]
 
 
 from hase_transport import TransportComposer
-from HASEonGPU import PhiASE, SpectralDecomposition
+from HASEonGPU import Domain, GainMedium as PhysicalGainMedium, OpticalComponent, PhiASE
+from hase_units import units
+from material_library import CrossSectionTable, Material
 from pyInclude.geometry import Gmsh, GmshElement, SurfaceOptics, VolumeTopology
 from pyInclude.geometry.core import GainMedium
 import pyInclude.geometry.volume as volume_module
@@ -350,21 +352,22 @@ def testVolumeTopologyImportsClosed3dStlAndRunsBackendOnce(tmp_path, monkeypatch
     assert np.all(topology.cellTypes == VTK_TETRA)
     _requireRuntimeBackendExecutable(monkeypatch)
 
-    medium = GainMedium(topology=topology).withPhysicalProperties(
-        betaVolume=np.zeros(topology.numberOfCells, dtype=np.float64),
-        claddingCellTypes=np.zeros(topology.numberOfCells, dtype=np.uint32),
-        nTot=1.0,
-        crystalTFluo=1.0,
-        claddingNumber=99,
-        claddingAbsorption=0.0,
+    material = Material(
+        materialName="STL smoke-test material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.0,
+        fluorescenceLifetime=1.0 * units.s,
+        crossSections=CrossSectionTable.monochromatic(
+            wavelength=1000e-9 * units.m,
+            absorption=0.0 * units.cm**2,
+            emission=0.0 * units.cm**2,
+        ),
+        active=True,
+        activeIonDensity=1.0 / units.cm**3,
     )
-    crossSections = SpectralDecomposition.monochromatic(
-        wavelength=1000e-9,
-        crossSectionAbsorption=0.0,
-        crossSectionEmission=0.0,
-    )
+    component = OpticalComponent(domain=Domain.fromTopology(topology), material=material)
+    medium = PhysicalGainMedium([component])
     phiAse = PhiASE(
-        crossSections=crossSections,
         minRays=1,
         maxRays=1,
         forwardRayCount=1,
@@ -383,7 +386,7 @@ def testVolumeTopologyImportsClosed3dStlAndRunsBackendOnce(tmp_path, monkeypatch
     )
     _requireOpenPmdTransportBackend(phiAse.openpmdBackend)
 
-    phiAse.run(gainMedium=medium)
+    phiAse.run(gainMedium=medium, initialExcitation=0.0)
 
     result = phiAse.getResults()
     assert result.phiAse.shape == (topology.numberOfSamplePoints,)

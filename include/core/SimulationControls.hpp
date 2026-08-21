@@ -1,0 +1,144 @@
+/**
+ * Copyright 2026 Tim Hanel
+ *
+ * This file is part of HASEonGPU
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace hase::core
+{
+    /** @brief Prepared scalar representation of a spatial pump profile. */
+    struct PumpProfileParameters
+    {
+        unsigned kind = 0u;
+        double radiusU = 1.0;
+        double radiusV = 1.0;
+        double exponent = 2.0;
+        double center[3] = {0.0, 0.0, 0.0};
+        double axisU[3] = {1.0, 0.0, 0.0};
+        double axisV[3] = {0.0, 1.0, 0.0};
+    };
+
+    /** @brief Prepared planar transform between two pump boundary selections. */
+    struct PumpRelayParameters
+    {
+        std::vector<int> exitSurfaces;
+        std::vector<int> entrySurfaces;
+        bool flipU = false;
+        bool flipV = false;
+        double rotation = 0.0;
+        double offset[2] = {0.0, 0.0};
+        double tilt[2] = {0.0, 0.0};
+        double magnification = 1.0;
+        //! Fraction of power retained by the return mapping, not medium-boundary transmission.
+        double transmission = 1.0;
+    };
+
+    /** @brief Prepared ray-spawning parameters for one pump source. */
+    struct PumpSourceParameters
+    {
+        unsigned rayCount = 0u;
+        unsigned pumpSteps = 0u;
+        std::uint32_t rngSeed = 5489u;
+        std::vector<int> surfaces;
+        double totalPower = 0.0;
+        std::vector<double> wavelengths;
+        std::vector<double> spectralWeights;
+        std::vector<double> polarAngles;
+        std::vector<double> azimuthalAngles;
+        std::vector<double> angularWeights;
+        PumpProfileParameters profile;
+        std::vector<PumpRelayParameters> relays;
+    };
+
+    /** @brief Collection of independently registered pump sources. */
+    struct PumpParameters
+    {
+        unsigned schemaVersion = 2u;
+        std::vector<PumpSourceParameters> sources;
+    };
+
+    /** @brief Stable names for supported population time integrators. */
+    struct TimeIntegrator
+    {
+        static inline std::string const EXPLICIT_EULER = "explicit-euler";
+        static inline std::string const HEUN = "heun";
+        static inline std::string const MIDPOINT = "midpoint";
+        static inline std::string const RUNGE_KUTTA_4 = "runge-kutta-4";
+        static inline std::string const FROZEN_PHI_ASE_RUNGE_KUTTA_4 = "frozen-phi-ase-runge-kutta-4";
+        static inline std::string const IMPLICIT_EULER = "implicit-euler";
+        static inline std::string const EXPONENTIAL_EULER = "exponential-euler";
+    };
+
+    /** @brief Prepared time-integrator selection and convergence limits. */
+    struct TimeIntegrationParameters
+    {
+        std::string method = TimeIntegrator::EXPLICIT_EULER;
+        unsigned implicitIterations = 8u;
+        double implicitTolerance = 1.0e-10;
+    };
+
+    /** @brief Stable names for autonomous and synchronized simulation control. */
+    struct SimulationExecutionMode
+    {
+        static inline std::string const AUTONOMOUS = "autonomous";
+        static inline std::string const SYNCHRONIZED_DEBUG = "synchronized-debug";
+    };
+
+    /** @brief Stable names for fields published by synchronized iterations. */
+    struct SimulationOutputField
+    {
+        static inline std::string const BETA_VOLUME = "beta_volume";
+        static inline std::string const PHI_ASE = "phi_ase";
+        static inline std::string const STANDARD_ERROR = "standard_error";
+        static inline std::string const RELATIVE_STANDARD_ERROR = "relative_standard_error";
+        static inline std::string const TOTAL_RAYS = "total_rays";
+        static inline std::string const DNDT_ASE = "dndt_ase";
+        static inline std::string const DNDT_PUMP = "dndt_pump";
+
+        [[nodiscard]] static std::vector<std::string> all()
+        {
+            return {BETA_VOLUME, PHI_ASE, STANDARD_ERROR, RELATIVE_STANDARD_ERROR, TOTAL_RAYS, DNDT_ASE, DNDT_PUMP};
+        }
+    };
+
+    /** @brief Stable names for fields accepted as explicit synchronized updates. */
+    struct SimulationControlField
+    {
+        static inline std::string const BETA_VOLUME = "beta_volume";
+        static inline std::string const CROSS_SECTIONS = "cross_sections";
+
+        [[nodiscard]] static std::vector<std::string> all()
+        {
+            return {BETA_VOLUME, CROSS_SECTIONS};
+        }
+    };
+
+    /**
+     * @brief Host control flow for a prepared simulation.
+     *
+     * Cross sections are not embedded here. They remain material-owned and
+     * are refreshed only when the synchronized control flow explicitly names
+     * the cross-section control field.
+     */
+    struct SimulationControls
+    {
+        double timeStep = 0.0;
+        unsigned numberOfSteps = 0u;
+        unsigned firstSimulationStep = 0u;
+        unsigned aseSteps = 0u;
+        bool prePump = false;
+        std::string executionMode = SimulationExecutionMode::AUTONOMOUS;
+        std::vector<unsigned> outputSteps;
+        std::vector<std::string> outputFields = SimulationOutputField::all();
+        std::vector<std::string> controlFields;
+        TimeIntegrationParameters timeIntegration;
+        PumpParameters pump;
+    };
+} // namespace hase::core

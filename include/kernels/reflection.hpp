@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/rayWalk.hpp>
 
 namespace hase::kernels::forward
@@ -19,7 +19,7 @@ namespace hase::kernels::forward
      * this boundary and continues along the reflected forward direction.
      */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC double boundaryReflectance(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         unsigned const localFace,
         hase::core::Point const direction,

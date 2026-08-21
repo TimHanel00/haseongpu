@@ -33,7 +33,7 @@ namespace hase::core
         return parsed;
     }
 
-    SrmControls resolveSrmControls(ExperimentParameters const& experiment)
+    SrmControls resolveSrmControls(AseTraceControls const& experiment)
     {
         return SrmControls{
             positiveEnvironmentUnsigned("HASE_SRM_MAX_ITERATIONS", experiment.reflectionMaxIterations),
@@ -51,19 +51,19 @@ namespace hase::core
         return setting == "1" || setting == "true" || setting == "TRUE" || setting == "on" || setting == "ON";
     }
 
-    unsigned srmStatusPriority(SrmStatus const status)
+    unsigned srmStatusPriority(data::SrmStatus const status)
     {
         switch(status)
         {
-        case SrmStatus::DISABLED:
+        case data::SrmStatus::disabled:
             return 0u;
-        case SrmStatus::CONVERGED:
+        case data::SrmStatus::converged:
             return 1u;
-        case SrmStatus::STABLE:
+        case data::SrmStatus::stable:
             return 2u;
-        case SrmStatus::MAX_ITERATIONS:
+        case data::SrmStatus::maxIterations:
             return 3u;
-        case SrmStatus::DIVERGED:
+        case data::SrmStatus::diverged:
             return 4u;
         }
         return 4u;

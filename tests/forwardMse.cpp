@@ -5,11 +5,13 @@
 #include <core/calcForwardPhiAse.hpp>
 #include <core/haseWorker.hpp>
 #include <kernels/forward/rayTransition.hpp>
+#include <kernels/forward/rayWalk.hpp>
 #include <kernels/forward/volumeSampling.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <numeric>
@@ -20,15 +22,15 @@
 
 namespace
 {
-    hase::core::HostMesh makeTraversalMesh(
+    hase::data::TraceData makeTraversalMesh(
         std::vector<hase::core::Point> const& points,
-        std::vector<std::array<unsigned, hase::core::tet4VertexCount>> const& cells)
+        std::vector<std::array<unsigned, hase::data::tet4VertexCount>> const& cells)
     {
-        hase::core::HostMesh mesh;
+        hase::data::TraceData mesh;
         mesh.numberOfCells = static_cast<unsigned>(cells.size());
         mesh.numberOfMeshPoints = static_cast<unsigned>(points.size());
-        mesh.numberOfCellVertices = hase::core::tet4VertexCount;
-        mesh.numberOfFacesPerCell = hase::core::tet4FaceCount;
+        mesh.numberOfCellVertices = hase::data::tet4VertexCount;
+        mesh.numberOfFacesPerCell = hase::data::tet4FaceCount;
         mesh.points.resize(points.size() * 3u);
         for(unsigned point = 0u; point < points.size(); ++point)
         {
@@ -37,17 +39,17 @@ namespace
             mesh.points[point + 2u * points.size()] = points[point].z;
         }
 
-        using Face = std::array<unsigned, hase::core::tet4FaceWidth>;
+        using Face = std::array<unsigned, hase::data::tet4FaceWidth>;
         std::vector<Face> faces;
-        faces.reserve(cells.size() * hase::core::tet4FaceCount);
+        faces.reserve(cells.size() * hase::data::tet4FaceCount);
         for(auto const& cell : cells)
         {
             mesh.cellPointIndices.insert(mesh.cellPointIndices.end(), cell.cbegin(), cell.cend());
-            for(unsigned localFace = 0u; localFace < hase::core::tet4FaceCount; ++localFace)
+            for(unsigned localFace = 0u; localFace < hase::data::tet4FaceCount; ++localFace)
             {
                 Face face{};
                 unsigned faceVertex = 0u;
-                for(unsigned localVertex = 0u; localVertex < hase::core::tet4VertexCount; ++localVertex)
+                for(unsigned localVertex = 0u; localVertex < hase::data::tet4VertexCount; ++localVertex)
                 {
                     if(localVertex != localFace)
                     {
@@ -62,6 +64,20 @@ namespace
 
         mesh.cellNeighborCells.assign(faces.size(), -1);
         mesh.cellNeighborLocalFaces.assign(faces.size(), -1);
+        mesh.cellTypes.assign(cells.size(), hase::data::vtkTetraCellType);
+        mesh.cellMaterialIds.assign(cells.size(), 0u);
+        mesh.numberOfMaterials = 2u;
+        mesh.materialActive = {1u, 0u};
+        mesh.materialRefractiveIndices = {1.0, 1.0};
+        mesh.materialActiveIonDensities = {1.0, 0.0};
+        mesh.materialFluorescenceLifetimes = {1.0, 0.0};
+        mesh.materialBulkAttenuations = {0.0, 0.0};
+        mesh.materialPeakAbsorption = {0.0, 0.0};
+        mesh.materialPeakEmission = {0.0, 0.0};
+        mesh.materialCrossSectionOffsets = {0u, 1u, 1u};
+        mesh.crossSectionWavelengths = {1.0};
+        mesh.crossSectionAbsorption = {0.0};
+        mesh.crossSectionEmission = {0.0};
         for(unsigned face = 0u; face < faces.size(); ++face)
         {
             for(unsigned candidate = face + 1u; candidate < faces.size(); ++candidate)
@@ -70,10 +86,10 @@ namespace
                 {
                     continue;
                 }
-                unsigned const cell = face / hase::core::tet4FaceCount;
-                unsigned const localFace = face % hase::core::tet4FaceCount;
-                unsigned const neighbor = candidate / hase::core::tet4FaceCount;
-                unsigned const neighborLocalFace = candidate % hase::core::tet4FaceCount;
+                unsigned const cell = face / hase::data::tet4FaceCount;
+                unsigned const localFace = face % hase::data::tet4FaceCount;
+                unsigned const neighbor = candidate / hase::data::tet4FaceCount;
+                unsigned const neighborLocalFace = candidate % hase::data::tet4FaceCount;
                 mesh.cellNeighborCells[face] = static_cast<int>(neighbor);
                 mesh.cellNeighborLocalFaces[face] = static_cast<int>(neighborLocalFace);
                 mesh.cellNeighborCells[candidate] = static_cast<int>(cell);
@@ -84,9 +100,9 @@ namespace
         return mesh;
     }
 
-    hase::core::DeviceMeshView traversalView(hase::core::HostMesh const& mesh)
+    hase::data::TraceView traversalView(hase::data::TraceData const& mesh)
     {
-        hase::core::DeviceMeshView view{};
+        hase::data::TraceView view{};
         view.points = mesh.points;
         view.cellPointIndices = mesh.cellPointIndices;
         view.cellFaces = mesh.cellFaces;
@@ -100,6 +116,36 @@ namespace
         return view;
     }
 } // namespace
+
+TEST_CASE("forward gain lookup follows the receiving cell material and ray wavelength", "[forward][material]")
+{
+    hase::data::TraceView trace{};
+    std::array<double, 2u> beta{0.5, 0.0};
+    std::array<unsigned, 2u> materialIds{0u, 1u};
+    std::array<std::uint8_t, 2u> active{1u, 0u};
+    std::array<double, 2u> densities{2.0, 0.0};
+    std::array<double, 2u> attenuation{0.1, 0.7};
+    std::array<unsigned, 3u> offsets{0u, 2u, 2u};
+    std::array<double, 2u> wavelengths{1.0, 2.0};
+    std::array<double, 2u> absorption{1.0, 2.0};
+    std::array<double, 2u> emission{3.0, 5.0};
+    trace.betaVolume = beta;
+    trace.cellMaterialIds = materialIds;
+    trace.materialActive = active;
+    trace.materialActiveIonDensities = densities;
+    trace.materialBulkAttenuations = attenuation;
+    trace.materialCrossSectionOffsets = offsets;
+    trace.crossSectionWavelengths = wavelengths;
+    trace.crossSectionAbsorption = absorption;
+    trace.crossSectionEmission = emission;
+
+    auto const interpolated = trace.crossSectionsForCell(0u, 1.5);
+    CHECK(interpolated.absorption == Catch::Approx(1.5));
+    CHECK(interpolated.emission == Catch::Approx(4.0));
+    CHECK(hase::kernels::forward::localGainCoefficient(trace, 0u, 1.0) == Catch::Approx(1.9));
+    CHECK(hase::kernels::forward::localGainCoefficient(trace, 0u, 1.5) == Catch::Approx(2.4));
+    CHECK(hase::kernels::forward::localGainCoefficient(trace, 1u, 1.5) == Catch::Approx(-0.7));
+}
 
 TEST_CASE("forward PhiASE RSE includes zero-score histories", "[forward][rse]")
 {
@@ -187,7 +233,7 @@ TEST_CASE("forward PhiASE batch count expands with the worker group", "[forward]
 
     auto const raw = hase::core::makeForwardRawResult(2u, 3u, batchCount);
     CHECK(raw.rseBatchRayCounts.size() == batchCount);
-    CHECK(raw.vertexBatchScoreSum.size() == batchCount * 2u * 3u);
+    CHECK(raw.vertexBatchScoreSum.size() == batchCount * 3u);
 }
 
 TEST_CASE("HASE workers map every complete batch exactly once", "[forward][worker]")
@@ -274,11 +320,11 @@ TEST_CASE("forward PhiASE vertex accumulation remains cell based and conservativ
         },
         {{0u, 1u, 2u, 3u}, {0u, 1u, 2u, 4u}});
     mesh.cellVolumes = {1.0f, 1.0f};
-    mesh.claddingCellTypes = {0u, 0u};
-    mesh.claddingNumber = 1u;
+    mesh.betaVolume = {0.0, 0.0};
+    mesh.cellMaterialIds = {0u, 0u};
 
-    auto raw = hase::core::makeForwardRawResult(mesh.numberOfCells, mesh.numberOfMeshPoints);
-    unsigned const materialVertexCount = 2u * mesh.numberOfMeshPoints;
+    unsigned const materialVertexCount = mesh.numberOfMaterials * mesh.numberOfMeshPoints;
+    auto raw = hase::core::makeForwardRawResult(mesh.numberOfCells, materialVertexCount);
     std::array<double, 4u> const batchScores{0.1, 0.2, 0.3, 0.4};
     for(unsigned batch = 0u; batch < batchScores.size(); ++batch)
     {
@@ -287,7 +333,7 @@ TEST_CASE("forward PhiASE vertex accumulation remains cell based and conservativ
     }
     raw.rayCount = 4u;
 
-    hase::core::Result result;
+    hase::data::PhiAseResult result;
     hase::core::finalizeForwardPhiAse(mesh, raw, 4.0, result);
 
     REQUIRE(result.phiAse.size() == mesh.numberOfCells);
@@ -304,7 +350,7 @@ TEST_CASE("forward PhiASE vertex accumulation remains cell based and conservativ
     CHECK(result.standardError[0u] == Catch::Approx(expectedRse * result.phiAse[0u]));
 }
 
-TEST_CASE("forward PhiASE vertex accumulation preserves gain cladding interfaces", "[forward][vertex][cladding]")
+TEST_CASE("forward PhiASE vertex accumulation preserves material interfaces", "[forward][vertex][material]")
 {
     auto mesh = makeTraversalMesh(
         {
@@ -316,11 +362,11 @@ TEST_CASE("forward PhiASE vertex accumulation preserves gain cladding interfaces
         },
         {{0u, 1u, 2u, 3u}, {0u, 1u, 2u, 4u}});
     mesh.cellVolumes = {1.0f, 1.0f};
-    mesh.claddingCellTypes = {0u, 1u};
-    mesh.claddingNumber = 1u;
+    mesh.betaVolume = {0.0, 0.0};
+    mesh.cellMaterialIds = {0u, 1u};
 
-    auto raw = hase::core::makeForwardRawResult(mesh.numberOfCells, mesh.numberOfMeshPoints);
-    unsigned const materialVertexCount = 2u * mesh.numberOfMeshPoints;
+    unsigned const materialVertexCount = mesh.numberOfMaterials * mesh.numberOfMeshPoints;
+    auto raw = hase::core::makeForwardRawResult(mesh.numberOfCells, materialVertexCount);
     for(unsigned batch = 0u; batch < 4u; ++batch)
     {
         raw.vertexBatchScoreSum[batch * materialVertexCount] = 0.25;
@@ -329,7 +375,7 @@ TEST_CASE("forward PhiASE vertex accumulation preserves gain cladding interfaces
     }
     raw.rayCount = 4u;
 
-    hase::core::Result result;
+    hase::data::PhiAseResult result;
     hase::core::finalizeForwardPhiAse(mesh, raw, 4.0, result);
 
     REQUIRE(result.phiAse.size() == mesh.numberOfCells);
@@ -375,33 +421,38 @@ TEST_CASE("forward source stratification places one shifted point in each CDF in
 
 TEST_CASE("dynamic beta-volume updates rebuild the source-sampling CDF", "[forward][sampling]")
 {
-    hase::core::HostMesh mesh;
+    hase::data::TraceData mesh;
     mesh.numberOfCells = 3u;
     mesh.cellVolumes = {0.5f, 1.5f, 2.0f};
     mesh.betaVolume = {0.0, 0.0, 0.0};
-    mesh.calcCellVolumePrefix();
+    mesh.numberOfMaterials = 1u;
+    mesh.cellMaterialIds = {0u, 0u, 0u};
+    mesh.materialActive = {1u};
+    mesh.materialActiveIonDensities = {1.0};
+    mesh.materialFluorescenceLifetimes = {1.0};
+    mesh.rebuildStaticPrefixes();
 
-    CHECK(mesh.betaVolumePrefix == std::vector<double>{0.0, 0.0, 0.0});
+    CHECK(mesh.sourceStrengthPrefix == std::vector<double>{0.0, 0.0, 0.0});
     auto const staticVolumePrefix = mesh.cellVolumePrefix;
 
     mesh.setBetaVolume({2.0, 1.0, 0.25});
 
     CHECK(mesh.cellVolumePrefix == staticVolumePrefix);
-    REQUIRE(mesh.betaVolumePrefix.size() == 3u);
-    CHECK(mesh.betaVolumePrefix[0] == Catch::Approx(1.0));
-    CHECK(mesh.betaVolumePrefix[1] == Catch::Approx(2.5));
-    CHECK(mesh.betaVolumePrefix[2] == Catch::Approx(3.0));
+    REQUIRE(mesh.sourceStrengthPrefix.size() == 3u);
+    CHECK(mesh.sourceStrengthPrefix[0] == Catch::Approx(1.0));
+    CHECK(mesh.sourceStrengthPrefix[1] == Catch::Approx(2.5));
+    CHECK(mesh.sourceStrengthPrefix[2] == Catch::Approx(3.0));
     CHECK(
-        mesh.betaVolumePrefix.back()
+        mesh.sourceStrengthPrefix.back()
         == Catch::Approx(
             std::inner_product(mesh.betaVolume.cbegin(), mesh.betaVolume.cend(), mesh.cellVolumes.cbegin(), 0.0)));
 
-    hase::core::DeviceMeshView view{};
+    hase::data::TraceView view{};
     view.numberOfCells = mesh.numberOfCells;
-    view.betaVolumePrefix = mesh.betaVolumePrefix;
-    CHECK(hase::kernels::forward::sampleVolumeByBetaVolumeTarget(view, 0.5) == 0u);
-    CHECK(hase::kernels::forward::sampleVolumeByBetaVolumeTarget(view, 1.5) == 1u);
-    CHECK(hase::kernels::forward::sampleVolumeByBetaVolumeTarget(view, 2.75) == 2u);
+    view.sourceStrengthPrefix = mesh.sourceStrengthPrefix;
+    CHECK(hase::kernels::forward::sampleVolumeBySourceStrengthTarget(view, 0.5) == 0u);
+    CHECK(hase::kernels::forward::sampleVolumeBySourceStrengthTarget(view, 1.5) == 1u);
+    CHECK(hase::kernels::forward::sampleVolumeBySourceStrengthTarget(view, 2.75) == 2u);
 }
 
 TEST_CASE("forward random histories are separated by ray, pass, and sampling domain", "[forward][sampling]")
@@ -424,7 +475,7 @@ TEST_CASE("forward random histories are separated by ray, pass, and sampling dom
 
 TEST_CASE("forward Tet4 face planes are barycentric", "[forward][traversal]")
 {
-    hase::core::HostMesh mesh;
+    hase::data::TraceData mesh;
     mesh.points = {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0};
     mesh.numberOfCells = 1u;
     mesh.numberOfMeshPoints = 4u;
@@ -443,39 +494,39 @@ TEST_CASE("forward Tet4 face planes are barycentric", "[forward][traversal]")
     };
     auto const coordinate = [&mesh](unsigned const face, hase::core::Point const value)
     {
-        unsigned const offset = face * hase::core::tet4BarycentricPlaneWidth;
+        unsigned const offset = face * hase::data::tet4BarycentricPlaneWidth;
         return mesh.barycentricFacePlanes[offset] * value.x + mesh.barycentricFacePlanes[offset + 1u] * value.y
                + mesh.barycentricFacePlanes[offset + 2u] * value.z + mesh.barycentricFacePlanes[offset + 3u];
     };
 
-    for(unsigned face = 0u; face < hase::core::tet4FaceCount; ++face)
+    for(unsigned face = 0u; face < hase::data::tet4FaceCount; ++face)
     {
         CHECK(coordinate(face, point(face)) == Catch::Approx(1.0));
-        for(unsigned localVertex = 0u; localVertex < hase::core::tet4FaceWidth; ++localVertex)
+        for(unsigned localVertex = 0u; localVertex < hase::data::tet4FaceWidth; ++localVertex)
         {
             CHECK(
                 coordinate(
                     face,
-                    point(static_cast<unsigned>(mesh.cellFaces[face * hase::core::tet4FaceWidth + localVertex])))
+                    point(static_cast<unsigned>(mesh.cellFaces[face * hase::data::tet4FaceWidth + localVertex])))
                 == Catch::Approx(0.0));
         }
     }
     hase::core::Point const center{0.25, 0.25, 0.25};
-    for(unsigned face = 0u; face < hase::core::tet4FaceCount; ++face)
+    for(unsigned face = 0u; face < hase::data::tet4FaceCount; ++face)
         CHECK(coordinate(face, center) == Catch::Approx(0.25));
 
     CHECK(hase::kernels::forward::barycentricFaceIntersectionLength(0.3, -0.2, 2.0) == Catch::Approx(1.5));
     CHECK(hase::kernels::forward::barycentricFaceIntersectionLength(0.3, 0.2, 2.0) == 0.0);
     CHECK(hase::kernels::forward::barycentricFaceIntersectionLength(0.3, -0.2, 1.0) == 0.0);
 
-    hase::core::DeviceMeshView view{};
+    hase::data::TraceView view{};
     view.points = mesh.points;
     view.cellPointIndices = mesh.cellPointIndices;
     view.cellFaces = mesh.cellFaces;
     view.barycentricFacePlanes = mesh.barycentricFacePlanes;
     view.numberOfCells = 1u;
-    view.numberOfFacesPerCell = hase::core::tet4FaceCount;
-    view.numberOfCellVertices = hase::core::tet4VertexCount;
+    view.numberOfFacesPerCell = hase::data::tet4FaceCount;
+    view.numberOfCellVertices = hase::data::tet4VertexCount;
     view.numberOfMeshPoints = 4u;
     auto const intersection = hase::kernels::forward::nextFaceIntersection(
         view,
@@ -520,7 +571,7 @@ TEST_CASE("forward Tet4 intersection distances follow mesh scale", "[forward][tr
 {
     for(double const scale : {1.0e-9, 1.0, 1.0e9})
     {
-        std::array<double, hase::core::tet4FaceCount * hase::core::tet4BarycentricPlaneWidth> planes{
+        std::array<double, hase::data::tet4FaceCount * hase::data::tet4BarycentricPlaneWidth> planes{
             -1.0 / scale,
             -1.0 / scale,
             -1.0 / scale,
@@ -537,10 +588,10 @@ TEST_CASE("forward Tet4 intersection distances follow mesh scale", "[forward][tr
             0.0,
             1.0 / scale,
             0.0};
-        hase::core::DeviceMeshView view{};
+        hase::data::TraceView view{};
         view.barycentricFacePlanes = planes;
         view.numberOfCells = 1u;
-        view.numberOfFacesPerCell = hase::core::tet4FaceCount;
+        view.numberOfFacesPerCell = hase::data::tet4FaceCount;
 
         auto const intersection = hase::kernels::forward::nextFaceIntersection(
             view,
@@ -669,8 +720,8 @@ TEST_CASE("forward Tet4 recovery crosses a shared vertex", "[forward][traversal]
 TEST_CASE("forward Tet4 probe recovery selects an alternate neighbor", "[forward][traversal]")
 {
     constexpr unsigned numberOfCells = 3u;
-    constexpr unsigned faceCount = hase::core::tet4FaceCount;
-    constexpr unsigned planeWidth = hase::core::tet4BarycentricPlaneWidth;
+    constexpr unsigned faceCount = hase::data::tet4FaceCount;
+    constexpr unsigned planeWidth = hase::data::tet4BarycentricPlaneWidth;
     std::array<double, numberOfCells * faceCount * planeWidth> planes{};
     auto const setNegativeProbeFace = [&planes](unsigned const cell, unsigned const face)
     { planes[(cell * faceCount + face) * planeWidth] = -1.0; };
@@ -691,7 +742,7 @@ TEST_CASE("forward Tet4 probe recovery selects an alternate neighbor", "[forward
     neighbors[2u * faceCount + 0u] = 0;
     neighborFaces[2u * faceCount + 0u] = 1;
 
-    hase::core::DeviceMeshView view{};
+    hase::data::TraceView view{};
     view.barycentricFacePlanes = planes;
     view.cellNeighborCells = neighbors;
     view.cellNeighborLocalFaces = neighborFaces;
@@ -711,17 +762,17 @@ TEST_CASE("forward Tet4 probe recovery selects an alternate neighbor", "[forward
 
 TEST_CASE("forward Tet4 recovery remains bounded on cyclic connectivity", "[forward][traversal]")
 {
-    std::array<double, hase::core::tet4FaceCount * hase::core::tet4BarycentricPlaneWidth> planes{};
+    std::array<double, hase::data::tet4FaceCount * hase::data::tet4BarycentricPlaneWidth> planes{};
     planes[0u] = -1.0;
-    std::array<int, hase::core::tet4FaceCount> neighbors{0, -1, -1, -1};
-    std::array<int, hase::core::tet4FaceCount> neighborFaces{1, -1, -1, -1};
+    std::array<int, hase::data::tet4FaceCount> neighbors{0, -1, -1, -1};
+    std::array<int, hase::data::tet4FaceCount> neighborFaces{1, -1, -1, -1};
 
-    hase::core::DeviceMeshView view{};
+    hase::data::TraceView view{};
     view.barycentricFacePlanes = planes;
     view.cellNeighborCells = neighbors;
     view.cellNeighborLocalFaces = neighborFaces;
     view.numberOfCells = 1u;
-    view.numberOfFacesPerCell = hase::core::tet4FaceCount;
+    view.numberOfFacesPerCell = hase::data::tet4FaceCount;
 
     auto const transition = hase::kernels::forward::recoverFaceTransition(
         view,
@@ -748,7 +799,7 @@ TEST_CASE("forward SRM environment controls are strict positive overrides", "[fo
 
     unsetenv("HASE_SRM_MAX_ITERATIONS");
     unsetenv("HASE_SRM_DIVERGENCE_STREAK");
-    hase::core::ExperimentParameters experiment{};
+    hase::core::AseTraceControls experiment{};
     experiment.reflectionMaxIterations = 8u;
     auto const defaults = hase::core::resolveSrmControls(experiment);
     CHECK(defaults.maxIterations == 8u);

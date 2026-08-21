@@ -9,7 +9,7 @@
 
 #include <alpaka/alpaka.hpp>
 
-#include <core/types.hpp>
+#include <core/Runtime.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -97,8 +97,8 @@ namespace hase::benchmark
     RunContext makeRunContext(
         T_Device const& device,
         T_Exec const& executor,
-        hase::core::ComputeParameters const& compute,
-        hase::core::ExperimentParameters const& experiment)
+        hase::core::ExecutionPolicy const& compute,
+        hase::core::AseTraceControls const& experiment)
     {
         auto const properties = device.getDeviceProperties();
 
@@ -134,8 +134,8 @@ namespace hase::benchmark
         ScopedRunContext(
             T_Device const& device,
             T_Exec const& executor,
-            hase::core::ComputeParameters const& compute,
-            hase::core::ExperimentParameters const& experiment)
+            hase::core::ExecutionPolicy const& compute,
+            hase::core::AseTraceControls const& experiment)
             : m_previous(currentRunContext())
         {
             setRunContext(makeRunContext(device, executor, compute, experiment));

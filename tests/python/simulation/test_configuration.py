@@ -152,7 +152,7 @@ def testSimulationFromYamlBuildsPublicObjectGraph(tmp_path):
     assert simulation.phiASE.useReflections is True
     assert simulation.phiASE.forwardRayCount == 12
     assert simulation.prePump is True
-    assert simulation.gainMedium.components[0].surfaceOptics[0][1].reflectivity == pytest.approx(0.75)
+    assert simulation.gainMedium.components[0].surfaceOptics[0].optics.reflectivity == pytest.approx(0.75)
     assert len(simulation.pumps) == 1
     assert simulation.pumps[0].name == "main"
     assert simulation.pumps[0].ray_count == 1234

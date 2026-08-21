@@ -11,7 +11,7 @@
 
 #include <alpakaUtils/DevBundle.hpp>
 #include <concepts/concepts.hpp>
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 
 namespace hase::kernels
 {
@@ -26,14 +26,11 @@ namespace hase::kernels
 
     struct ComposeDerivative
     {
-        double sigmaAbsorption = 0.0;
-        double sigmaEmission = 0.0;
-        double tau = 1.0;
         bool pumpEnabled = true;
 
         ALPAKA_FN_ACC void operator()(
             auto const& acc,
-            core::DeviceMeshView const mesh,
+            data::TraceView const mesh,
             auto betaVolume,
             auto phiAse,
             auto dndtPump,
@@ -45,7 +42,7 @@ namespace hase::kernels
                     alpaka::onAcc::worker::threadsInGrid,
                     alpaka::IdxRange{mesh.numberOfCells}))
             {
-                if(mesh.getCellType(cell) == mesh.claddingNumber)
+                if(!mesh.isActive(cell))
                 {
                     dndtPump[cell] = 0.0;
                     dndtAse[cell] = 0.0;
@@ -54,12 +51,15 @@ namespace hase::kernels
                 }
 
                 double const pumpTerm = pumpEnabled ? dndtPump[cell] : 0.0;
-                double const gainPerDensity = betaVolume[cell] * (sigmaEmission + sigmaAbsorption) - sigmaAbsorption;
+                unsigned const material = mesh.getMaterialId(cell);
+                double const gainPerDensity
+                    = betaVolume[cell] * (mesh.materialPeakEmission[material] + mesh.materialPeakAbsorption[material])
+                      - mesh.materialPeakAbsorption[material];
                 double const aseTerm = gainPerDensity * static_cast<double>(phiAse[cell]);
                 if(!pumpEnabled)
                     dndtPump[cell] = 0.0;
                 dndtAse[cell] = aseTerm;
-                derivative[cell] = pumpTerm - aseTerm - betaVolume[cell] / tau;
+                derivative[cell] = pumpTerm - aseTerm - betaVolume[cell] / mesh.fluorescenceLifetime(cell);
             }
         }
     };
@@ -68,9 +68,6 @@ namespace hase::kernels
         auto& devBundle,
         concepts::Queue auto const& queue,
         auto const& mesh,
-        double sigmaAbsorption,
-        double sigmaEmission,
-        double tau,
         bool pumpEnabled,
         ComposeDerivativeBufferHandle auto& buffers)
     {
@@ -81,7 +78,7 @@ namespace hase::kernels
         queue.enqueue(
             frameSpec,
             alpaka::KernelBundle{
-                ComposeDerivative{sigmaAbsorption, sigmaEmission, tau, pumpEnabled},
+                ComposeDerivative{pumpEnabled},
                 mesh,
                 buffers.betaVolume,
                 buffers.phiAse,

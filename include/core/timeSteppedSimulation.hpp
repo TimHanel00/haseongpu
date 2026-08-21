@@ -13,12 +13,14 @@
 #include <alpakaUtils/backendNames.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
+#include <core/Runtime.hpp>
+#include <core/SimulationControls.hpp>
 #include <core/forwardPhiAseEvaluator.hpp>
 #include <core/logging.hpp>
-#include <core/mesh.hpp>
-#include <core/simulationRunControl.hpp>
-#include <core/simulationSnapshot.hpp>
-#include <core/types.hpp>
+#include <data/Simulation.hpp>
+#include <data/SimulationPreparation.hpp>
+#include <data/SimulationSnapshot.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/derivativeComposition.hpp>
 #include <kernels/generalPump.hpp>
 #include <kernels/timeIntegrationUpdateKernels.hpp>
@@ -42,18 +44,7 @@ namespace hase::core
 {
     namespace detail
     {
-        inline double absorptionAtEmissionPeak(ExperimentParameters const& experiment)
-        {
-            if(experiment.sigmaA.empty() || experiment.sigmaE.empty())
-            {
-                return experiment.maxSigmaA;
-            }
-            auto const maxEmission = std::ranges::max_element(experiment.sigmaE);
-            auto const index = static_cast<std::size_t>(std::distance(experiment.sigmaE.begin(), maxEmission));
-            return experiment.sigmaA.at(std::min(index, experiment.sigmaA.size() - 1u));
-        }
-
-        inline void validateRunParameters(SimulationRunControl const& run)
+        inline void validateRunParameters(SimulationControls const& run)
         {
             if(run.timeStep <= 0.0)
             {
@@ -120,9 +111,7 @@ namespace hase::core
             for(auto const& source : run.pump.sources)
                 if(source.rayCount == 0u || source.totalPower <= 0.0 || source.surfaces.empty()
                    || source.wavelengths.empty() || source.wavelengths.size() != source.spectralWeights.size()
-                   || source.wavelengths.size() != source.sigmaAbsorption.size()
-                   || source.wavelengths.size() != source.sigmaEmission.size() || source.polarAngles.empty()
-                   || source.polarAngles.size() != source.azimuthalAngles.size()
+                   || source.polarAngles.empty() || source.polarAngles.size() != source.azimuthalAngles.size()
                    || source.polarAngles.size() != source.angularWeights.size())
                     throw std::runtime_error("invalid general pump source configuration");
         }
@@ -139,10 +128,10 @@ namespace hase::core
         CompiledSimulationRunner(
             std::vector<T_Device> devices,
             T_Executor const& executor,
-            ExperimentParameters& experiment,
-            ComputeParameters& compute,
-            SimulationRunControl const& run,
-            HostMesh& hostMesh)
+            AseTraceControls& experiment,
+            ExecutionPolicy& compute,
+            SimulationControls const& run,
+            hase::data::TraceData& hostMesh)
             : m_forwardAseContext(std::move(devices), executor, experiment, hostMesh)
             , m_device(m_forwardAseContext.primaryDevice())
             , m_queue(m_device.makeQueue(alpaka::queueKind::nonBlocking))
@@ -151,7 +140,7 @@ namespace hase::core
             , m_compute(compute)
             , m_run(run)
             , m_hostMesh(hostMesh)
-            , m_mesh(m_forwardAseContext.primaryMesh().toView())
+            , m_mesh(m_forwardAseContext.primaryMesh().view())
             , m_beta(hase::alpakaUtils::toDevice(m_queue, hostMesh.betaVolume))
             , m_betaNext(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
             , m_stage(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
@@ -164,9 +153,11 @@ namespace hase::core
             , m_k3(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
             , m_k4(alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfCells)))
             , m_vertexPumpIntegral(
-                  alpaka::onHost::alloc<double>(m_device, static_cast<std::size_t>(m_mesh.numberOfMeshPoints)))
+                  alpaka::onHost::alloc<double>(
+                      m_device,
+                      static_cast<std::size_t>(m_mesh.numberOfMaterials) * m_mesh.numberOfMeshPoints))
             , m_lumpedGainVertexVolume(
-                  hase::alpakaUtils::toDevice(m_queue, hase::kernels::makeLumpedGainVertexVolumes(hostMesh)))
+                  hase::alpakaUtils::toDevice(m_queue, hase::kernels::makeLumpedMaterialVertexVolumes(hostMesh)))
             , m_generalPumpSources(
                   hase::kernels::prepareGeneralPumpDeviceSources<T_Device>(m_queue, hostMesh, m_run.pump))
         {
@@ -175,8 +166,8 @@ namespace hase::core
         }
 
         void run(
-            std::function<void(SimulationSnapshot const&)> const& callback,
-            std::function<std::vector<double>(unsigned)> const& receiveControl)
+            std::function<void(data::SimulationSnapshot const&)> const& callback,
+            std::function<data::TraceData(unsigned)> const& receiveControl)
         {
 #ifdef HASE_ENABLE_STEP_TIMING
             std::ofstream timingCsv;
@@ -228,12 +219,22 @@ namespace hase::core
                 {
                     if(!receiveControl)
                         throw std::runtime_error("synchronized-debug requires a control receiver");
-                    auto betaVolume = receiveControl(completedStep);
+                    auto update = receiveControl(completedStep);
+                    bool const materialChanged = !m_hostMesh.hasSameMaterialData(update);
+                    if(materialChanged)
+                    {
+                        if(!includesControl(SimulationControlField::CROSS_SECTIONS))
+                            throw std::runtime_error(
+                                "synchronized cross-section update requires the cross_sections control field");
+                        m_hostMesh.replaceMaterialData(update);
+                        m_forwardAseContext.refreshMaterials(m_hostMesh);
+                        m_mesh = m_forwardAseContext.primaryMesh().view();
+                    }
                     if(includesControl(SimulationControlField::BETA_VOLUME))
                     {
-                        if(betaVolume.size() != m_mesh.numberOfCells)
+                        if(update.betaVolume.size() != m_mesh.numberOfCells)
                             throw std::runtime_error("synchronized beta_volume control has the wrong cell count");
-                        detail::copyVectorToBuffer(m_queue, betaVolume, m_beta);
+                        detail::copyVectorToBuffer(m_queue, update.betaVolume, m_beta);
                         // Complete the queued copy while the callback-local host vector is alive.
                         alpaka::onHost::wait(m_queue);
                     }
@@ -309,15 +310,7 @@ namespace hase::core
 
                 auto& activePhiAse = m_phiAseDeviceResident ? m_forwardAseContext.primaryVolumePhiAse() : m_phiAse;
                 DerivativeBuffers derivativeBuffers{beta, activePhiAse, m_dndtPump, m_dndtAse, m_derivative};
-                hase::kernels::enqueueComposeDerivative(
-                    m_devBundle,
-                    m_queue,
-                    m_mesh,
-                    detail::absorptionAtEmissionPeak(m_experiment),
-                    m_experiment.maxSigmaE,
-                    std::max(static_cast<double>(m_hostMesh.crystalTFluo), std::numeric_limits<double>::min()),
-                    pumpEnabled,
-                    derivativeBuffers);
+                hase::kernels::enqueueComposeDerivative(m_devBundle, m_queue, m_mesh, pumpEnabled, derivativeBuffers);
             };
 
             auto const& method = m_run.timeIntegration.method;
@@ -418,7 +411,7 @@ namespace hase::core
 
         void initializeResult(double standardErrorValue, unsigned resultSize)
         {
-            m_lastAseResult = Result(
+            m_lastAseResult = data::PhiAseResult(
                 std::vector<float>(resultSize, 0.0f),
                 std::vector<double>(resultSize, standardErrorValue),
                 std::vector<double>(resultSize, 0.0),
@@ -450,7 +443,7 @@ namespace hase::core
             return true;
         }
 
-        static void copyStatus(Result const& source, Result& target)
+        static void copyStatus(data::PhiAseResult const& source, data::PhiAseResult& target)
         {
             target.srmStatus = source.srmStatus;
             target.srmPasses = source.srmPasses;
@@ -459,12 +452,12 @@ namespace hase::core
             target.srmDivergenceStreak = source.srmDivergenceStreak;
         }
 
-        SimulationSnapshot makeSnapshot(unsigned step)
+        data::SimulationSnapshot makeSnapshot(unsigned step)
         {
             std::vector<double> betaVolume;
             std::vector<double> dndtPump;
             std::vector<double> dndtAse;
-            Result aseResult;
+            data::PhiAseResult aseResult;
             copyStatus(m_lastAseResult, aseResult);
 
             if(includes(SimulationOutputField::BETA_VOLUME))
@@ -508,7 +501,7 @@ namespace hase::core
             if(includes(SimulationOutputField::DNDT_PUMP))
                 dndtPump = detail::copyToVector(m_queue, m_dndtPump);
 
-            return SimulationSnapshot{
+            return data::SimulationSnapshot{
                 step,
                 static_cast<double>(step) * m_run.timeStep,
                 std::move(betaVolume),
@@ -557,16 +550,19 @@ namespace hase::core
 
         void enqueueExponentialEuler()
         {
-            alpaka::onHost::transform(
-                m_queue,
+            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
+                m_devBundle.device,
                 m_devBundle.executor,
-                m_betaNext,
-                hase::kernels::ExponentialEulerUpdate{
-                    m_run.timeStep,
-                    std::max(static_cast<double>(m_hostMesh.crystalTFluo), std::numeric_limits<double>::min())},
-                m_beta,
-                m_dndtPump,
-                m_dndtAse);
+                alpaka::Vec{m_mesh.numberOfCells});
+            m_queue.enqueue(
+                frameSpec,
+                alpaka::KernelBundle{
+                    hase::kernels::ExponentialEulerUpdate{m_run.timeStep},
+                    m_mesh,
+                    m_beta,
+                    m_dndtPump,
+                    m_dndtAse,
+                    m_betaNext});
         }
 
         void enqueueClip(auto& beta)
@@ -578,11 +574,11 @@ namespace hase::core
         T_Device& m_device;
         T_Queue m_queue;
         hase::alpakaUtils::DevBundle<T_Device, T_Executor> m_devBundle;
-        ExperimentParameters& m_experiment;
-        ComputeParameters& m_compute;
-        SimulationRunControl const& m_run;
-        HostMesh& m_hostMesh;
-        DeviceMeshView m_mesh;
+        AseTraceControls& m_experiment;
+        ExecutionPolicy& m_compute;
+        SimulationControls const& m_run;
+        hase::data::TraceData& m_hostMesh;
+        hase::data::TraceView m_mesh;
 
         T_DoubleBuffer m_beta;
         T_DoubleBuffer m_betaNext;
@@ -598,75 +594,106 @@ namespace hase::core
         T_DoubleBuffer m_vertexPumpIntegral;
         T_DoubleBuffer m_lumpedGainVertexVolume;
         std::vector<hase::kernels::GeneralPumpDeviceSource<T_Device>> m_generalPumpSources;
-        Result m_lastAseResult;
+        data::PhiAseResult m_lastAseResult;
         std::size_t m_nextOutputStep = 0u;
         bool m_phiAseDeviceResident = false;
     };
 
-    inline int startTimeSteppedSimulation(
-        ExperimentParameters& experiment,
-        ComputeParameters& compute,
-        SimulationRunControl const& run,
-        HostMesh& hostMesh,
-        std::function<void(SimulationSnapshot const&)> const& callback,
-        std::function<std::vector<double>(unsigned)> const& receiveControl = {})
+    namespace detail
     {
-        detail::validateRunParameters(run);
-        auto backends = alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors);
-        bool oneDidRun = false;
-        alpaka::onHost::executeForEachIfHasDevice(
-            [&](auto const& backend)
-            {
-                auto deviceSpec = backend[alpaka::object::deviceSpec];
-                auto exec = backend[alpaka::object::exec];
-                auto devSelector = alpaka::onHost::makeDeviceSelector(deviceSpec);
-                if(devSelector.getDeviceCount() == 0u)
-                {
-                    return 0;
-                }
-                auto sampleDevice = devSelector.makeDevice(0);
-                if(hase::alpakaUtils::getNameForBackend(backend, sampleDevice) != compute.backend)
-                {
-                    return 0;
-                }
-                std::size_t const deviceCount = devSelector.getDeviceCount();
-                compute.devices.resize(deviceCount);
-                std::iota(compute.devices.begin(), compute.devices.end(), 0u);
-                compute.gpu_i = compute.devices.front();
-                if(compute.numDevices == 0u)
-                    compute.numDevices = static_cast<unsigned>(deviceCount);
-                if(compute.numDevices > deviceCount)
-                {
-                    dout(V_WARNING) << "Requested number of devices (" << compute.numDevices
-                                    << ") exceeds the available device count (" << deviceCount
-                                    << "); using all available devices." << std::endl;
-                    compute.numDevices = static_cast<unsigned>(deviceCount);
-                }
-                compute.devices.resize(compute.numDevices);
-                using T_Device = ALPAKA_TYPEOF(sampleDevice);
-                std::vector<T_Device> devices;
-                devices.reserve(compute.devices.size());
-                for(unsigned deviceIndex : compute.devices)
-                    devices.emplace_back(devSelector.makeDevice(deviceIndex));
-                oneDidRun = true;
-                CompiledSimulationRunner runner{std::move(devices), exec, experiment, compute, run, hostMesh};
-                runner.run(callback, receiveControl);
-                return 0;
-            },
-            backends);
-
-        if(!oneDidRun)
+        inline int runPreparedSimulation(
+            AseTraceControls& experiment,
+            ExecutionPolicy& compute,
+            SimulationControls const& run,
+            hase::data::TraceData& hostMesh,
+            std::function<void(data::SimulationSnapshot const&)> const& callback,
+            std::function<data::TraceData(unsigned)> const& receiveControl = {})
         {
-            std::ostringstream message;
-            message << "Backend '" << compute.backend
-                    << "' did not match any available backend with an available device. Available backends:";
-            for(auto const& element : hase::alpakaUtils::availableBackendNames())
-            {
-                message << "\n  " << element;
-            }
-            throw std::runtime_error(message.str());
-        }
+            detail::validateRunParameters(run);
+            auto backends = alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors);
+            bool oneDidRun = false;
+            alpaka::onHost::executeForEachIfHasDevice(
+                [&](auto const& backend)
+                {
+                    auto deviceSpec = backend[alpaka::object::deviceSpec];
+                    auto exec = backend[alpaka::object::exec];
+                    auto devSelector = alpaka::onHost::makeDeviceSelector(deviceSpec);
+                    if(devSelector.getDeviceCount() == 0u)
+                    {
+                        return 0;
+                    }
+                    auto sampleDevice = devSelector.makeDevice(0);
+                    if(hase::alpakaUtils::getNameForBackend(backend, sampleDevice) != compute.backend)
+                    {
+                        return 0;
+                    }
+                    std::size_t const deviceCount = devSelector.getDeviceCount();
+                    compute.devices.resize(deviceCount);
+                    std::iota(compute.devices.begin(), compute.devices.end(), 0u);
+                    compute.gpu_i = compute.devices.front();
+                    if(compute.numDevices == 0u)
+                        compute.numDevices = static_cast<unsigned>(deviceCount);
+                    if(compute.numDevices > deviceCount)
+                    {
+                        dout(V_WARNING) << "Requested number of devices (" << compute.numDevices
+                                        << ") exceeds the available device count (" << deviceCount
+                                        << "); using all available devices." << std::endl;
+                        compute.numDevices = static_cast<unsigned>(deviceCount);
+                    }
+                    compute.devices.resize(compute.numDevices);
+                    using T_Device = ALPAKA_TYPEOF(sampleDevice);
+                    std::vector<T_Device> devices;
+                    devices.reserve(compute.devices.size());
+                    for(unsigned deviceIndex : compute.devices)
+                        devices.emplace_back(devSelector.makeDevice(deviceIndex));
+                    oneDidRun = true;
+                    CompiledSimulationRunner runner{std::move(devices), exec, experiment, compute, run, hostMesh};
+                    runner.run(callback, receiveControl);
+                    return 0;
+                },
+                backends);
 
-        return 0;
+            if(!oneDidRun)
+            {
+                std::ostringstream message;
+                message << "Backend '" << compute.backend
+                        << "' did not match any available backend with an available device. Available backends:";
+                for(auto const& element : hase::alpakaUtils::availableBackendNames())
+                {
+                    message << "\n  " << element;
+                }
+                throw std::runtime_error(message.str());
+            }
+
+            return 0;
+        }
+    } // namespace detail
+
+    /**
+     * @brief Run a time-stepped simulation directly from the primitive graph.
+     *
+     * The optional control callback mutates the same graph at a synchronized
+     * step boundary. Preparation then detects material-table changes and
+     * refreshes only material-resident buffers; topology remains resident.
+     */
+    inline int runSimulation(
+        data::Simulation& simulation,
+        std::function<void(data::SimulationSnapshot const&)> const& callback,
+        std::function<void(unsigned, data::Simulation&)> const& receiveControl = {})
+    {
+        auto prepared = data::prepareSimulationWithUpdates(simulation);
+        return detail::runPreparedSimulation(
+            prepared.state.ase,
+            prepared.state.execution,
+            prepared.state.controls,
+            prepared.state.trace,
+            callback,
+            receiveControl
+                ? std::function<data::TraceData(unsigned)>{[&](unsigned const completedStep)
+                                                           {
+                                                               receiveControl(completedStep, simulation);
+                                                               return data::prepareSimulation(simulation).trace;
+                                                           }}
+                : std::function<data::TraceData(unsigned)>{});
     }
 } // namespace hase::core

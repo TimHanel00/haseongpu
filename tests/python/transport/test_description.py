@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 
 from hase_units import units
 from hase_transport import PrimitiveDescription, TransportComposer, field, reference
@@ -142,7 +143,7 @@ def test_physical_graph_serializes_shared_material_data_once():
     assert not any("volumeTopology" in path for path in dynamic_paths)
 
     excitationNode = next(node for node in graph.nodes if node.typeName == "excitationState")
-    simulation._backendGainMedium.get("betaVolume").value[:] = 0.75
+    simulation._simulationState.get("betaVolume").value[:] = 0.75
     simulation._refreshExcitationState()
     refreshed = dict(
         (f"{node.path}/{name}", value)
@@ -150,3 +151,51 @@ def test_physical_graph_serializes_shared_material_data_once():
     )
     assert excitationNode.owner is simulation.excitationState
     np.testing.assert_allclose(refreshed[f"{excitationNode.path}/values"][0], 0.75)
+
+    simulation.controlFields = ("cross_sections",)
+    tableNode = next(node for node in graph.nodes if node.typeName == "crossSectionTable")
+    controlledDynamicPaths = {
+        f"{node.path}/{name}"
+        for node, name, _spec, _value in _selectedFields(graph, dynamicOnly=True)
+    }
+    assert controlledDynamicPaths == dynamic_paths | {
+        f"{tableNode.path}/wavelengths",
+        f"{tableNode.path}/absorption",
+        f"{tableNode.path}/emission",
+    }
+    table = tableNode.owner
+    table.replaceSamples(
+        [900.0, 950.0, 1000.0] * units.nm,
+        [1.0e-21, 2.0e-21, 3.0e-21] * units.cm**2,
+        [4.0e-21, 5.0e-21, 6.0e-21] * units.cm**2,
+    )
+    resized = dict(
+        (f"{node.path}/{name}", value)
+        for node, name, _spec, value in _selectedFields(graph, dynamicOnly=True)
+    )
+    assert tableNode.owner is table
+    np.testing.assert_array_equal(
+        resized[f"{tableNode.path}/wavelengths"].toValue(units.nm),
+        [900.0, 950.0, 1000.0],
+    )
+    np.testing.assert_array_equal(
+        resized[f"{tableNode.path}/absorption"].toValue(units.cm**2),
+        [1.0e-21, 2.0e-21, 3.0e-21],
+    )
+    np.testing.assert_array_equal(
+        resized[f"{tableNode.path}/emission"].toValue(units.cm**2),
+        [4.0e-21, 5.0e-21, 6.0e-21],
+    )
+
+    previousWavelengths = table.wavelengths
+    previousAbsorption = table.absorption
+    previousEmission = table.emission
+    with pytest.raises(ValueError, match="same length"):
+        table.replaceSamples(
+            [900.0, 950.0] * units.nm,
+            [1.0e-21] * units.cm**2,
+            [4.0e-21, 5.0e-21] * units.cm**2,
+        )
+    assert table.wavelengths is previousWavelengths
+    assert table.absorption is previousAbsorption
+    assert table.emission is previousEmission

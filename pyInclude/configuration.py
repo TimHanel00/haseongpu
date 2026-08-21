@@ -22,7 +22,6 @@ from .laser import (
     SurfacePumpInjector,
     UniformPumpProfile,
 )
-from .frontendState import _crossSections
 from .physical import Domain, GainMedium, OpticalComponent
 from .simulation import PhiASE
 from .timeIntegration import (
@@ -342,7 +341,7 @@ class _YamlContext:
         return medium
 
 
-def _phiAse(spec, spectra):
+def _phiAse(spec):
     spec = _mapping(spec, "simulation.phi_ase")
     aliases = {
         "propagation_mode": "propagationMode",
@@ -366,7 +365,7 @@ def _phiAse(spec, spectra):
     unchanged = {"repetitions", "monochromatic", "backend", "ase_steps"}
     _rejectUnknown(spec, set(aliases) | unchanged, "simulation.phi_ase")
     values = {aliases.get(name, name): value for name, value in spec.items()}
-    return PhiASE(crossSections=spectra, **values)
+    return PhiASE(**values)
 
 
 def _pumpSpectrum(spec):
@@ -507,8 +506,6 @@ def simulationFromYaml(filename, *, simulationCls, **objects):
         raise ValueError("simulation.optical_components must be a non-empty sequence")
     components = [context.resolve("optical_components", name) for name in componentNames]
     medium = context.resolve("gain_media", spec["gain_medium"])
-    material = medium.components[0].material
-    spectra = _crossSections(material)
     excitationSpec = spec.get("initial_excitation", {"value": 0.0})
     excitationSpec = _mapping(excitationSpec, "simulation.initial_excitation")
     form = _oneOf(excitationSpec, ("value", "domains"), "simulation.initial_excitation")
@@ -533,7 +530,7 @@ def simulationFromYaml(filename, *, simulationCls, **objects):
             else context.resolve("domains", spec["exterior_surface"])
         ),
         initialExcitation=excitation,
-        phiASE=_phiAse(spec["phi_ase"], spectra),
+        phiASE=_phiAse(spec["phi_ase"]),
         timeIntegrator=_timeIntegrator(spec["time_integrator"]),
         timeStepSize=spec["time_step_size"],
         simulationSteps=spec.get("simulation_steps"),

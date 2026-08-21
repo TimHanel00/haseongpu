@@ -2,8 +2,8 @@ PhiASE
 ======
 
 ``PhiASE`` configures the forward, source-driven ASE estimator. ``Simulation``
-supplies its lowered gain domain and the authoritative spectra from the shared
-gain ``Material``. ``PhiASE`` owns numerical sampling, reflection, compute,
+supplies its gain domains and the authoritative spectra from each component's
+``Material``. ``PhiASE`` owns numerical sampling, reflection, compute,
 transport, and parallel controls; it does not own geometry, material, or the
 evolving excitation state.
 ``propagationMode="forward"`` is the only supported mode.
@@ -23,13 +23,18 @@ evolving excitation state.
    )
 
 Normal applications pass it to ``Simulation``. The direct ``run`` entry point
-accepts the same physical ``GainMedium`` graph. Spectra are obtained from the
-``Material`` referenced by its ``OpticalComponent`` objects; ``PhiASE`` does
-not create a second transport copy:
+accepts the same physical ``GainMedium`` graph. Pass ``opticalComponents`` when
+the trace also traverses passive components. Spectra are obtained from the
+``Material`` referenced by each ``OpticalComponent``; ``PhiASE`` does not
+create a second transport copy:
 
 .. code-block:: python
 
-   phi_ase.run(gainMedium=medium, initialExcitation=0.25)
+   phi_ase.run(
+       gainMedium=medium,
+       opticalComponents=components,
+       initialExcitation=0.25,
+   )
    result = phi_ase.getResults()
    phi = np.asarray(result.phiAse)
 

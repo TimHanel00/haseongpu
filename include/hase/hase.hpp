@@ -6,8 +6,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #pragma once
-#include <core/mesh.hpp>
 #include <core/simulation.hpp>
-#include <core/types.hpp>
+#include <core/timeSteppedSimulation.hpp>
+#include <data/PhiAseResult.hpp>
+#include <data/Simulation.hpp>
+#include <data/SimulationSnapshot.hpp>
 #include <hase/version.hpp>
 #include <utils/interpolation.hpp>

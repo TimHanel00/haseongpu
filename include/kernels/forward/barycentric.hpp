@@ -50,7 +50,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC BarycentricTet4 barycentricCoordinates(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         hase::core::Point const point)
     {
@@ -63,7 +63,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC BarycentricTet4 normalizedBarycentricVertexWeights(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         hase::core::Point const point)
     {
@@ -85,7 +85,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC BarycentricTet4 segmentMidpointBarycentricVertexWeights(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         hase::core::Point const position,
         hase::core::Point const direction,
