@@ -9,33 +9,17 @@
 
 #include <alpaka/alpaka.hpp>
 
-#include <alpakaUtils/DevBundle.hpp>
-#include <alpakaUtils/utils.hpp>
-#include <concepts/concepts.hpp>
-#include <core/mesh.hpp>
-
-#include <cmath>
-
 namespace hase::kernels
 {
     struct AddScaled
     {
         double scale = 1.0;
 
-        ALPAKA_FN_ACC void operator()(
-            auto const& acc,
-            hase::core::DeviceMeshView const mesh,
-            auto base,
-            auto slope,
-            auto out) const
+        ALPAKA_FN_ACC constexpr auto operator()(
+            alpaka::concepts::Simd auto const& base,
+            alpaka::concepts::Simd auto const& slope) const
         {
-            for(auto [cell] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfCells}))
-            {
-                out[cell] = base[cell] + scale * slope[cell];
-            }
+            return base + scale * slope;
         }
     };
 
@@ -43,21 +27,12 @@ namespace hase::kernels
     {
         double timeStep = 0.0;
 
-        ALPAKA_FN_ACC void operator()(
-            auto const& acc,
-            hase::core::DeviceMeshView const mesh,
-            auto base,
-            auto first,
-            auto second,
-            auto out) const
+        ALPAKA_FN_ACC constexpr auto operator()(
+            alpaka::concepts::Simd auto const& base,
+            alpaka::concepts::Simd auto const& first,
+            alpaka::concepts::Simd auto const& second) const
         {
-            for(auto [cell] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfCells}))
-            {
-                out[cell] = base[cell] + 0.5 * timeStep * (first[cell] + second[cell]);
-            }
+            return base + 0.5 * timeStep * (first + second);
         }
     };
 
@@ -65,23 +40,14 @@ namespace hase::kernels
     {
         double timeStep = 0.0;
 
-        ALPAKA_FN_ACC void operator()(
-            auto const& acc,
-            hase::core::DeviceMeshView const mesh,
-            auto base,
-            auto k1,
-            auto k2,
-            auto k3,
-            auto k4,
-            auto out) const
+        ALPAKA_FN_ACC constexpr auto operator()(
+            alpaka::concepts::Simd auto const& base,
+            alpaka::concepts::Simd auto const& k1,
+            alpaka::concepts::Simd auto const& k2,
+            alpaka::concepts::Simd auto const& k3,
+            alpaka::concepts::Simd auto const& k4) const
         {
-            for(auto [cell] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfCells}))
-            {
-                out[cell] = base[cell] + (timeStep / 6.0) * (k1[cell] + 2.0 * k2[cell] + 2.0 * k3[cell] + k4[cell]);
-            }
+            return base + (timeStep / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
         }
     };
 
@@ -90,37 +56,25 @@ namespace hase::kernels
         double timeStep = 0.0;
         double tau = 1.0;
 
-        ALPAKA_FN_ACC void operator()(
-            auto const& acc,
-            hase::core::DeviceMeshView const mesh,
-            auto betaVolume,
-            auto dndtPump,
-            auto dndtAse,
-            auto out) const
+        ALPAKA_FN_ACC auto operator()(
+            alpaka::concepts::Simd auto const& betaVolume,
+            alpaka::concepts::Simd auto const& dndtPump,
+            alpaka::concepts::Simd auto const& dndtAse) const
         {
             double const decay = alpaka::math::exp(-timeStep / tau);
-            for(auto [cell] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfCells}))
-            {
-                double const source = dndtPump[cell] - dndtAse[cell];
-                out[cell] = tau * source * (1.0 - decay) + betaVolume[cell] * decay;
-            }
+            auto const source = dndtPump - dndtAse;
+            return tau * source * (1.0 - decay) + betaVolume * decay;
         }
     };
 
     struct ClipBeta
     {
-        ALPAKA_FN_ACC void operator()(auto const& acc, hase::core::DeviceMeshView const mesh, auto betaVolume) const
+        ALPAKA_FN_ACC constexpr auto operator()(alpaka::concepts::Simd auto const& betaVolume) const
         {
-            for(auto [cell] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfCells}))
-            {
-                betaVolume[cell] = alpaka::math::min(1.0, alpaka::math::max(0.0, betaVolume[cell]));
-            }
+            auto result = betaVolume;
+            alpaka::where((result <= 0.0) || (result != result), result) = 0.0;
+            alpaka::where(result > 1.0, result) = 1.0;
+            return result;
         }
     };
 

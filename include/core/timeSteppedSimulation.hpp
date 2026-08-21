@@ -520,71 +520,58 @@ namespace hase::core
 
         void enqueueAddScaled(auto& base, auto& slope, auto& out, double scale)
         {
-            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                m_devBundle.device,
+            alpaka::onHost::transform(
+                m_queue,
                 m_devBundle.executor,
-                alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
-                frameSpec,
-                alpaka::KernelBundle{hase::kernels::AddScaled{scale}, m_mesh, base, slope, out});
+                out,
+                hase::kernels::AddScaled{scale},
+                base,
+                slope);
         }
 
         void enqueueHeun(auto& base, auto& first, auto& second, auto& out)
         {
-            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                m_devBundle.device,
+            alpaka::onHost::transform(
+                m_queue,
                 m_devBundle.executor,
-                alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
-                frameSpec,
-                alpaka::KernelBundle{hase::kernels::CombineHeun{m_run.timeStep}, m_mesh, base, first, second, out});
+                out,
+                hase::kernels::CombineHeun{m_run.timeStep},
+                base,
+                first,
+                second);
         }
 
         void enqueueRungeKutta4()
         {
-            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                m_devBundle.device,
+            alpaka::onHost::transform(
+                m_queue,
                 m_devBundle.executor,
-                alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
-                frameSpec,
-                alpaka::KernelBundle{
-                    hase::kernels::CombineRungeKutta4{m_run.timeStep},
-                    m_mesh,
-                    m_beta,
-                    m_k1,
-                    m_k2,
-                    m_k3,
-                    m_k4,
-                    m_betaNext});
+                m_betaNext,
+                hase::kernels::CombineRungeKutta4{m_run.timeStep},
+                m_beta,
+                m_k1,
+                m_k2,
+                m_k3,
+                m_k4);
         }
 
         void enqueueExponentialEuler()
         {
-            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                m_devBundle.device,
+            alpaka::onHost::transform(
+                m_queue,
                 m_devBundle.executor,
-                alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
-                frameSpec,
-                alpaka::KernelBundle{
-                    hase::kernels::ExponentialEulerUpdate{
-                        m_run.timeStep,
-                        std::max(static_cast<double>(m_hostMesh.crystalTFluo), std::numeric_limits<double>::min())},
-                    m_mesh,
-                    m_beta,
-                    m_dndtPump,
-                    m_dndtAse,
-                    m_betaNext});
+                m_betaNext,
+                hase::kernels::ExponentialEulerUpdate{
+                    m_run.timeStep,
+                    std::max(static_cast<double>(m_hostMesh.crystalTFluo), std::numeric_limits<double>::min())},
+                m_beta,
+                m_dndtPump,
+                m_dndtAse);
         }
 
         void enqueueClip(auto& beta)
         {
-            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                m_devBundle.device,
-                m_devBundle.executor,
-                alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(frameSpec, alpaka::KernelBundle{hase::kernels::ClipBeta{}, m_mesh, beta});
+            alpaka::onHost::transform(m_queue, m_devBundle.executor, beta, hase::kernels::ClipBeta{}, beta);
         }
 
         ForwardPhiAseContext<T_Device, T_Executor> m_forwardAseContext;

@@ -11,8 +11,8 @@
 #include <kernels/forward/barycentric.hpp>
 #include <kernels/forward/policyRay.hpp>
 #include <kernels/forward/rayTransition.hpp>
-#include <kernels/importanceSampling.hpp>
-#include <kernels/propagateRay.hpp>
+#include <kernels/forward/rayWalk.hpp>
+#include <kernels/forward/volumeSampling.hpp>
 #include <kernels/reflection.hpp>
 
 #include <cassert>

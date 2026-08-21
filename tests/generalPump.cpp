@@ -630,14 +630,14 @@ TEMPLATE_LIST_TEST_CASE(
 
         auto beta = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.1});
         auto betaNext = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
-        auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-            devBundle.device,
+        alpaka::onHost::transform(
+            queue,
             devBundle.executor,
-            alpaka::Vec{mesh.numberOfCells});
-        queue.enqueue(
-            frameSpec,
-            alpaka::KernelBundle{hase::kernels::AddScaled{1.0e-3}, deviceMesh.toView(), beta, cellRate, betaNext});
-        queue.enqueue(frameSpec, alpaka::KernelBundle{hase::kernels::ClipBeta{}, deviceMesh.toView(), betaNext});
+            betaNext,
+            hase::kernels::AddScaled{1.0e-3},
+            beta,
+            cellRate);
+        alpaka::onHost::transform(queue, devBundle.executor, betaNext, hase::kernels::ClipBeta{}, betaNext);
         return copyDoubleBuffer(queue, betaNext);
     };
 
