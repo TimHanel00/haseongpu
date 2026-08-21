@@ -27,7 +27,7 @@
  */
 
 #pragma once
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 
 #include <filesystem>
 #include <vector>
@@ -50,7 +50,7 @@ namespace hase::utils
      * @return 0
      */
     int writePointsToVtk(
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         std::vector<double> const ase,
         std::filesystem::path const filename,
         unsigned const raysLaunched,
@@ -75,7 +75,7 @@ namespace hase::utils
      * @return 0
      */
     int writePrismToVtk(
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         std::vector<double> const prismData,
         std::filesystem::path const filename,
         unsigned const raysLaunched,

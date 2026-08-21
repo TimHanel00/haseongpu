@@ -13,12 +13,40 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+import numpy as np
 
 from openpmd_backend_matrix import openpmd_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
+from hase_units import units
+from material_library import CrossSectionTable, Material
 
-from pyInclude import PhiASE
+from pyInclude import Domain, GainMedium, OpticalComponent, PhiASE, VolumeTopology
 import pyInclude.simulation as simulation_module
+
+
+@pytest.fixture
+def physicalGainMedium(crossSections):
+    wavelength = float(crossSections.wavelengthsAbsorption[0])
+    topology = VolumeTopology.fromTetrahedra(
+        np.eye(4, 3),
+        [[0, 1, 2, 3]],
+    )
+    material = Material(
+        materialName="test gain material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.8,
+        fluorescenceLifetime=9.5e-4 * units.s,
+        crossSections=CrossSectionTable.monochromatic(
+            wavelength=wavelength * units.m,
+            absorption=crossSections.absorptionAt(wavelength) * units.cm**2,
+            emission=crossSections.emissionAt(wavelength) * units.cm**2,
+        ),
+        active=True,
+        activeIonDensity=2.76e20 / units.cm**3,
+    )
+    return GainMedium(
+        [OpticalComponent(domain=Domain.fromTopology(topology), material=material)]
+    )
 
 class DummyResult:
     phiAse = [1.0]
@@ -51,16 +79,15 @@ def testCiAlpakaRuntimeBackendSelectionAcceptsExactEnvironmentName(monkeypatch):
 
 def testSimulationRunUsesOpenPmdTransportAndStoresResults(
     monkeypatch,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
     phiAseTestConfigPath,
 ):
     captured = {}
 
-    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties, **kwargs):
-        captured["phi_ase"] = phiAse
-        captured["gain_medium"] = gainMedium
-        captured["spectral_properties"] = spectralProperties
+    def fakeRunPhiAse(request, **kwargs):
+        captured["phi_ase"] = request.phiASE
+        captured["gain_medium"] = request.gainMedium
         captured["openpmd_session"] = kwargs.get("openpmdSession")
         return DummyResult()
 
@@ -68,18 +95,26 @@ def testSimulationRunUsesOpenPmdTransportAndStoresResults(
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
-        crossSections=crossSections,
         repetitions=1,
         adaptiveSteps=1,
         parallelMode="single",
         useReflections=False,
         rngSeed=1234,
-    ).run(gainMedium=smallGainMedium)
+    ).run(gainMedium=physicalGainMedium)
 
     assert isinstance(phiAse.getResults(), DummyResult)
     assert captured["phi_ase"] is phiAse
-    assert captured["gain_medium"] is smallGainMedium
-    assert captured["spectral_properties"] is crossSections
+    assert captured["gain_medium"] is physicalGainMedium
+    transportedMaterial = captured["gain_medium"].components[0].material
+    assert transportedMaterial.crossSections.wavelengths.toValue(units.m)[0] == pytest.approx(
+        crossSections.wavelengthsAbsorption[0]
+    )
+    assert transportedMaterial.crossSections.absorption.toValue(units.cm**2)[0] == pytest.approx(
+        crossSections.crossSectionAbsorption[0]
+    )
+    assert transportedMaterial.crossSections.emission.toValue(units.cm**2)[0] == pytest.approx(
+        crossSections.crossSectionEmission[0]
+    )
     assert captured["openpmd_session"] is None
     assert captured["phi_ase"].minRays == 1000
     assert captured["phi_ase"].useReflections is False
@@ -88,7 +123,7 @@ def testSimulationRunUsesOpenPmdTransportAndStoresResults(
 
 def testPhiAseRejectsUnavailableAlpakaBackendBeforeTransport(
     monkeypatch,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
 ):
     monkeypatch.setattr(
@@ -109,10 +144,9 @@ def testPhiAseRejectsUnavailableAlpakaBackendBeforeTransport(
 
     phi_ase = PhiASE(
         backend="Host_Cpu_CpuOmpBlocks",
-        crossSections=crossSections,
     )
     with pytest.raises(RuntimeError, match="Host_Cpu_CpuOmpBlocks") as error:
-        phi_ase.run(gainMedium=smallGainMedium)
+        phi_ase.run(gainMedium=physicalGainMedium)
 
     assert "Host_Cpu_CpuSerial" in str(error.value)
     assert "Host_NumaCpu_CpuSerial" in str(error.value)
@@ -120,7 +154,7 @@ def testPhiAseRejectsUnavailableAlpakaBackendBeforeTransport(
 
 def testPhiAseRejectsUnavailableOpenPmdBackendBeforeTransport(
     monkeypatch,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
 ):
     monkeypatch.setattr(simulation_module.AlpakaBackends, "all", lambda: ["Host_Cpu_CpuSerial"])
@@ -140,10 +174,9 @@ def testPhiAseRejectsUnavailableOpenPmdBackendBeforeTransport(
     phi_ase = PhiASE(
         backend="Host_Cpu_CpuSerial",
         openpmdBackend="hdf5",
-        crossSections=crossSections,
     )
     with pytest.raises(RuntimeError, match="available backends: adios, adios-sst"):
-        phi_ase.run(gainMedium=smallGainMedium)
+        phi_ase.run(gainMedium=physicalGainMedium)
 
 
 def testPhiAseMpiPreflightDoesNotUseLauncherLocalDeviceVisibility(monkeypatch):
@@ -248,7 +281,7 @@ def testPhiAseRejectsRetiredMseThreshold(tmp_path):
 def testPhiAseMpiRunUsesOpenPmdTransportMetadata(
     monkeypatch,
     tmp_path,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
     phiAseTestConfigPath,
 ):
@@ -256,12 +289,11 @@ def testPhiAseMpiRunUsesOpenPmdTransportMetadata(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("HASE_MPIEXEC_EXTRA_ARGS", raising=False)
 
-    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties, **kwargs):
-        captured["nPerNode"] = phiAse.nPerNode
-        captured["numDevices"] = phiAse.numDevices
-        captured["parallelMode"] = phiAse.parallelMode
-        captured["gain_medium"] = gainMedium
-        captured["spectral_properties"] = spectralProperties
+    def fakeRunPhiAse(request, **kwargs):
+        captured["nPerNode"] = request.phiASE.nPerNode
+        captured["numDevices"] = request.phiASE.numDevices
+        captured["parallelMode"] = request.phiASE.parallelMode
+        captured["gain_medium"] = request.gainMedium
         captured["openpmd_session"] = kwargs.get("openpmdSession")
         captured["command_prefix"] = kwargs.get("command_prefix")
         captured["workspace_dir"] = kwargs.get("workspace_dir")
@@ -271,18 +303,17 @@ def testPhiAseMpiRunUsesOpenPmdTransportMetadata(
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
-        crossSections=crossSections,
         parallelMode="mpi",
         numDevices=4,
         nPerNode=2,
-    ).run(gainMedium=smallGainMedium)
+    ).run(gainMedium=physicalGainMedium)
 
     assert isinstance(phiAse.getResults(), DummyResult)
     assert captured["nPerNode"] == 2
     assert captured["numDevices"] == 4
     assert captured["parallelMode"] == "mpi"
-    assert captured["gain_medium"] is smallGainMedium
-    assert captured["spectral_properties"] is crossSections
+    assert captured["gain_medium"] is physicalGainMedium
+    assert captured["gain_medium"].components[0].material.crossSections is not None
     assert captured["openpmd_session"] is None
     assert captured["command_prefix"] == ["mpiexec", "-npernode", "2"]
     assert captured["workspace_dir"] == tmp_path / "IO" / "phiase_mpi"
@@ -331,14 +362,14 @@ def test_phiAseMpiRejectsInvalidRanksPerNode(monkeypatch):
 
 def testPhiAseRunUsesProvidedOpenPmdSession(
     monkeypatch,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
     phiAseTestConfigPath,
 ):
     captured = {}
     openpmdSession = object()
 
-    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties, **kwargs):
+    def fakeRunPhiAse(request, **kwargs):
         captured["openpmdSession"] = kwargs.get("openpmdSession")
         return DummyResult()
 
@@ -346,21 +377,20 @@ def testPhiAseRunUsesProvidedOpenPmdSession(
 
     PhiASE.fromYaml(
         phiAseTestConfigPath,
-        crossSections=crossSections,
-    ).run(gainMedium=smallGainMedium, openpmdSession=openpmdSession)
+    ).run(gainMedium=physicalGainMedium, openpmdSession=openpmdSession)
 
     assert captured["openpmdSession"] is openpmdSession
 
 
 def testPhiAseRunForwardsConfiguredOpenPmdBackend(
     monkeypatch,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
 ):
     captured = {}
     preflight = []
 
-    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties, **kwargs):
+    def fakeRunPhiAse(request, **kwargs):
         captured["transport"] = kwargs.get("transport")
         captured["openpmdSession"] = kwargs.get("openpmdSession")
         return DummyResult()
@@ -375,8 +405,7 @@ def testPhiAseRunForwardsConfiguredOpenPmdBackend(
     PhiASE(
         backend="Host_Cpu_CpuSerial",
         openpmdBackend="hdf5",
-        crossSections=crossSections,
-    ).run(gainMedium=smallGainMedium)
+    ).run(gainMedium=physicalGainMedium)
 
     assert captured == {"transport": "hdf5", "openpmdSession": None}
     assert preflight == ["hdf5"]
@@ -384,7 +413,7 @@ def testPhiAseRunForwardsConfiguredOpenPmdBackend(
 
 def testPhiAsePersistentOpenPmdSessionCanBeOpenedReusedAndClosed(
     monkeypatch,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
     phiAseTestConfigPath,
 ):
@@ -401,7 +430,7 @@ def testPhiAsePersistentOpenPmdSessionCanBeOpenedReusedAndClosed(
     def fakeCloseStream(session):
         events.append(("closeStream", session))
 
-    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties, **kwargs):
+    def fakeRunPhiAse(request, **kwargs):
         events.append(("run", kwargs.get("openpmdSession")))
         return DummyResult()
 
@@ -411,11 +440,10 @@ def testPhiAsePersistentOpenPmdSessionCanBeOpenedReusedAndClosed(
 
     phiAse = PhiASE.fromYaml(
         phiAseTestConfigPath,
-        crossSections=crossSections,
     )
     assert phiAse.openStream(transport="adios-sst") is openpmdSession
-    phiAse.run(gainMedium=smallGainMedium, openpmdSession="persistent")
-    phiAse.run(gainMedium=smallGainMedium, openpmdSession="persistent")
+    phiAse.run(gainMedium=physicalGainMedium, openpmdSession="persistent")
+    phiAse.run(gainMedium=physicalGainMedium, openpmdSession="persistent")
     phiAse.closeStream()
 
     expected_open_kwargs = {"transport": "adios-sst"}
@@ -442,13 +470,13 @@ def testPhiAsePersistentOpenPmdSessionCanBeOpenedReusedAndClosed(
 
 def testPhiAseIntervalOpenPmdSessionUsesOneShotTransport(
     monkeypatch,
-    smallGainMedium,
+    physicalGainMedium,
     crossSections,
     phiAseTestConfigPath,
 ):
     captured = {}
 
-    def fakeRunPhiAse(phiAse, gainMedium, spectralProperties, **kwargs):
+    def fakeRunPhiAse(request, **kwargs):
         captured["openpmdSession"] = kwargs.get("openpmdSession")
         return DummyResult()
 
@@ -456,8 +484,7 @@ def testPhiAseIntervalOpenPmdSessionUsesOneShotTransport(
 
     PhiASE.fromYaml(
         phiAseTestConfigPath,
-        crossSections=crossSections,
-    ).run(gainMedium=smallGainMedium, openpmdSession="interval")
+    ).run(gainMedium=physicalGainMedium, openpmdSession="interval")
 
     assert captured["openpmdSession"] is None
 

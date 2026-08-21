@@ -9,12 +9,13 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
+#include <core/Runtime.hpp>
 #include <core/calcForwardPhiAse.hpp>
 #include <core/calcPhiAseThreaded.hpp>
 #include <core/forwardPhiAseUtilities.hpp>
-#include <core/mesh.hpp>
-#include <core/types.hpp>
+#include <data/TraceData.hpp>
 #include <random/random.hpp>
 
 #if !defined(DISABLE_MPI) && defined(MPI_FOUND)
@@ -38,18 +39,17 @@ namespace hase::core
         template<typename T_Buffer>
         std::vector<typename T_Buffer::value_type> copyToVector(auto const& queue, T_Buffer const& buffer)
         {
-            auto hostBuffer = alpaka::onHost::allocHostLike(buffer);
-            alpaka::onHost::memcpy(queue, hostBuffer, buffer);
-            alpaka::onHost::wait(queue);
-            auto const* data = alpaka::onHost::data(hostBuffer);
-            return {data, data + buffer.getExtents().product()};
+            std::vector<typename T_Buffer::value_type> result(buffer.getExtents().product());
+            auto hybridBuffer = hase::alpakaUtils::getHybridBuffer(result, buffer);
+            hybridBuffer.toHost(queue);
+            return result;
         }
 
         template<typename T_Buffer, typename T>
         void copyVectorToBuffer(auto const& queue, std::vector<T> const& values, T_Buffer& buffer)
         {
-            auto hostView = alpaka::makeView(alpaka::api::host, values.data(), alpaka::Vec{values.size()});
-            alpaka::onHost::memcpy(queue, buffer, hostView);
+            auto hybridBuffer = hase::alpakaUtils::getHybridBuffer(values, buffer);
+            hybridBuffer.toDevice(queue);
         }
     } // namespace detail
 
@@ -66,11 +66,11 @@ namespace hase::core
     };
 
     /** @brief Policy-independent inputs for the adaptive forward simulation loop. */
-    struct ForwardSimulationContext
+    struct ForwardRunInputs
     {
-        ExperimentParameters const& experiment;
-        ComputeParameters const& compute;
-        HostMesh const& hostMesh;
+        AseTraceControls const& experiment;
+        ExecutionPolicy const& compute;
+        hase::data::TraceData const& hostMesh;
         unsigned baseSeed;
         double betaVolumeTotal;
         unsigned batchCount;
@@ -80,7 +80,7 @@ namespace hase::core
     struct ForwardSimulationResult
     {
         ForwardPhiAseRawResult raw;
-        Result convergence;
+        data::PhiAseResult convergence;
         float runtime = 0.0f;
         unsigned adaptiveLaunches = 0u;
         std::vector<unsigned> convergenceRayCounts;
@@ -114,12 +114,12 @@ namespace hase::core
     template<typename T_WorkerPolicy>
     [[nodiscard]] ForwardSimulationResult runForwardSimulation(
         HaseWorker<T_WorkerPolicy>& worker,
-        ForwardSimulationContext const& context)
+        ForwardRunInputs const& context)
     {
         ForwardSimulationResult simulation;
         simulation.raw = makeForwardRawResult(
             context.hostMesh.numberOfCells,
-            context.hostMesh.numberOfMeshPoints,
+            context.hostMesh.numberOfMaterials * context.hostMesh.numberOfMeshPoints,
             context.batchCount);
         simulation.convergenceRayCounts.assign(context.hostMesh.numberOfCells, 0u);
         unsigned const baseSeed = worker.scatter(context.baseSeed);
@@ -156,12 +156,7 @@ namespace hase::core
                 throw std::runtime_error("forward statistical batch accounting mismatch");
 
             ++simulation.adaptiveLaunches;
-            simulation.convergence = worker(
-                FinalizeForwardAse{
-                    simulation.raw,
-                    context.hostMesh.nTot / context.hostMesh.crystalTFluo,
-                    context.experiment.maxSigmaA,
-                    context.experiment.maxSigmaE});
+            simulation.convergence = worker(FinalizeForwardAse{simulation.raw});
             recordAdaptiveRayConvergence(
                 simulation.convergence,
                 targetRayCount,
@@ -177,6 +172,14 @@ namespace hase::core
         return simulation;
     }
 
+    /**
+     * @brief Owns persistent device state for one prepared tracing domain.
+     *
+     * The context keeps geometry and material HybridBuffers resident across
+     * evaluations. A future scheduler may own several contexts and exchange
+     * compact boundary-ray queues between iterations without changing the
+     * domain-local evaluator.
+     */
     template<typename T_Device, typename T_Executor>
     class ForwardPhiAseContext
     {
@@ -184,15 +187,20 @@ namespace hase::core
         ForwardPhiAseContext(
             std::vector<T_Device> devices,
             T_Executor executor,
-            ExperimentParameters const& experiment,
-            HostMesh& hostMesh)
+            AseTraceControls const& experiment,
+            hase::data::TraceData& hostMesh)
             : m_executor(std::move(executor))
         {
             if(devices.empty())
                 throw std::runtime_error("forward ASE context requires at least one device");
             m_meshes.reserve(devices.size());
             for(auto& device : devices)
-                m_meshes.emplace_back(hostMesh.toDevice(device));
+            {
+                m_meshes.emplace_back(hostMesh.makeResident(device));
+                auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+                m_meshes.back().toDevice(queue);
+                alpaka::onHost::wait(queue);
+            }
             m_deviceContexts.reserve(m_meshes.size());
             for(auto const& mesh : m_meshes)
                 m_deviceContexts.emplace_back(
@@ -208,14 +216,14 @@ namespace hase::core
             return m_meshes.front().m_device;
         }
 
-        [[nodiscard]] DeviceMeshContainer<T_Device>& primaryMesh()
+        [[nodiscard]] hase::data::ResidentTrace<T_Device>& primaryMesh()
         {
             return m_meshes.front();
         }
 
-        [[nodiscard]] auto& primaryBetaVolume()
+        [[nodiscard]] auto primaryBetaVolume()
         {
-            return m_meshes.front().betaVolume;
+            return m_meshes.front().betaVolume.toDeviceView();
         }
 
         [[nodiscard]] bool requiresHostBetaVolume() const
@@ -228,7 +236,7 @@ namespace hase::core
             return m_deviceContexts.front()->downloadVolumeDndtAse();
         }
 
-        Result downloadPrimaryResult(
+        data::PhiAseResult downloadPrimaryResult(
             bool const includePhiAse,
             bool const includeStandardError,
             bool const includeRelativeStandardError,
@@ -251,12 +259,28 @@ namespace hase::core
             return m_deviceContexts.front()->volumePhiAse();
         }
 
+        /**
+         * @brief Refresh only material and spectral buffers on every owned device.
+         *
+         * Geometry allocations are deliberately retained. The next evaluate
+         * call rebuilds source-strength prefixes from its current beta buffer.
+         */
+        void refreshMaterials(hase::data::TraceData& hostTrace)
+        {
+            for(auto& resident : m_meshes)
+            {
+                auto queue = resident.m_device.makeQueue(alpaka::queueKind::nonBlocking);
+                resident.refreshMaterials(hostTrace, queue);
+                alpaka::onHost::wait(queue);
+            }
+        }
+
         ForwardPhiAseEvaluation evaluate(
-            ExperimentParameters& experiment,
-            ComputeParameters& compute,
-            HostMesh& hostMesh,
+            AseTraceControls& experiment,
+            ExecutionPolicy& compute,
+            hase::data::TraceData& hostMesh,
             auto const& betaVolume,
-            Result& result,
+            data::PhiAseResult& result,
             bool const allowDeviceResident = true)
         {
             bool const mpiMode = compute.parallelMode == ParallelMode::MPI;
@@ -281,7 +305,7 @@ namespace hase::core
                 throw std::runtime_error("Only forward volume propagation is supported by the openPMD backend.");
 
             unsigned seed = compute.rngSeed;
-            if(seed == ComputeParameters::unspecifiedRngSeed)
+            if(seed == ExecutionPolicy::unspecifiedRngSeed)
             {
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
                 int rank = 0;
@@ -292,8 +316,7 @@ namespace hase::core
                 seed = random::SeedGenerator::get().getSeed();
 #endif
             }
-            ForwardSimulationContext
-                simulationContext{experiment, compute, hostMesh, seed, m_betaVolumeTotal, batchCount};
+            ForwardRunInputs simulationContext{experiment, compute, hostMesh, seed, m_betaVolumeTotal, batchCount};
             ForwardSimulationResult simulation;
             RuntimeTopology topology;
             unsigned usedDevices = 0u;
@@ -315,7 +338,7 @@ namespace hase::core
                             try
                             {
                                 auto mesh
-                                    = workerIndex == 0u ? primaryMeshView(betaVolume) : m_meshes[workerIndex].toView();
+                                    = workerIndex == 0u ? primaryMeshView(betaVolume) : m_meshes[workerIndex].view();
                                 HaseWorker worker{ThreadOwnedDevices{
                                     workerIndex,
                                     threadWorkerCount,
@@ -357,12 +380,12 @@ namespace hase::core
                 residentDeviceIndex = deviceIndex;
                 HaseWorker worker{MPIRank{
                     MPI_COMM_WORLD,
-                    deviceIndex == 0u ? primaryMeshView(betaVolume) : m_meshes[deviceIndex].toView(),
+                    deviceIndex == 0u ? primaryMeshView(betaVolume) : m_meshes[deviceIndex].view(),
                     *m_deviceContexts[deviceIndex],
                     experiment,
                     m_betaVolumeTotal,
                     hostMesh.numberOfCells,
-                    hostMesh.numberOfMeshPoints,
+                    hostMesh.numberOfMaterials * hostMesh.numberOfMeshPoints,
                     batchCount}};
                 simulation = runForwardSimulation(worker, simulationContext);
                 topology = mpiWorkerTopology();
@@ -380,10 +403,7 @@ namespace hase::core
                 m_deviceContexts.front()->uploadAndFinalize(
                     primaryMeshView(betaVolume),
                     simulation.raw,
-                    m_betaVolumeTotal,
-                    hostMesh.nTot / hostMesh.crystalTFluo,
-                    experiment.maxSigmaA,
-                    experiment.maxSigmaE);
+                    m_betaVolumeTotal);
             }
 
             return ForwardPhiAseEvaluation{
@@ -397,43 +417,47 @@ namespace hase::core
         }
 
     private:
-        [[nodiscard]] DeviceMeshView primaryMeshView(auto const& betaVolume) const
+        [[nodiscard]] hase::data::TraceView primaryMeshView(auto const& betaVolume) const
         {
-            auto mesh = m_meshes.front().toView();
-            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getMdSpan().getExtents().x());
+            auto mesh = m_meshes.front().view();
+            mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getExtents().x());
             return mesh;
         }
 
         void refreshDynamicMeshes(
             auto const& betaVolume,
-            HostMesh& hostMesh,
+            hase::data::TraceData& hostMesh,
             bool const requireHostValues,
             bool const synchronizePrimaryMesh)
         {
-            m_betaVolumeTotal = m_deviceContexts.front()->rebuildBetaVolumePrefix(m_meshes.front(), betaVolume);
+            m_betaVolumeTotal = m_deviceContexts.front()->rebuildSourceStrengthPrefix(m_meshes.front(), betaVolume);
             if(m_meshes.size() == 1u && !requireHostValues)
                 return;
 
             auto queue = m_meshes.front().m_device.makeQueue(alpaka::queueKind::nonBlocking);
-            hostMesh.setBetaVolume(detail::copyToVector(queue, betaVolume));
+            auto synchronizedBetaVolume = hase::alpakaUtils::getHybridBuffer(hostMesh.betaVolume, betaVolume);
+            synchronizedBetaVolume.toHost(queue);
+            hostMesh.rebuildSourceStrengthPrefix();
             if(synchronizePrimaryMesh)
             {
-                detail::copyVectorToBuffer(queue, hostMesh.betaVolume, m_meshes.front().betaVolume);
+                m_meshes.front().betaVolume.toDevice(queue);
                 alpaka::onHost::wait(queue);
-                m_deviceContexts.front()->rebuildBetaVolumePrefix(m_meshes.front(), m_meshes.front().betaVolume);
+                m_deviceContexts.front()->rebuildSourceStrengthPrefix(
+                    m_meshes.front(),
+                    m_meshes.front().betaVolume.toDeviceView());
             }
             for(std::size_t index = 1u; index < m_meshes.size(); ++index)
             {
                 auto& mesh = m_meshes[index];
                 auto secondaryQueue = mesh.m_device.makeQueue(alpaka::queueKind::nonBlocking);
-                detail::copyVectorToBuffer(secondaryQueue, hostMesh.betaVolume, mesh.betaVolume);
+                mesh.betaVolume.toDevice(secondaryQueue);
                 alpaka::onHost::wait(secondaryQueue);
-                m_deviceContexts[index]->rebuildBetaVolumePrefix(mesh, mesh.betaVolume);
+                m_deviceContexts[index]->rebuildSourceStrengthPrefix(mesh, mesh.betaVolume.toDeviceView());
             }
         }
 
         T_Executor m_executor;
-        std::vector<DeviceMeshContainer<T_Device>> m_meshes;
+        std::vector<hase::data::ResidentTrace<T_Device>> m_meshes;
         std::vector<std::unique_ptr<ForwardPhiAseDeviceContext<T_Device, T_Executor>>> m_deviceContexts;
         double m_betaVolumeTotal = 0.0;
     };

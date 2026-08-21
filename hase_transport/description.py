@@ -15,12 +15,18 @@ def _read(owner, getter: Getter):
 
 @dataclass(frozen=True)
 class FieldDescription:
-    """One canonical value owned by a frontend primitive."""
+    """One canonical value owned by a frontend primitive.
+
+    ``controlField`` optionally gates a dynamic value behind an explicitly
+    selected synchronized control field. Static graph composition remains
+    independent of runtime control flow.
+    """
 
     name: str
     getter: Getter
     axes: tuple[str, ...] = ()
     dynamic: bool = False
+    controlField: str | None = None
     optional: bool = False
     encoding: str = "native"
 
@@ -56,14 +62,18 @@ def field(
     *,
     axes: Iterable[str] = (),
     dynamic: bool = False,
+    controlField: str | None = None,
     optional: bool = False,
     encoding: str = "native",
 ) -> FieldDescription:
+    if controlField is not None and not dynamic:
+        raise ValueError("a control-gated transport field must be dynamic")
     return FieldDescription(
         name=name,
         getter=name if getter is None else getter,
         axes=tuple(axes),
         dynamic=dynamic,
+        controlField=controlField,
         optional=optional,
         encoding=encoding,
     )

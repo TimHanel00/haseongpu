@@ -45,3 +45,20 @@ def test_calcGainFromStateRequiresNTot(smallTopology, crossSections):
 
     with pytest.raises(ValueError, match="requires nTot"):
         calcGainFromState(state, crossSections)
+
+
+def test_calcGainFromStateReadsMaterialOwnedCrossSections(smallTopology):
+    from hase_units import units
+    from material_library import CrossSectionTable
+
+    beta = np.full((smallTopology.numberOfTriangles, smallTopology.levels - 1), 0.25)
+    state = _state(smallTopology, beta)
+    table = CrossSectionTable.monochromatic(
+        wavelength=1030.0 * units.nm,
+        absorption=1.0e-21 * units.cm**2,
+        emission=2.0e-20 * units.cm**2,
+    )
+
+    gain = calcGainFromState(state, table, nTot=2.0)
+
+    np.testing.assert_allclose(gain, 2.0 * (0.25 * (2.1e-20) - 1.0e-21))

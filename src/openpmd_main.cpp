@@ -1,4 +1,3 @@
-#include <backend/legacy/LegacyBackendConverter.hpp>
 #include <core/simulation.hpp>
 #include <core/timeSteppedSimulation.hpp>
 #include <openpmd/OpenPmdOutputWriter.hpp>
@@ -93,16 +92,9 @@ int main(int argc, char** argv)
         {
             while(auto iteration = input.next())
             {
-                auto legacyContext = hase::backend::legacy::LegacyBackendConverter::convert(iteration->simulation);
-                int const status = hase::core::startSimulation<false>(
-                    legacyContext.experiment,
-                    legacyContext.compute,
-                    legacyContext.result,
-                    legacyContext.mesh);
-                if(status != 0)
-                    throw std::runtime_error("simulation failed with return code " + std::to_string(status));
+                auto result = hase::core::runPhiAse(iteration->simulation);
                 if(output)
-                    output->writeResult(iteration->index, legacyContext.result);
+                    output->writeResult(iteration->index, result);
             }
         }
         else
@@ -110,22 +102,16 @@ int main(int argc, char** argv)
             auto initial = input.next();
             if(!initial)
                 throw std::runtime_error("No simulation iteration was available in the openPMD input stream.");
-            auto converted = hase::backend::legacy::LegacyBackendConverter::convertWithUpdates(initial->simulation);
-            auto& legacyContext = converted.context;
-
             hase::openpmd::AsyncSimulationSnapshotWriter snapshots{
                 output != nullptr,
-                [&](hase::core::SimulationSnapshot const& snapshot)
+                [&](hase::data::SimulationSnapshot const& snapshot)
                 { output->writeSnapshot(snapshot.step - 1u, snapshot); },
-                legacyContext.compute.parallelMode != hase::core::ParallelMode::MPI};
+                initial->simulation.phiAse->parallelMode != "mpi"};
 
-            int const status = hase::core::startTimeSteppedSimulation(
-                legacyContext.experiment,
-                legacyContext.compute,
-                legacyContext.run,
-                legacyContext.mesh,
-                [&](hase::core::SimulationSnapshot const& snapshot) { snapshots.enqueue(snapshot); },
-                [&](unsigned completedStep)
+            int const status = hase::core::runSimulation(
+                initial->simulation,
+                [&](hase::data::SimulationSnapshot const& snapshot) { snapshots.enqueue(snapshot); },
+                [&](unsigned completedStep, hase::data::Simulation& simulation)
                 {
                     auto update = input.next();
                     if(!update || update->index != completedStep)
@@ -133,7 +119,7 @@ int main(int argc, char** argv)
                             "synchronized-debug expected transport iteration " + std::to_string(completedStep));
                     if(!update->simulation.excitationState)
                         throw std::runtime_error("dynamic transport update has no excitation state");
-                    return converted.excitation.values(*update->simulation.excitationState);
+                    simulation = std::move(update->simulation);
                 });
             snapshots.finish();
             if(status != 0)

@@ -11,8 +11,9 @@ import tempfile
 import numpy as np
 import pytest
 
-from HASEonGPU import PhiASE, SpectralDecomposition, VolumeTopology
-from pyInclude.geometry.core import GainMedium
+from HASEonGPU import Domain, GainMedium, OpticalComponent, PhiASE, VolumeTopology
+from hase_units import units
+from material_library import CrossSectionTable, Material
 from openpmd_backend_matrix import openpmd_runtime_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
 
@@ -197,21 +198,23 @@ def testForwardSphereCenterVolumeMatchesAnalyticalSolution(radius, gain, openpmd
     assert topology.numberOfCells >= 1_000
 
     centerVolume = centeredVolumeIndex(topology, radius)
-    medium = GainMedium(topology=topology)
-    medium.withPhysicalProperties(
-        betaVolume=np.full(topology.numberOfCells, beta, dtype=np.float64),
-        claddingCellTypes=np.zeros(topology.numberOfCells, dtype=np.uint32),
-        nTot=nTot,
-        crystalTFluo=flourescenceLifetime,
+    material = Material(
+        materialName="analytical sphere material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.0,
+        fluorescenceLifetime=flourescenceLifetime * units.s,
+        crossSections=CrossSectionTable.monochromatic(
+            wavelength=np.float64(1030e-9) * units.m,
+            absorption=sigmaA * units.cm**2,
+            emission=sigmaE * units.cm**2,
+        ),
+        active=True,
+        activeIonDensity=nTot / units.cm**3,
     )
-    crossSections = SpectralDecomposition.monochromatic(
-        wavelength=np.float64(1030e-9),
-        crossSectionAbsorption=sigmaA,
-        crossSectionEmission=sigmaE,
-    )
+    component = OpticalComponent(domain=Domain.fromTopology(topology), material=material)
+    medium = GainMedium([component])
     rayCount = analyticalSphereRayCount()
     phiAse = PhiASE(
-        crossSections=crossSections,
         maxRays=rayCount,
         forwardRayCount=rayCount,
         repetitions=1,
@@ -226,7 +229,7 @@ def testForwardSphereCenterVolumeMatchesAnalyticalSolution(radius, gain, openpmd
         rngSeed=1234,
     )
 
-    phiAse.run(gainMedium=medium)
+    phiAse.run(gainMedium=medium, initialExcitation=beta)
 
     result = phiAse.getResults()
     phiAseValues = np.asarray(result.phiAse, dtype=np.float64).reshape(-1)

@@ -35,7 +35,7 @@ The data generator seed is the serial implementation seed:
 ```
 
 In the old source this is `hase::internal::rng{5489u}` in
-`src/core/SerialVersion.cpp`.  The old test also set
+the former serial implementation.  The old test also set
 `hase::random::SeedGenerator` to `1372085211`, but that is secondary for this
 fixture because the recorded data comes from `BaseVersionSerial`.
 

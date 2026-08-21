@@ -21,7 +21,7 @@
 
 
 #include <core/logging.hpp>
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 #include <utils/writeToVtk.hpp>
 
 #include <filesystem>
@@ -39,7 +39,7 @@ namespace hase::utils
      * @param
      */
     int writeToVtk(
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         std::vector<double> const data,
         std::filesystem::path filename,
         unsigned const raysLaunched,
@@ -69,14 +69,14 @@ namespace hase::utils
                     << mesh.points.at(point + 2u * mesh.numberOfPoints) << std::endl;
         }
 
-        vtkFile << "CELLS " << mesh.numberOfCells << " " << mesh.numberOfCells * (hase::core::tet4VertexCount + 1u)
+        vtkFile << "CELLS " << mesh.numberOfCells << " " << mesh.numberOfCells * (hase::data::tet4VertexCount + 1u)
                 << std::endl;
         for(unsigned cell = 0u; cell < mesh.numberOfCells; ++cell)
         {
-            vtkFile << hase::core::tet4VertexCount;
-            for(unsigned localVertex = 0u; localVertex < hase::core::tet4VertexCount; ++localVertex)
+            vtkFile << hase::data::tet4VertexCount;
+            for(unsigned localVertex = 0u; localVertex < hase::data::tet4VertexCount; ++localVertex)
             {
-                vtkFile << " " << mesh.cellPointIndices.at(cell * hase::core::tet4VertexCount + localVertex);
+                vtkFile << " " << mesh.cellPointIndices.at(cell * hase::data::tet4VertexCount + localVertex);
             }
             vtkFile << std::endl;
         }
@@ -100,7 +100,7 @@ namespace hase::utils
     }
 
     int writePrismToVtk(
-        hase::core::HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         std::vector<double> const prismData,
         std::filesystem::path const filename,
         unsigned const raysLaunched,
@@ -122,7 +122,7 @@ namespace hase::utils
     }
 
     int writePointsToVtk(
-        hase::core::HostMesh const& hostMesh,
+        hase::data::TraceData const& hostMesh,
         std::vector<double> const prismData,
         std::filesystem::path const filename,
         unsigned const raysLaunched,

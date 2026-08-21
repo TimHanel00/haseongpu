@@ -128,10 +128,9 @@ Cells belonging to a passive optical component instead use
 
    g_j = -\alpha_{\mathrm{bulk}}.
 
-The frontend obtains this coefficient from the passive material's
-``bulkAttenuation``, then converts it to the legacy backend field
-``claddingAbsorption``. The material
-coefficient is constant and wavelength-independent in the current backend; it
+The tracing kernels read this coefficient directly from the receiving cell's
+material-owned ``bulkAttenuation``. The material coefficient is constant and
+wavelength-independent in the current model; it
 is distinct from the active-ion absorption cross section
 :math:`\sigma_a(\lambda)`. An omitted coefficient contributes
 :math:`\alpha_{\mathrm{bulk}}=0`; surface reflection remains a separate

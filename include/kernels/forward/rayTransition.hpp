@@ -33,7 +33,7 @@ namespace hase::kernels::forward
     };
 
     [[nodiscard]] inline ALPAKA_FN_ACC bool isNearTet4Face(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         hase::core::Point const point)
     {
@@ -49,7 +49,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC int immediateExitFace(
-        core::DeviceMeshView const& mesh,
+        data::TraceView const& mesh,
         unsigned const tet,
         core::Point const point,
         core::Point const direction,
@@ -72,7 +72,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition recoverFaceTransition(
-        core::DeviceMeshView const& mesh,
+        data::TraceView const& mesh,
         unsigned cell,
         int exitFace,
         core::Point const point,
@@ -154,7 +154,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition transitionAcrossIntersection(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const cell,
         Tet4FaceIntersection const intersection,
         hase::core::Point const point,

@@ -172,7 +172,7 @@ error without changing the integral bias:
 | fixed 4M | `7.215963679037562e21` | `-13.6152%` | `0.03540` | `4,000,000` |
 
 The systematic error was an implementation defect, not a changed geometric
-domain. `HostMesh` built `betaVolumePrefix`, the source-sampling CDF, when its
+domain. `TraceData` built `sourceStrengthPrefix`, the source-sampling CDF, when its
 initial `betaVolume` was all zero. The compiled time-step runner updated
 `betaVolume` after pumping but did not rebuild the CDF. Binary search over the
 stale all-zero prefix therefore selected the final Tet for every source ray;

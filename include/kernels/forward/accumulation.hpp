@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/barycentric.hpp>
 #include <kernels/forward/policyRay.hpp>
 #include <kernels/forward/rayTransition.hpp>
@@ -86,10 +86,8 @@ namespace hase::kernels::forward
         , ray::SrmPositionStorage<typename std::remove_cvref_t<ALPAKA_TYPEOF(ray::aseSrmPolicy)>::PositionPolicy>
     {
         double weight = 0.0;
-        double sigmaAbsorption = 0.0;
-        double sigmaEmission = 0.0;
+        double wavelength = 0.0;
         double accumulatedGain = 1.0;
-        unsigned sigmaIndex = 0u;
         unsigned rseBatch = 0u;
     };
 
@@ -116,21 +114,13 @@ namespace hase::kernels::forward
         TCellDroppedRays cellDroppedRays;
     };
 
-    template<alpaka::concepts::IMdSpan TSigmaA, alpaka::concepts::IMdSpan TSigmaE>
-    struct ForwardSpectrumSpans
-    {
-        TSigmaA sigmaA;
-        TSigmaE sigmaE;
-        unsigned lambdaResolution;
-    };
-
     template<
         alpaka::concepts::IMdSpan TCounts,
         alpaka::concepts::IMdSpan TDirX,
         alpaka::concepts::IMdSpan TDirY,
         alpaka::concepts::IMdSpan TDirZ,
         alpaka::concepts::IMdSpan TWeights,
-        alpaka::concepts::IMdSpan TSigmaIndices,
+        alpaka::concepts::IMdSpan TWavelengths,
         alpaka::concepts::IMdSpan TFaceWeights>
     struct SurfaceReservoirSpans
     {
@@ -139,7 +129,7 @@ namespace hase::kernels::forward
         TDirY dirY;
         TDirZ dirZ;
         TWeights weights;
-        TSigmaIndices sigmaIndices;
+        TWavelengths wavelengths;
         TFaceWeights faceWeights;
         unsigned slotsPerFace;
     };
@@ -159,41 +149,21 @@ namespace hase::kernels::forward
 
 namespace alpaka::onHost
 {
-    template<alpaka::concepts::IMdSpan TSigmaA, alpaka::concepts::IMdSpan TSigmaE>
-    struct MakeAccessibleOnAcc::Op<hase::kernels::forward::ForwardSpectrumSpans<TSigmaA, TSigmaE>>
-    {
-        auto operator()(hase::kernels::forward::ForwardSpectrumSpans<TSigmaA, TSigmaE>& spans) const
-        {
-            return hase::kernels::forward::ForwardSpectrumSpans{
-                makeAccessibleOnAcc(spans.sigmaA),
-                makeAccessibleOnAcc(spans.sigmaE),
-                spans.lambdaResolution};
-        }
-
-        auto operator()(hase::kernels::forward::ForwardSpectrumSpans<TSigmaA, TSigmaE> const& spans) const
-        {
-            return hase::kernels::forward::ForwardSpectrumSpans{
-                makeAccessibleOnAcc(spans.sigmaA),
-                makeAccessibleOnAcc(spans.sigmaE),
-                spans.lambdaResolution};
-        }
-    };
-
     template<
         alpaka::concepts::IMdSpan TCounts,
         alpaka::concepts::IMdSpan TDirX,
         alpaka::concepts::IMdSpan TDirY,
         alpaka::concepts::IMdSpan TDirZ,
         alpaka::concepts::IMdSpan TWeights,
-        alpaka::concepts::IMdSpan TSigmaIndices,
+        alpaka::concepts::IMdSpan TWavelengths,
         alpaka::concepts::IMdSpan TFaceWeights>
     struct MakeAccessibleOnAcc::Op<
         hase::kernels::forward::
-            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights>>
+            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TWavelengths, TFaceWeights>>
     {
-        auto operator()(hase::kernels::forward::
-                            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights>&
-                                spans) const
+        auto operator()(
+            hase::kernels::forward::
+                SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TWavelengths, TFaceWeights>& spans) const
         {
             return hase::kernels::forward::SurfaceReservoirSpans{
                 makeAccessibleOnAcc(spans.counts),
@@ -201,15 +171,15 @@ namespace alpaka::onHost
                 makeAccessibleOnAcc(spans.dirY),
                 makeAccessibleOnAcc(spans.dirZ),
                 makeAccessibleOnAcc(spans.weights),
-                makeAccessibleOnAcc(spans.sigmaIndices),
+                makeAccessibleOnAcc(spans.wavelengths),
                 makeAccessibleOnAcc(spans.faceWeights),
                 spans.slotsPerFace};
         }
 
         auto operator()(
             hase::kernels::forward::
-                SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights> const&
-                    spans) const
+                SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TWavelengths, TFaceWeights> const& spans)
+            const
         {
             return hase::kernels::forward::SurfaceReservoirSpans{
                 makeAccessibleOnAcc(spans.counts),
@@ -217,7 +187,7 @@ namespace alpaka::onHost
                 makeAccessibleOnAcc(spans.dirY),
                 makeAccessibleOnAcc(spans.dirZ),
                 makeAccessibleOnAcc(spans.weights),
-                makeAccessibleOnAcc(spans.sigmaIndices),
+                makeAccessibleOnAcc(spans.wavelengths),
                 makeAccessibleOnAcc(spans.faceWeights),
                 spans.slotsPerFace};
         }
@@ -254,29 +224,22 @@ namespace alpaka::onHost
 
 namespace alpaka::trait
 {
-    template<alpaka::concepts::IMdSpan TSigmaA, alpaka::concepts::IMdSpan TSigmaE>
-    struct IsKernelArgumentTriviallyCopyable<hase::kernels::forward::ForwardSpectrumSpans<TSigmaA, TSigmaE>>
-        : std::bool_constant<
-              IsKernelArgumentTriviallyCopyable<TSigmaA>::value && IsKernelArgumentTriviallyCopyable<TSigmaE>::value>
-    {
-    };
-
     template<
         alpaka::concepts::IMdSpan TCounts,
         alpaka::concepts::IMdSpan TDirX,
         alpaka::concepts::IMdSpan TDirY,
         alpaka::concepts::IMdSpan TDirZ,
         alpaka::concepts::IMdSpan TWeights,
-        alpaka::concepts::IMdSpan TSigmaIndices,
+        alpaka::concepts::IMdSpan TWavelengths,
         alpaka::concepts::IMdSpan TFaceWeights>
     struct IsKernelArgumentTriviallyCopyable<
         hase::kernels::forward::
-            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TSigmaIndices, TFaceWeights>>
+            SurfaceReservoirSpans<TCounts, TDirX, TDirY, TDirZ, TWeights, TWavelengths, TFaceWeights>>
         : std::bool_constant<
               IsKernelArgumentTriviallyCopyable<TCounts>::value && IsKernelArgumentTriviallyCopyable<TDirX>::value
               && IsKernelArgumentTriviallyCopyable<TDirY>::value && IsKernelArgumentTriviallyCopyable<TDirZ>::value
               && IsKernelArgumentTriviallyCopyable<TWeights>::value
-              && IsKernelArgumentTriviallyCopyable<TSigmaIndices>::value
+              && IsKernelArgumentTriviallyCopyable<TWavelengths>::value
               && IsKernelArgumentTriviallyCopyable<TFaceWeights>::value>
     {
     };
@@ -308,20 +271,14 @@ namespace hase::kernels::forward
 
         ALPAKA_FN_ACC bool operator()(
             auto const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             auto& rayState,
             unsigned const tet,
             Tet4FaceIntersection const intersection)
         {
-            double const segmentGain
-                = localSegmentGain(mesh, tet, intersection.length, rayState.sigmaAbsorption, rayState.sigmaEmission);
+            double const segmentGain = localSegmentGain(mesh, tet, intersection.length, rayState.wavelength);
             double contribution = rayState.weight * rayState.accumulatedGain;
-            contribution *= localSegmentTrackLengthIntegral(
-                mesh,
-                tet,
-                intersection.length,
-                rayState.sigmaAbsorption,
-                rayState.sigmaEmission);
+            contribution *= localSegmentTrackLengthIntegral(mesh, tet, intersection.length, rayState.wavelength);
             if(alpaka::math::isfinite(contribution))
             {
                 alpaka::onAcc::atomicAdd(acc, &accumulation.cellRayVisits[tet], 1u);
@@ -331,13 +288,13 @@ namespace hase::kernels::forward
                     rayState.position,
                     rayState.direction,
                     intersection.length);
-                unsigned const materialVertexOffset
-                    = mesh.getCellType(tet) == mesh.claddingNumber ? mesh.numberOfMeshPoints : 0u;
-                for(unsigned localVertex = 0u; localVertex < hase::core::tet4VertexCount; ++localVertex)
+                unsigned const materialVertexOffset = mesh.getMaterialId(tet) * mesh.numberOfMeshPoints;
+                for(unsigned localVertex = 0u; localVertex < hase::data::tet4VertexCount; ++localVertex)
                 {
                     unsigned const materialVertex
                         = materialVertexOffset + mesh.cellPointIndices[tet * mesh.numberOfCellVertices + localVertex];
-                    unsigned const vertex = rayState.rseBatch * (2u * mesh.numberOfMeshPoints) + materialVertex;
+                    unsigned const vertex
+                        = rayState.rseBatch * (mesh.numberOfMaterials * mesh.numberOfMeshPoints) + materialVertex;
                     double const weight = weights[localVertex];
                     alpaka::onAcc::atomicAdd(acc, &accumulation.vertexBatchScoreSum[vertex], contribution * weight);
                 }
@@ -370,12 +327,11 @@ namespace hase::kernels::forward
     {
         ALPAKA_FN_HOST_ACC void operator()(
             auto const& acc,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             unsigned const forwardRayCount,
             unsigned const batch,
-            double const betaVolumeTotal,
+            double const sourceStrengthTotal,
             auto accumulation,
-            auto spectrum,
             unsigned const rngSeed) const
         {
             for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
@@ -387,23 +343,25 @@ namespace hase::kernels::forward
                 unsigned const batchRayCount = forwardRayCount;
                 unsigned const batchSeed = rseBatchSeed(rngSeed, batch);
                 auto rndEngine = alpaka::rand::engine::Philox4x32x10{batchSeed, rayHistoryId(0u, batchRayIndex)};
-                unsigned const tet = sampleStratifiedVolumeByBetaVolume(
+                unsigned const tet = sampleStratifiedVolumeBySourceStrength(
                     mesh,
-                    betaVolumeTotal,
+                    sourceStrengthTotal,
                     batchRayIndex,
                     batchRayCount,
                     rseBatchSourceStratificationOffset(rngSeed, batch),
                     rndEngine);
                 // Beta-volume sampling carries its importance factor in the
                 // source probability, so the compensating weight is one.
-                double const sourceWeight = betaVolumeTotal > 0.0 ? 1.0 : 0.0;
+                double const sourceWeight = sourceStrengthTotal > 0.0 ? 1.0 : 0.0;
                 hase::core::Point origin = samplePointInVolume(mesh, tet, rndEngine);
                 hase::core::Point const direction = sampleIsotropicDirection(rndEngine);
-                unsigned const sigmaIndex = stratifiedSpectrumIndex(
-                    spectrum.lambdaResolution,
+                unsigned const material = mesh.getMaterialId(tet);
+                unsigned const spectrumSize = mesh.crossSectionCount(material);
+                unsigned const spectrumIndex = stratifiedSpectrumIndex(
+                    spectrumSize,
                     batchRayIndex,
                     batchRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrum.lambdaResolution));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
                 walkVolumeSeededForwardRay(
                     acc,
                     mesh,
@@ -411,8 +369,7 @@ namespace hase::kernels::forward
                     origin,
                     direction,
                     sourceWeight,
-                    spectrum.sigmaA[sigmaIndex],
-                    spectrum.sigmaE[sigmaIndex],
+                    spectrumSize == 0u ? 0.0 : mesh.emissionWavelength(material, spectrumIndex),
                     batch,
                     accumulation);
             }
@@ -420,13 +377,12 @@ namespace hase::kernels::forward
 
         ALPAKA_FN_HOST_ACC void walkVolumeSeededForwardRay(
             auto const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             unsigned tet,
             hase::core::Point origin,
             hase::core::Point const direction,
             double const sourceWeight,
-            double const sigmaAbsorption,
-            double const sigmaEmission,
+            double const wavelength,
             unsigned const rseBatch,
             auto accumulation) const
         {
@@ -437,8 +393,7 @@ namespace hase::kernels::forward
             rayState.cell = tet;
             rayState.forbiddenFace = -1;
             rayState.weight = sourceWeight;
-            rayState.sigmaAbsorption = sigmaAbsorption;
-            rayState.sigmaEmission = sigmaEmission;
+            rayState.wavelength = wavelength;
             rayState.rseBatch = rseBatch;
             auto const walkResult = ray::walk(
                 acc,
@@ -456,12 +411,12 @@ namespace hase::kernels::forward
     {
         ALPAKA_FN_HOST_ACC void depositReflection(
             auto const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             unsigned const tet,
             unsigned const localFace,
             hase::core::Point const direction,
             double const incidentWeight,
-            unsigned const sigmaIndex,
+            double const wavelength,
             auto reservoir,
             auto& rndEngine) const
         {
@@ -502,7 +457,7 @@ namespace hase::kernels::forward
             reservoir.dirY[index] = reflected.y;
             reservoir.dirZ[index] = reflected.z;
             reservoir.weights[index] = reflectedWeight;
-            reservoir.sigmaIndices[index] = sigmaIndex;
+            reservoir.wavelengths[index] = wavelength;
         }
 
         template<typename T_Reservoir, typename T_Rng>
@@ -519,7 +474,7 @@ namespace hase::kernels::forward
 
             ALPAKA_FN_ACC ray::BoundaryResult operator()(
                 auto const& acc,
-                hase::core::DeviceMeshView const& mesh,
+                hase::data::TraceView const& mesh,
                 auto& rayState,
                 unsigned const tet,
                 unsigned const localFace)
@@ -531,7 +486,7 @@ namespace hase::kernels::forward
                     localFace,
                     rayState.direction,
                     rayState.weight * rayState.accumulatedGain,
-                    rayState.sigmaIndex,
+                    rayState.wavelength,
                     reservoir,
                     rng);
                 return ray::BoundaryResult::stop;
@@ -540,15 +495,13 @@ namespace hase::kernels::forward
 
         ALPAKA_FN_HOST_ACC void walkForwardRay(
             auto const& acc,
-            hase::core::DeviceMeshView const& mesh,
+            hase::data::TraceView const& mesh,
             unsigned tet,
             hase::core::Point origin,
             hase::core::Point const direction,
             int const initialForbiddenFace,
             double const sourceWeight,
-            double const sigmaAbsorption,
-            double const sigmaEmission,
-            unsigned const sigmaIndex,
+            double const wavelength,
             unsigned const rseBatch,
             auto accumulation,
             auto reservoir,
@@ -561,9 +514,7 @@ namespace hase::kernels::forward
             rayState.cell = tet;
             rayState.forbiddenFace = initialForbiddenFace;
             rayState.weight = sourceWeight;
-            rayState.sigmaAbsorption = sigmaAbsorption;
-            rayState.sigmaEmission = sigmaEmission;
-            rayState.sigmaIndex = sigmaIndex;
+            rayState.wavelength = wavelength;
             rayState.rseBatch = rseBatch;
             auto const walkResult = ray::walk(
                 acc,
@@ -580,13 +531,12 @@ namespace hase::kernels::forward
 
         ALPAKA_FN_HOST_ACC void operator()(
             auto const& acc,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             unsigned const forwardRayCount,
             unsigned const batch,
-            double const betaVolumeTotal,
+            double const sourceStrengthTotal,
             auto accumulation,
             auto reservoir,
-            auto spectrum,
             unsigned const rngSeed) const
         {
             for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
@@ -598,21 +548,23 @@ namespace hase::kernels::forward
                 unsigned const batchRayCount = forwardRayCount;
                 unsigned const batchSeed = rseBatchSeed(rngSeed, batch);
                 auto rndEngine = alpaka::rand::engine::Philox4x32x10{batchSeed, rayHistoryId(0u, batchRayIndex)};
-                unsigned const tet = sampleStratifiedVolumeByBetaVolume(
+                unsigned const tet = sampleStratifiedVolumeBySourceStrength(
                     mesh,
-                    betaVolumeTotal,
+                    sourceStrengthTotal,
                     batchRayIndex,
                     batchRayCount,
                     rseBatchSourceStratificationOffset(rngSeed, batch),
                     rndEngine);
-                double const sourceWeight = betaVolumeTotal > 0.0 ? 1.0 : 0.0;
+                double const sourceWeight = sourceStrengthTotal > 0.0 ? 1.0 : 0.0;
                 hase::core::Point origin = samplePointInVolume(mesh, tet, rndEngine);
                 hase::core::Point const direction = sampleIsotropicDirection(rndEngine);
-                unsigned const sampledSigmaIndex = stratifiedSpectrumIndex(
-                    spectrum.lambdaResolution,
+                unsigned const material = mesh.getMaterialId(tet);
+                unsigned const spectrumSize = mesh.crossSectionCount(material);
+                unsigned const spectrumIndex = stratifiedSpectrumIndex(
+                    spectrumSize,
                     batchRayIndex,
                     batchRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrum.lambdaResolution));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
                 walkForwardRay(
                     acc,
                     mesh,
@@ -621,9 +573,7 @@ namespace hase::kernels::forward
                     direction,
                     -1,
                     sourceWeight,
-                    spectrum.sigmaA[sampledSigmaIndex],
-                    spectrum.sigmaE[sampledSigmaIndex],
-                    sampledSigmaIndex,
+                    spectrumSize == 0u ? 0.0 : mesh.emissionWavelength(material, spectrumIndex),
                     batch,
                     accumulation,
                     reservoir,
@@ -715,7 +665,7 @@ namespace hase::kernels::forward
     {
         ALPAKA_FN_HOST_ACC void operator()(
             auto const& acc,
-            hase::core::DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             unsigned const forwardRayCount,
             unsigned const batch,
             double const sourceWeight,
@@ -723,7 +673,6 @@ namespace hase::kernels::forward
             auto inReservoir,
             auto samplingCdf,
             auto outReservoir,
-            auto spectrum,
             unsigned const rngSeed,
             unsigned const reflectionPass) const
         {
@@ -812,7 +761,7 @@ namespace hase::kernels::forward
                         inReservoir.dirZ[slotIndex]});
                 hase::core::Point const origin
                     = ray::restoreSrmPosition(ray::aseSrmPolicy.positionPolicy, mesh, tet, localFace);
-                unsigned const sigmaIndex = inReservoir.sigmaIndices[slotIndex];
+                double const wavelength = inReservoir.wavelengths[slotIndex];
                 walker.walkForwardRay(
                     acc,
                     mesh,
@@ -821,9 +770,7 @@ namespace hase::kernels::forward
                     direction,
                     static_cast<int>(localFace),
                     sourceWeight,
-                    spectrum.sigmaA[sigmaIndex],
-                    spectrum.sigmaE[sigmaIndex],
-                    sigmaIndex,
+                    wavelength,
                     batch,
                     accumulation,
                     outReservoir,

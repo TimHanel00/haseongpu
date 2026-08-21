@@ -11,32 +11,39 @@
 
 #include <alpakaUtils/DevBundle.hpp>
 #include <alpakaUtils/utils.hpp>
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
 
 #include <limits>
 
 namespace hase::kernels
 {
-    struct BuildBetaVolumeWeights
+    struct BuildSourceStrengthWeights
     {
-        ALPAKA_FN_ACC constexpr auto operator()(
-            alpaka::concepts::Simd auto const& betaVolume,
-            alpaka::concepts::Simd auto const& cellVolume) const
+        ALPAKA_FN_ACC void operator()(auto const& acc, data::TraceView const mesh, auto sourceStrengthWeights) const
         {
-            return betaVolume * alpaka::lpCast<double>(cellVolume);
+            for(auto [cell] : alpaka::onAcc::makeIdxMap(
+                    acc,
+                    alpaka::onAcc::worker::threadsInGrid,
+                    alpaka::IdxRange{mesh.numberOfCells}))
+            {
+                sourceStrengthWeights[cell] = mesh.isActive(cell)
+                                                  ? mesh.getBetaVolume(cell) * mesh.getCellVolume(cell)
+                                                        * mesh.activeIonDensity(cell) / mesh.fluorescenceLifetime(cell)
+                                                  : 0.0;
+            }
         }
     };
 
-    struct CaptureBetaVolumeTotal
+    struct CaptureSourceStrengthTotal
     {
         ALPAKA_FN_ACC void operator()(
             auto const&,
             unsigned const numberOfCells,
-            auto betaVolumePrefix,
-            auto betaVolumeTotal) const
+            auto sourceStrengthPrefix,
+            auto sourceStrengthTotal) const
         {
-            betaVolumeTotal[0u] = numberOfCells == 0u ? 0.0 : betaVolumePrefix[numberOfCells - 1u];
+            sourceStrengthTotal[0u] = numberOfCells == 0u ? 0.0 : sourceStrengthPrefix[numberOfCells - 1u];
         }
     };
 
@@ -44,10 +51,7 @@ namespace hase::kernels
     {
         unsigned rayCount;
         unsigned batchCount;
-        double betaVolumeTotal;
-        double fluorescenceRate;
-        double sigmaA;
-        double sigmaE;
+        double sourceStrengthTotal;
 
         template<
             typename T_Acc,
@@ -61,7 +65,7 @@ namespace hase::kernels
             typename T_VolumeDndtAse>
         ALPAKA_FN_ACC void operator()(
             T_Acc const& acc,
-            core::DeviceMeshView const mesh,
+            data::TraceView const mesh,
             T_VertexBatchScoreSum vertexBatchScoreSum,
             T_RseBatchRayCounts rseBatchRayCounts,
             T_LumpedMaterialVertexVolume lumpedMaterialVertexVolume,
@@ -83,8 +87,7 @@ namespace hase::kernels
                 double estimate = 0.0;
                 if(rayCount > 0u && volume > 0.0)
                 {
-                    unsigned const materialVertexOffset
-                        = mesh.getCellType(cell) == mesh.claddingNumber ? mesh.numberOfMeshPoints : 0u;
+                    unsigned const materialVertexOffset = mesh.getMaterialId(cell) * mesh.numberOfMeshPoints;
                     double scoreSum = 0.0;
                     double batchMeanSum = 0.0;
                     double batchMeanSquareSum = 0.0;
@@ -98,7 +101,8 @@ namespace hase::kernels
                                 = materialVertexOffset
                                   + mesh.cellPointIndices[cell * mesh.numberOfCellVertices + localVertex];
                             double const vertexVolume = lumpedMaterialVertexVolume[materialVertex];
-                            unsigned const vertex = batch * (2u * mesh.numberOfMeshPoints) + materialVertex;
+                            unsigned const vertex
+                                = batch * (mesh.numberOfMaterials * mesh.numberOfMeshPoints) + materialVertex;
                             batchScoreDensity += vertexVolume > 0.0 ? vertexBatchScoreSum[vertex] / vertexVolume : 0.0;
                         }
                         batchScoreDensity /= static_cast<double>(mesh.numberOfCellVertices);
@@ -111,7 +115,7 @@ namespace hase::kernels
                         batchMeanSquareSum += batchMean * batchMean;
                         ++activeBatchCount;
                     }
-                    estimate = scoreSum * betaVolumeTotal / (static_cast<double>(rayCount) * volume);
+                    estimate = scoreSum * sourceStrengthTotal / (static_cast<double>(rayCount) * volume);
                     if(droppedRays[cell] == 0u && activeBatchCount >= 2u)
                     {
                         double const count = static_cast<double>(activeBatchCount);
@@ -127,15 +131,21 @@ namespace hase::kernels
                                 0.0,
                                 (batchMeanSquareSum - batchMeanSum * batchMeanSum / count) / (count - 1.0));
                             relativeError = alpaka::math::sqrt(sampleVariance / count) / alpaka::math::abs(batchMean);
-                            absoluteError = relativeError * alpaka::math::abs(estimate) * fluorescenceRate;
+                            absoluteError = relativeError * alpaka::math::abs(estimate);
                         }
                     }
                 }
-                float const phiAse = static_cast<float>(estimate * fluorescenceRate);
+                float const phiAse = static_cast<float>(estimate);
                 volumePhiAse[cell] = phiAse;
                 standardError[cell] = absoluteError;
                 relativeStandardError[cell] = relativeError;
-                double const gainPerDensity = mesh.betaVolume[cell] * (sigmaE + sigmaA) - sigmaA;
+                unsigned const material = mesh.getMaterialId(cell);
+                double const gainPerDensity
+                    = mesh.isActive(cell)
+                          ? mesh.betaVolume[cell]
+                                    * (mesh.materialPeakEmission[material] + mesh.materialPeakAbsorption[material])
+                                - mesh.materialPeakAbsorption[material]
+                          : 0.0;
                 volumeDndtAse[cell] = gainPerDensity * static_cast<double>(phiAse);
             }
         }
@@ -155,7 +165,7 @@ namespace hase::kernels
     void enqueueFinalizeForwardCellPhiAse(
         T_DevBundle& devBundle,
         T_Queue const& queue,
-        core::DeviceMeshView const mesh,
+        data::TraceView const mesh,
         T_VertexBatchScoreSum const& vertexBatchScoreSum,
         T_RseBatchRayCounts const& rseBatchRayCounts,
         T_LumpedMaterialVertexVolume const& lumpedMaterialVertexVolume,
@@ -166,10 +176,7 @@ namespace hase::kernels
         T_VolumeDndtAse& volumeDndtAse,
         unsigned rayCount,
         unsigned batchCount,
-        double betaVolumeTotal,
-        double fluorescenceRate,
-        double sigmaA,
-        double sigmaE)
+        double sourceStrengthTotal)
     {
         auto cellFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
             devBundle.device,
@@ -178,7 +185,7 @@ namespace hase::kernels
         queue.enqueue(
             cellFrameSpec,
             alpaka::KernelBundle{
-                FinalizeForwardVolumePhiAse{rayCount, batchCount, betaVolumeTotal, fluorescenceRate, sigmaA, sigmaE},
+                FinalizeForwardVolumePhiAse{rayCount, batchCount, sourceStrengthTotal},
                 mesh,
                 vertexBatchScoreSum,
                 rseBatchRayCounts,

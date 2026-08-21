@@ -31,7 +31,7 @@ namespace hase::core
         unsigned rngSeed = 0u; //!< Seed shared by all batches in one adaptive launch.
     };
 
-    /** @brief Result of one complete forward-ray batch, retaining its statistical identity. */
+    /** @brief data::PhiAseResult of one complete forward-ray batch, retaining its statistical identity. */
     struct ForwardRayBatchResult
     {
         unsigned index = 0u; //!< Statistical batch index.
@@ -46,9 +46,6 @@ namespace hase::core
     struct FinalizeForwardAse
     {
         ForwardPhiAseRawResult const& raw; //!< Gathered, unnormalized batch accumulators.
-        double fluorescenceRate; //!< Fluorescence normalization applied on the device.
-        double sigmaA; //!< Absorption cross section used for ASE depletion.
-        double sigmaE; //!< Emission cross section used for ASE depletion.
     };
 
     namespace detail
@@ -133,9 +130,9 @@ namespace hase::core
             unsigned const workerIndex,
             unsigned const workerCount,
             detail::ThreadWorkerGroup& group,
-            DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             ForwardPhiAseDeviceContext<T_Device, T_Exec>& deviceContext,
-            ExperimentParameters const& experiment,
+            AseTraceControls const& experiment,
             double const betaVolumeTotal)
             : m_workerIndex(workerIndex)
             , m_workerCount(workerCount)
@@ -153,9 +150,9 @@ namespace hase::core
         unsigned m_workerIndex;
         unsigned m_workerCount;
         detail::ThreadWorkerGroup& m_group;
-        DeviceMeshView m_mesh;
+        hase::data::TraceView m_mesh;
         ForwardPhiAseDeviceContext<T_Device, T_Exec>& m_deviceContext;
-        ExperimentParameters const& m_experiment;
+        AseTraceControls const& m_experiment;
         double m_betaVolumeTotal;
 
         friend struct HaseWorkerDispatch<ThreadOwnedDevices<T_Device, T_Exec>>;
@@ -235,15 +232,9 @@ namespace hase::core
     {
         using T_Policy = ThreadOwnedDevices<T_Device, T_Exec>;
 
-        [[nodiscard]] static Result run(T_Policy& policy, FinalizeForwardAse const& item)
+        [[nodiscard]] static data::PhiAseResult run(T_Policy& policy, FinalizeForwardAse const& item)
         {
-            policy.m_deviceContext.uploadAndFinalize(
-                policy.m_mesh,
-                item.raw,
-                policy.m_betaVolumeTotal,
-                item.fluorescenceRate,
-                item.sigmaA,
-                item.sigmaE);
+            policy.m_deviceContext.uploadAndFinalize(policy.m_mesh, item.raw, policy.m_betaVolumeTotal);
             auto result = policy.m_deviceContext.downloadFinalizedResult(true, true, true, true);
             result.dndtAse = policy.m_deviceContext.downloadVolumeDndtAse();
             result.srmStatus = item.raw.srmStatus;

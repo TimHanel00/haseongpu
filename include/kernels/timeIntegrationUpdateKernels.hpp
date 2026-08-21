@@ -9,6 +9,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <data/TraceData.hpp>
+
 namespace hase::kernels
 {
     struct AddScaled
@@ -54,16 +56,30 @@ namespace hase::kernels
     struct ExponentialEulerUpdate
     {
         double timeStep = 0.0;
-        double tau = 1.0;
 
-        ALPAKA_FN_ACC auto operator()(
-            alpaka::concepts::Simd auto const& betaVolume,
-            alpaka::concepts::Simd auto const& dndtPump,
-            alpaka::concepts::Simd auto const& dndtAse) const
+        ALPAKA_FN_ACC void operator()(
+            auto const& acc,
+            data::TraceView const mesh,
+            auto betaVolume,
+            auto dndtPump,
+            auto dndtAse,
+            auto betaNext) const
         {
-            double const decay = alpaka::math::exp(-timeStep / tau);
-            auto const source = dndtPump - dndtAse;
-            return tau * source * (1.0 - decay) + betaVolume * decay;
+            for(auto [cell] : alpaka::onAcc::makeIdxMap(
+                    acc,
+                    alpaka::onAcc::worker::threadsInGrid,
+                    alpaka::IdxRange{mesh.numberOfCells}))
+            {
+                if(!mesh.isActive(cell))
+                {
+                    betaNext[cell] = 0.0;
+                    continue;
+                }
+                double const tau = mesh.fluorescenceLifetime(cell);
+                double const decay = alpaka::math::exp(-timeStep / tau);
+                double const source = dndtPump[cell] - dndtAse[cell];
+                betaNext[cell] = tau * source * (1.0 - decay) + betaVolume[cell] * decay;
+            }
         }
     };
 

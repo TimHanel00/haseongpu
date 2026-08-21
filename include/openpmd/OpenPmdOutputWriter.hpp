@@ -1,7 +1,7 @@
 #pragma once
 
-#include <core/simulationSnapshot.hpp>
-#include <core/types.hpp>
+#include <core/Runtime.hpp>
+#include <data/SimulationSnapshot.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -28,8 +28,8 @@ namespace hase::openpmd
         OutputWriter& operator=(OutputWriter const&) = delete;
         ~OutputWriter();
 
-        void writeResult(std::uint64_t iterationIndex, core::Result const& result);
-        void writeSnapshot(std::uint64_t iterationIndex, core::SimulationSnapshot const& snapshot);
+        void writeResult(std::uint64_t iterationIndex, data::PhiAseResult const& result);
+        void writeSnapshot(std::uint64_t iterationIndex, data::SimulationSnapshot const& snapshot);
         void close();
 
     private:

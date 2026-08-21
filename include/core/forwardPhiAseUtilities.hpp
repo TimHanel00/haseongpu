@@ -7,14 +7,14 @@
  */
 #pragma once
 
-#include <core/mesh.hpp>
-#include <core/types.hpp>
+#include <core/Runtime.hpp>
+#include <data/TraceData.hpp>
 #include <random/random.hpp>
 
 namespace hase::core
 {
     inline double calcVolumeDndtAse(
-        HostMesh const& mesh,
+        hase::data::TraceData const& mesh,
         double const sigmaA,
         double const sigmaE,
         float const phiAse,
@@ -24,9 +24,9 @@ namespace hase::core
         return gainPerDensity * phiAse;
     }
 
-    inline unsigned baseRngSeed(ComputeParameters const& compute)
+    inline unsigned baseRngSeed(ExecutionPolicy const& compute)
     {
-        if(compute.rngSeed == ComputeParameters::unspecifiedRngSeed)
+        if(compute.rngSeed == ExecutionPolicy::unspecifiedRngSeed)
             return random::SeedGenerator::get().getSeed();
         return compute.rngSeed;
     }

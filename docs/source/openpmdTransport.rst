@@ -99,20 +99,28 @@ Topology arrays use structure-of-arrays order:
 Stored representation
 ---------------------
 
-Transport version 1.1 distinguishes ``full`` and ``dynamic`` input iterations.
+Transport version 1.2 distinguishes ``full`` and ``dynamic`` input iterations
+and permits explicit, resizable cross-section updates at synchronized step
+boundaries.
 The initial iteration contains the complete primitive graph. Later control
 iterations retain the graph identity and references, but write only fields
-declared with ``dynamic=True``. Iteration attributes identify the transport
-version, update mode, root path, node paths, node types, and references between
-nodes.
+declared with ``dynamic=True``. A dynamic field with a ``controlField`` is
+written only when that name is selected by ``Simulation.controlFields``;
+therefore material cross sections are not transferred again unless
+``cross_sections`` is explicitly enabled. Iteration attributes identify the
+transport version, update mode, root path, node paths, node types, and
+references between nodes.
 
 Numeric scalar and array fields are stored as openPMD mesh records. Each record
 carries its logical graph path, owning primitive type, field name, axes, shape,
 dynamic flag, encoding, and physical-unit metadata. ``Quantity`` values retain
 their ``unitSI`` and ``unitDimension`` information. Strings use native string
-attributes; string sequences and references use native string-vector
-attributes, so provider APIs perform Unicode handling without a second JSON
-decoder. JSON metadata remains serialized in namespaced string attributes.
+attributes; non-empty string sequences and references use native string-vector
+attributes. Empty sequences use a scalar ``[]`` marker because ADIOS2 cannot
+round-trip an empty string-vector attribute. The stored scalar/vector datatype
+keeps that marker distinct from a one-element sequence containing ``"[]"``.
+Provider APIs perform Unicode handling without a second JSON decoder. JSON
+metadata remains serialized in namespaced string attributes.
 
 Logical paths are encoded into provider-safe record and attribute keys. A
 consumer uses the stored logical path rather than assigning meaning to the
@@ -120,14 +128,14 @@ physical key. Primitive definitions consequently do not depend on ADIOS2 or
 HDF5 naming restrictions.
 
 The C++ reader reconstructs the root ``Simulation`` for a full iteration and
-delegates each referenced namespace to the corresponding backend primitive's
+delegates each referenced namespace to the corresponding C++ primitive's
 ``fromTransport(reader, prefix)`` function. A dynamic iteration updates the
-existing simulation and backend excitation plan instead of reconstructing the
+existing simulation and prepared excitation plan instead of reconstructing the
 topology or material context. Numeric loading is prefetched by subtree;
 following one primitive does not require loading unrelated numeric fields.
 The Python ``frontendState`` projection exists only for callback topology and
-legacy diagnostics; it is not transported as executable state. Consequently
-the C++ ``LegacyBackendConverter`` is the single physical lowering boundary.
+diagnostics; it is not transported as executable state. Consequently
+the C++ ``simulation preparation`` is the single physical lowering boundary.
 
 Direct ASE sessions
 -------------------

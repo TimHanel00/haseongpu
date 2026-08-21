@@ -217,9 +217,9 @@ def smallTopology():
 
 @pytest.fixture
 def smallGainMedium(smallTopology):
-    from pyInclude.geometry.core import GainMedium as BackendGainMedium
+    from pyInclude.geometry.core import GainMedium as ProjectedGainMedium
 
-    return BackendGainMedium(topology=smallTopology).withPhysicalProperties(
+    return ProjectedGainMedium(topology=smallTopology).withPhysicalProperties(
         betaVolume=np.zeros((smallTopology.numberOfTriangles, smallTopology.levels - 1)),
         claddingCellTypes=np.zeros(2, dtype=np.uint32),
         nTot=2.76e20,

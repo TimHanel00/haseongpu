@@ -17,35 +17,27 @@ namespace hase::core
 {
     ForwardPhiAseRawResult makeForwardRawResult(
         unsigned const volumeCount,
-        unsigned const vertexCount,
+        unsigned const materialVertexCount,
         unsigned const batchCount)
     {
         if(batchCount == 0u)
             throw std::invalid_argument("forward ASE batch count must be positive");
         return ForwardPhiAseRawResult{
-            std::vector<double>(batchCount * 2u * vertexCount, 0.0),
+            std::vector<double>(batchCount * materialVertexCount, 0.0),
             std::vector<unsigned>(batchCount, 0u),
             std::vector<unsigned>(volumeCount, 0u),
             std::vector<unsigned>(volumeCount, 0u),
             0u,
-            SrmStatus::DISABLED,
+            data::SrmStatus::disabled,
             0u,
             0.0,
             0u,
             0u};
     }
 
-    double calcForwardBetaVolumeTotal(HostMesh const& hostMesh)
+    double calcForwardSourceStrengthTotal(hase::data::TraceData const& trace)
     {
-        double total = 0.0;
-        unsigned const count = std::min(
-            static_cast<unsigned>(hostMesh.betaVolume.size()),
-            static_cast<unsigned>(hostMesh.cellVolumes.size()));
-        for(unsigned volume = 0u; volume < count; ++volume)
-        {
-            total += hostMesh.betaVolume.at(volume) * static_cast<double>(hostMesh.cellVolumes.at(volume));
-        }
-        return total;
+        return trace.sourceStrengthPrefix.empty() ? 0.0 : trace.sourceStrengthPrefix.back();
     }
 
     void mergeForwardRawResult(ForwardPhiAseRawResult& target, ForwardPhiAseRawResult const& source)
@@ -125,19 +117,22 @@ namespace hase::core
         return relativeStandardError * std::abs(estimate);
     }
 
-    void finalizeForwardPhiAse(HostMesh const& hostMesh, ForwardPhiAseRawResult const& rawResult, Result& result)
+    void finalizeForwardPhiAse(
+        hase::data::TraceData const& hostMesh,
+        ForwardPhiAseRawResult const& rawResult,
+        data::PhiAseResult& result)
     {
-        finalizeForwardPhiAse(hostMesh, rawResult, calcForwardBetaVolumeTotal(hostMesh), result);
+        finalizeForwardPhiAse(hostMesh, rawResult, calcForwardSourceStrengthTotal(hostMesh), result);
     }
 
     void finalizeForwardPhiAse(
-        HostMesh const& hostMesh,
+        hase::data::TraceData const& hostMesh,
         ForwardPhiAseRawResult const& rawResult,
-        double const betaVolumeTotal,
-        Result& result)
+        double const sourceStrengthTotal,
+        data::PhiAseResult& result)
     {
         unsigned const volumeCount = hostMesh.numberOfCells;
-        unsigned const materialVertexCount = 2u * hostMesh.numberOfMeshPoints;
+        unsigned const materialVertexCount = hostMesh.numberOfMaterials * hostMesh.numberOfMeshPoints;
         unsigned const batchCount = static_cast<unsigned>(rawResult.rseBatchRayCounts.size());
         if(batchCount == 0u || rawResult.vertexBatchScoreSum.size() != batchCount * materialVertexCount)
             throw std::runtime_error("forward ASE vertex score count does not match the mesh");
@@ -149,7 +144,7 @@ namespace hase::core
             cellBatchScoreDensity.at(batch)
                 = hase::kernels::accumulateMaterialVertexIntegralsToCellDensities(hostMesh, vertexBatch);
         }
-        result = Result(
+        result = data::PhiAseResult(
             std::vector(volumeCount, 0.0f),
             std::vector(volumeCount, 0.0),
             std::vector(volumeCount, 0.0),
@@ -183,7 +178,7 @@ namespace hase::core
                     ++activeBatchCount;
                 }
                 double const estimate
-                    = scoreSum * betaVolumeTotal / (static_cast<double>(rawResult.rayCount) * volumeSize);
+                    = scoreSum * sourceStrengthTotal / (static_cast<double>(rawResult.rayCount) * volumeSize);
                 result.phiAse.at(volume) = static_cast<float>(estimate);
                 double relativeError = std::numeric_limits<double>::max();
                 if(result.droppedRays[volume] == 0u && activeBatchCount >= 2u)
@@ -205,6 +200,14 @@ namespace hase::core
                     = result.droppedRays[volume] != 0u || !std::isfinite(relativeError)
                           ? (std::isnan(relativeError) ? 0.0 : std::numeric_limits<double>::max())
                           : relativeError * std::abs(estimate);
+                unsigned const material = hostMesh.cellMaterialIds.at(volume);
+                double const gainPerDensity = hostMesh.materialActive.at(material) != 0u
+                                                  ? hostMesh.betaVolume.at(volume)
+                                                            * (hostMesh.materialPeakEmission.at(material)
+                                                               + hostMesh.materialPeakAbsorption.at(material))
+                                                        - hostMesh.materialPeakAbsorption.at(material)
+                                                  : 0.0;
+                result.dndtAse.at(volume) = gainPerDensity * estimate;
             }
             else
             {

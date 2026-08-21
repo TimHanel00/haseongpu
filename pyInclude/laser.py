@@ -719,7 +719,6 @@ class _PumpSource:
     surfaceDomains: tuple
     totalPower: float
     spectrum: PumpSpectrum
-    crossSections: CrossSectionData
     angularDistribution: PumpAngularDistribution
     profile: object
     relays: tuple[PlanarPumpRelay, ...]

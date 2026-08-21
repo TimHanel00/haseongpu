@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from HASEonGPU import AlpakaBackends
+from hase_units import units
 
 repoRoot = Path(__file__).resolve().parents[3]
 
@@ -147,10 +148,10 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
         component.name for component in yaml.opticalComponents
     ] == ["crystal", "cladding"]
     np.testing.assert_array_equal(
-        api._backendGainMedium.get("claddingCellTypes").value,
-        yaml._backendGainMedium.get("claddingCellTypes").value,
+        api._simulationState.get("claddingCellTypes").value,
+        yaml._simulationState.get("claddingCellTypes").value,
     )
-    assert api._backendGainMedium.get("claddingAbsorption").value == pytest.approx(5.5)
+    assert api._simulationState.get("claddingAbsorption").value == pytest.approx(5.5)
 
     api_pump = api.pumps[0]
     yaml_pump = yaml.pumps[0]
@@ -184,13 +185,13 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
 
     for property_name in ("nTot", "crystalTFluo"):
         np.testing.assert_allclose(
-            api._backendGainMedium.get(property_name).value,
-            yaml._backendGainMedium.get(property_name).value,
+            api._simulationState.get(property_name).value,
+            yaml._simulationState.get(property_name).value,
         )
-    assert api._backendGainMedium.surface_optics == yaml._backendGainMedium.surface_optics
+    assert api._simulationState.surface_optics == yaml._simulationState.surface_optics
     np.testing.assert_array_equal(
-        api._backendGainMedium.topology.faceBoundaries,
-        yaml._backendGainMedium.topology.faceBoundaries,
+        api._simulationState.topology.faceBoundaries,
+        yaml._simulationState.topology.faceBoundaries,
     )
 
 
@@ -330,10 +331,10 @@ def testPtTet4GeometryLabelsOneRadialCladdingCellLayer():
     )
 
 
-def testLaserPumpCladdingUsesMaterialSpectrumForBackendAndPump():
+def testLaserPumpCladdingUsesMaterialOwnedSpectrumForAseAndPump():
     simulation = laserPumpCladding.buildSimulation(spectralResolution=191)
     material = simulation.gainMedium.components[0].material
-    spectra = simulation.crossSections
+    spectra = material.crossSections
     material_dir = repoRoot / "example" / "input"
     raw_wavelengths_absorption = np.loadtxt(material_dir / "lambda_a.txt")
     raw_absorption = np.loadtxt(material_dir / "sigma_a.txt")
@@ -341,13 +342,14 @@ def testLaserPumpCladdingUsesMaterialSpectrumForBackendAndPump():
     raw_emission = np.loadtxt(material_dir / "sigma_e.txt")
 
     assert raw_wavelengths_absorption.size == 191
-    assert spectra.resolution == 191
-    assert simulation.pump.sources[0].crossSections is spectra
+    assert spectra.wavelengths.size == 191
+    assert not hasattr(simulation, "crossSections")
+    assert not hasattr(simulation.pump.sources[0], "crossSections")
     assert not hasattr(simulation.pumps[0], "cross_sections")
-    np.testing.assert_array_equal(spectra.wavelengthsAbsorption, raw_wavelengths_absorption)
-    np.testing.assert_array_equal(spectra.crossSectionAbsorption, raw_absorption)
-    np.testing.assert_array_equal(spectra.wavelengthsEmission, raw_wavelengths_emission)
-    np.testing.assert_array_equal(spectra.crossSectionEmission, raw_emission)
+    np.testing.assert_array_equal(spectra.wavelengths.toValue(units.nm), raw_wavelengths_absorption)
+    np.testing.assert_array_equal(spectra.absorption.toValue(units.cm**2), raw_absorption)
+    np.testing.assert_array_equal(spectra.wavelengths.toValue(units.nm), raw_wavelengths_emission)
+    np.testing.assert_array_equal(spectra.emission.toValue(units.cm**2), raw_emission)
     assert material.crossSections.wavelengths.size == 191
 
 
@@ -392,7 +394,7 @@ def testLaserPumpCladdingTet4MediumPreservesLegacyTenLayerPumpLayout():
 
     assert topology.structuredNumberOfLevels == 10
     assert topology.numberOfSamplePoints == topology.numberOfCells
-    assert simulation._backendGainMedium.get("betaVolume").expectedShape == (topology.numberOfCells,)
+    assert simulation._simulationState.get("betaVolume").expectedShape == (topology.numberOfCells,)
 
     points_by_level = points.reshape(
         (topology.structuredNumberOfLevels, topology.structuredNumberOfPoints, 3)
@@ -590,7 +592,7 @@ def fakeCompiledSnapshots(monkeypatch):
                 "phiASE": simulation.phiASE,
             }
         )
-        volume_shape = simulation._backendGainMedium.get("betaVolume").expectedShape
+        volume_shape = simulation._simulationState.get("betaVolume").expectedShape
         states = []
         emitted_steps = range(1, steps + 1) if simulation.outputSteps is None else simulation.outputSteps
         for step in emitted_steps:
@@ -644,7 +646,7 @@ def testLaserPumpCladdingExampleWritesVtkFromCompiledSnapshots(
     scalars = _vtkScalarNames(second)
     assert {"betaVolume", "phiASE", "dndtAse", "dndtPump", "cladAbs"}.issubset(scalars)
     _points, _cells, _types, _pointData, cellData, _fields = _parseVtk(second)
-    claddingTypes = fakeCompiledSnapshots[-1]["simulation"]._backendGainMedium.get(
+    claddingTypes = fakeCompiledSnapshots[-1]["simulation"]._simulationState.get(
         "claddingCellTypes"
     ).value
     np.testing.assert_array_equal(cellData["cladAbs"][claddingTypes == 0], 0.0)

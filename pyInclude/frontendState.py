@@ -4,10 +4,10 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Build the legacy Python-side state view used by callbacks and diagnostics.
+"""Build the Python-side state view used by callbacks and diagnostics.
 
 Compiled execution does not consume this projection. The C++
-``LegacyBackendConverter`` is the sole executable lowering of the transported
+``simulation preparation`` is the sole executable lowering of the transported
 physical graph.
 """
 
@@ -19,8 +19,7 @@ import numpy as np
 
 from hase_units import units
 from .geometry import VolumeTopology
-from .geometry.core import GainMedium as _BackendGainMedium
-from .laser import CrossSectionData
+from .geometry.core import GainMedium as _ProjectedGainMedium
 from .physical import Domain, GainMedium, SURFACE, VOLUME, validateComponentOverlap
 
 
@@ -35,29 +34,22 @@ def _validateComponents(gainMedium, opticalComponents=None):
     if any(component not in components for component in gainMedium.components):
         raise ValueError("every GainMedium component must belong to the optical assembly")
     validateComponentOverlap(components)
-    material = gainMedium.components[0].material
-    if any(component.material is not material for component in gainMedium.components[1:]):
-        raise NotImplementedError(
-            "the current backend requires all gain components to reference the same Material object"
-        )
-    material.validate()
-    if not material.isActive:
-        raise ValueError("GainMedium components require an active Material")
-    if float(material.activeIonDensity.toValue(units.cm**-3)) <= 0.0:
-        raise ValueError("GainMedium components require positive activeIonDensity")
-    if (
-        material.bulkAttenuation is not None
-        and float(material.bulkAttenuation.toValue(units.cm**-1)) != 0.0
-    ):
-        raise NotImplementedError(
-            "the current backend does not support bulkAttenuation in active gain cells"
-        )
+    for component in gainMedium.components:
+        component.material.validate()
+        if not component.material.isActive:
+            raise ValueError("GainMedium components require active Materials")
+        if float(component.material.activeIonDensity.toValue(units.cm**-3)) <= 0.0:
+            raise ValueError("GainMedium components require positive activeIonDensity")
+        if component.material.fluorescenceLifetime is None:
+            raise ValueError("GainMedium components require fluorescenceLifetime")
+        if component.material.crossSections is None:
+            raise ValueError("GainMedium components require crossSections")
     passive = tuple(component for component in components if component not in gainMedium.components)
     for component in passive:
         component.material.validate()
         if component.material.isActive:
             raise ValueError("OpticalComponents outside GainMedium must use passive Materials")
-    return material, components, passive
+    return components, passive
 
 
 def _combineTopology(domain):
@@ -71,7 +63,7 @@ def _combineTopology(domain):
     for topology, selected in domain._shards:
         if not isinstance(topology, VolumeTopology):
             raise NotImplementedError(
-                "the current backend supports Tet4 VolumeTopology domains only"
+                "the callback state projection supports Tet4 VolumeTopology domains only"
             )
         selected_indices = np.flatnonzero(selected)
         source_cells = np.asarray(topology.cellPointIndices)[selected_indices]
@@ -151,34 +143,21 @@ def _initialExcitation(value, domain, cellMaps, numberOfCells):
     return result
 
 
-def _crossSections(material):
-    table = material.crossSections
-    if table is None:
-        raise ValueError("active gain Material requires crossSections")
-    return CrossSectionData(
-        wavelengthsAbsorption=table.wavelengths.toValue(units.nm),
-        crossSectionAbsorption=table.absorption.toValue(units.cm**2),
-        wavelengthsEmission=table.wavelengths.toValue(units.nm),
-        crossSectionEmission=table.emission.toValue(units.cm**2),
-        resolution=int(table.wavelengths.size),
-    )
-
-
-def projectSurfaceDomain(backendGainMedium, domain):
+def projectSurfaceDomain(projectedState, domain):
     """Assign a stable diagnostic surface tag in the frontend state view."""
     selected = domain if isinstance(domain, Domain) else Domain(domain)
     if selected.entityKind != SURFACE or selected.isEmpty:
         raise ValueError("pump and optics selections require a non-empty surface Domain")
-    cache = backendGainMedium.__dict__.setdefault("_surfaceDomainCache", {})
+    cache = projectedState.__dict__.setdefault("_surfaceDomainCache", {})
     key = tuple(
         (id(topology), tuple(mask.shape), np.packbits(mask.reshape(-1)).tobytes())
         for topology, mask in selected._shards
     )
     if key in cache:
         return cache[key]
-    identifier = int(backendGainMedium.__dict__.setdefault("_nextSurfaceDomain", 1))
-    backendGainMedium._nextSurfaceDomain = identifier + 1
-    cell_maps = backendGainMedium.__dict__["_domainCellMaps"]
+    identifier = int(projectedState.__dict__.setdefault("_nextSurfaceDomain", 1))
+    projectedState._nextSurfaceDomain = identifier + 1
+    cell_maps = projectedState.__dict__["_domainCellMaps"]
     for topology, faces in selected._shards:
         entry = cell_maps.get(id(topology))
         if entry is None or entry[0] is not topology:
@@ -187,19 +166,30 @@ def projectSurfaceDomain(backendGainMedium, domain):
         mapped = entry[1][rows]
         if np.any(mapped < 0):
             raise ValueError("surface Domain is outside the frontend state view")
-        backendGainMedium.topology.faceBoundaries[mapped, local_faces] = identifier
+        projectedState.topology.faceBoundaries[mapped, local_faces] = identifier
     cache[key] = identifier
     return identifier
 
 
+def projectCellMask(projectedState, domain):
+    """Return a callback-state mask for one physical volume ``Domain``.
+
+    The mapping follows the prepared callback cell order and does not copy or
+    lower any material properties.
+    """
+    result = np.zeros(projectedState.topology.numberOfCells, dtype=bool)
+    result[_indices(domain, projectedState.__dict__["_domainCellMaps"])] = True
+    return result
+
+
 def projectFrontendState(gainMedium, initialExcitation=0.0, *, opticalComponents=None):
-    """Project one assembly for Python callbacks and legacy diagnostics.
+    """Project one assembly for Python callbacks and diagnostics.
 
     Public domains may use any compatible mesh representation. The current
     frontend state containers represent Tet4 :class:`VolumeTopology` bindings
     only. Runtime validation and physical lowering remain owned by C++.
     """
-    material, components, passive = _validateComponents(gainMedium, opticalComponents)
+    components, _passive = _validateComponents(gainMedium, opticalComponents)
     assembly_domain = Domain(component.domain for component in components)
     combined, cell_maps = _combineTopology(assembly_domain)
     excitation = _initialExcitation(
@@ -208,44 +198,18 @@ def projectFrontendState(gainMedium, initialExcitation=0.0, *, opticalComponents
         cell_maps,
         combined.numberOfCells,
     )
-    if material.fluorescenceLifetime is None:
-        raise ValueError("active gain Material requires fluorescenceLifetime")
-    backend = _BackendGainMedium(combined).withPhysicalProperties(
-        betaVolume=excitation,
-        nTot=float(material.activeIonDensity.toValue(units.cm**-3)),
-        crystalTFluo=float(material.fluorescenceLifetime.toValue(units.s)),
-    )
-    backend._domainCellMaps = cell_maps
-    backend._nextSurfaceDomain = int(np.max(combined.faceBoundaries, initial=0)) + 1
-
-    if passive:
-        attenuations = {
-            0.0
-            if component.material.bulkAttenuation is None
-            else float(component.material.bulkAttenuation.toValue(units.cm**-1))
-            for component in passive
-        }
-        if len(attenuations) != 1:
-            raise NotImplementedError(
-                "the current backend supports one passive bulkAttenuation value"
-            )
-        cell_types = np.zeros(combined.numberOfCells, dtype=np.uint32)
-        for component in passive:
-            cell_types[_indices(component.domain, cell_maps)] = np.uint32(1)
-        backend.withPhysicalProperties(
-            claddingCellTypes=cell_types,
-            claddingNumber=1,
-            claddingAbsorption=attenuations.pop(),
-        )
+    state = _ProjectedGainMedium(combined).withPhysicalProperties(betaVolume=excitation)
+    state._domainCellMaps = cell_maps
+    state._nextSurfaceDomain = int(np.max(combined.faceBoundaries, initial=0)) + 1
 
     optics = {}
     for component in components:
         for selected, surfaceOptics in component.surfaceOptics:
-            identifier = projectSurfaceDomain(backend, selected)
+            identifier = projectSurfaceDomain(state, selected)
             optics[identifier] = surfaceOptics
     if optics:
-        backend.with_surface_optics(optics)
-    return backend, _crossSections(material)
+        state.with_surface_optics(optics)
+    return state
 
 
-__all__ = ["projectFrontendState", "projectSurfaceDomain"]
+__all__ = ["projectCellMask", "projectFrontendState", "projectSurfaceDomain"]

@@ -20,10 +20,8 @@ import numpy as np
 from hase_transport import PrimitiveDescription, field as transportField, reference
 from .alpakaUtils import AlpakaBackends
 from .physical import Domain, GainMedium, OpticalComponent, validateComponentOverlap
-from .frontendState import projectFrontendState, projectSurfaceDomain
+from .frontendState import projectCellMask, projectFrontendState, projectSurfaceDomain
 from .laser import (
-    CrossSectionData,
-    LaserProperties,
     PlanarPumpRelay,
     Pump,
     SurfacePumpInjector,
@@ -45,7 +43,7 @@ SIMULATION_OUTPUT_FIELDS = (
     "dndt_ase",
     "dndt_pump",
 )
-SIMULATION_CONTROL_FIELDS = ("beta_volume",)
+SIMULATION_CONTROL_FIELDS = ("beta_volume", "cross_sections")
 
 
 def autonomous_final(number_of_steps):
@@ -115,13 +113,10 @@ class PhiASE:
 
     ``Simulation`` normally owns this object and calls ``run(...)`` during each
     time-step derivative evaluation. Advanced users can also call ``run``
-    directly with a ``GainMedium`` and ``CrossSectionData`` object.
+    directly with a ``GainMedium``. Cross sections are owned by each active
+    component's ``Material``.
     """
 
-    crossSections: CrossSectionData | None = None
-    """Absorption/emission spectra used by the ASE calculation."""
-    laserProperties: LaserProperties | None = None
-    """Lower-level laser property store accepted by legacy workflows."""
     gainMedium: GainMedium | None = None
     """Optional medium stored for direct ``run()`` calls."""
 
@@ -218,19 +213,6 @@ class PhiASE:
                 raise TypeError("PhiASE.ase_steps must be an integer or None")
             if self.ase_steps < 0:
                 raise ValueError("PhiASE.ase_steps must be non-negative")
-        self._resolveCrossSections()
-
-    def _resolveCrossSections(self):
-        if self.crossSections is None and self.laserProperties is not None:
-            laser = self.laserProperties.toDict()
-            self.crossSections = CrossSectionData(
-                wavelengthsAbsorption=laser["l_abs"],
-                crossSectionAbsorption=laser["s_abs"],
-                wavelengthsEmission=laser["l_ems"],
-                crossSectionEmission=laser["s_ems"],
-                resolution=laser["l_res"],
-            )
-        return self
 
     @classmethod
     def fromYaml(cls, filename, **overrides):
@@ -241,10 +223,10 @@ class PhiASE:
         simulation = data.get("simulation")
         if not isinstance(simulation, dict) or not isinstance(simulation.get("phi_ase"), dict):
             raise ValueError("schema-v3 PhiASE YAML requires simulation.phi_ase")
-        obj = _phiAse(simulation["phi_ase"], None)
+        obj = _phiAse(simulation["phi_ase"])
         for name, value in overrides.items():
             setattr(obj, name, value)
-        return obj._resolveCrossSections()
+        return obj
 
     @staticmethod
     def addArguments(parser):
@@ -380,9 +362,18 @@ class PhiASE:
         self._openpmdSession = None
         return transport.closeStream(session)
 
-    def run(self, gainMedium=None, crossSections=None, *, initialExcitation=None, openpmdSession=None):
+    def run(
+        self,
+        gainMedium=None,
+        *,
+        opticalComponents=None,
+        initialExcitation=None,
+        openpmdSession=None,
+    ):
         """Run ASE for the supplied or configured ``GainMedium``.
 
+        ``opticalComponents`` may include passive components traversed by the
+        rays; it defaults to the active components in ``gainMedium``.
         Returns ``self``. Use ``getResults()`` afterwards to access the raw
         lower-level result, including ``phiAse``.
         """
@@ -391,8 +382,6 @@ class PhiASE:
             raise ValueError("PhiASE.run requires gainMedium; pass it through Simulation or run(gainMedium=...)")
         if not isinstance(medium, GainMedium):
             raise TypeError("PhiASE.run requires the physical GainMedium frontend primitive")
-        if crossSections is not None:
-            self.crossSections = crossSections
         if initialExcitation is None:
             initialExcitation = 0.0
 
@@ -405,7 +394,7 @@ class PhiASE:
 
         launch_options = {} if openpmdSession is not None else self._transportLaunchOptions()
         self._result = transport.runPhiASE(
-            _AseSimulationRequest(self, medium, initialExcitation),
+            _AseSimulationRequest(self, medium, initialExcitation, opticalComponents),
             transport=self.openpmdBackend,
             openpmdSession=openpmdSession,
             **launch_options,
@@ -503,12 +492,20 @@ def _simulationTransportDescription():
 class _AseSimulationRequest:
     """Internal projection of direct ``PhiASE.run`` onto the Simulation graph."""
 
-    def __init__(self, phiAse, gainMedium, initialExcitation):
+    def __init__(self, phiAse, gainMedium, initialExcitation, opticalComponents=None):
         if not gainMedium.components:
             raise ValueError("PhiASE.run requires a non-empty GainMedium")
-        self.opticalComponents = tuple(gainMedium.components)
+        self.opticalComponents = tuple(
+            gainMedium.components if opticalComponents is None else opticalComponents
+        )
+        if any(component not in self.opticalComponents for component in gainMedium.components):
+            raise ValueError("every GainMedium component must belong to the direct ASE optical assembly")
+        validateComponentOverlap(self.opticalComponents)
         self.gainMedium = gainMedium
-        self.exteriorSurface = gainMedium.domain.boundary()
+        occupiedDomain = Domain(entityKind="volume")
+        for component in self.opticalComponents:
+            occupiedDomain += component.domain
+        self.exteriorSurface = occupiedDomain.boundary()
         self.excitationState = ExcitationState.fromValue(initialExcitation, gainMedium)
         self.phiASE = phiAse
         self.timeIntegrationSolver = TimeIntegrationSolver("explicit-euler")
@@ -604,7 +601,6 @@ class Simulation:
     phiASE: PhiASE
     timeIntegrationSolver: TimeIntegrationSolver | str
     timeStep: float
-    crossSections: CrossSectionData | None
     endTime: float | None
     simulationSteps: int | None
     prePump: bool
@@ -676,7 +672,6 @@ class Simulation:
             else timeIntegrator
         )
         self.timeStep = float(timeStepSize)
-        self.crossSections = None
         self.endTime = maxTime
         self.simulationSteps = None if simulationSteps is None else int(simulationSteps)
         self.prePump = bool(prePump)
@@ -688,7 +683,7 @@ class Simulation:
         )
         self.controlFields = tuple(str(field) for field in controlFields)
         self._pumpRegistrations = []
-        self._legacyPumpRegistrations = []
+        self._projectedPumpRegistrations = []
         self._time = 0.0
         self._step = 0
         self._initialized = False
@@ -740,25 +735,17 @@ class Simulation:
             raise ValueError(f"unsupported control_fields: {unknown_control_fields}")
         if len(set(self.controlFields)) != len(self.controlFields):
             raise ValueError("control_fields must be unique")
-        self._backendGainMedium, self.crossSections = projectFrontendState(
+        self._simulationState = projectFrontendState(
             self.gainMedium,
             self.initialExcitation,
             opticalComponents=self.opticalComponents,
         )
-        self.phiASE.gainMedium = self._backendGainMedium
-        self.phiASE.crossSections = self.crossSections
+        self.phiASE.gainMedium = self.gainMedium
         self._ensureStateArrays()
         self._refreshExcitationState()
 
     def _transportDescription(self):
         return _simulationTransportDescription()
-
-    def _resolveSpectralProperties(self):
-        if self.phiASE.crossSections is not None:
-            return self.phiASE.crossSections
-        if self.pump is not None and self.pump.sources:
-            return self.pump.sources[0].crossSections
-        raise ValueError("Simulation requires spectral properties via Simulation.crossSections, phiASE, or pump")
 
     def addPump(self, pump, injectionMethod, *, relays=()):
         """Register a physical pump and its numerical injection method."""
@@ -773,14 +760,14 @@ class Simulation:
             raise TypeError("relays must contain PlanarPumpRelay values")
         def lowerDomains(values):
             return tuple(
-                projectSurfaceDomain(self._backendGainMedium, value)
+                projectSurfaceDomain(self._simulationState, value)
                 if hasattr(value, "entityKind")
                 else value
                 for value in values
             )
 
-        backendInjection = SurfacePumpInjector(lowerDomains(injectionMethod.surface_domains))
-        backendRelays = tuple(
+        projectedInjection = SurfacePumpInjector(lowerDomains(injectionMethod.surface_domains))
+        projectedRelays = tuple(
             PlanarPumpRelay(
                 lowerDomains(relay.exit_domains),
                 lowerDomains(relay.entry_domains),
@@ -795,14 +782,13 @@ class Simulation:
             for relay in relays
         )
         self._pumpRegistrations.append(PumpRegistration(pump, injectionMethod, relays))
-        self._legacyPumpRegistrations.append((pump, backendInjection, backendRelays))
+        self._projectedPumpRegistrations.append((pump, projectedInjection, projectedRelays))
         self.pump = _PumpProperties(
             sources=tuple(
                 _PumpSource(
                     surfaceDomains=injector.surface_domains,
                     totalPower=physical.total_power,
                     spectrum=physical.spectrum,
-                    crossSections=self.crossSections,
                     angularDistribution=physical.angular_distribution,
                     profile=physical.profile,
                     relays=registered_relays,
@@ -810,14 +796,14 @@ class Simulation:
                     pumpSteps=0 if physical.pump_steps is None else int(physical.pump_steps),
                     rngSeed=int(physical.rng_seed),
                 )
-                for physical, injector, registered_relays in self._legacyPumpRegistrations
+                for physical, injector, registered_relays in self._projectedPumpRegistrations
             ),
         )
-        if self.crossSections is None:
-            self.crossSections = self._resolveSpectralProperties()
-        if self.phiASE.crossSections is None:
-            self.phiASE.crossSections = self.crossSections
         return self
+
+    def cellMask(self, domain):
+        """Map a physical volume domain to the callback state's cell order."""
+        return projectCellMask(self._simulationState, domain)
 
     def onStep(self, callback, *args, **kwargs):
         """Register a post-snapshot callback.
@@ -865,8 +851,9 @@ class Simulation:
         to modify state before step 1.
 
         This hook requires ``execution_mode="synchronized-debug"`` and a
-        streaming openPMD backend. Currently ``beta_volume`` is the only
-        supported control field. Synchronized-debug emits every step and does
+        streaming openPMD backend. ``beta_volume`` and material-owned
+        ``cross_sections`` are the supported control fields. Synchronized-debug
+        emits every step and does
         not accept ``output_steps``. Callback return values are ignored. The
         method returns ``self`` for chaining.
         """
@@ -931,11 +918,11 @@ class Simulation:
                 dndtAse=_optional_state_array(raw_state.dndtAse, np.float64),
                 dndtPump=_optional_state_array(raw_state.dndtPump, np.float64),
                 aseResult=raw_state.aseResult,
-                topology=self._backendGainMedium.topology,
+                topology=self._simulationState.topology,
             )
-            explicit_topology = hasattr(self._backendGainMedium.topology, "cellPointIndices")
+            explicit_topology = hasattr(self._simulationState.topology, "cellPointIndices")
             if state.betaVolume is not None:
-                self._backendGainMedium.get("betaVolume").value = (
+                self._simulationState.get("betaVolume").value = (
                     backendFlat(state.betaVolume.reshape(-1, order="F"))
                     if explicit_topology
                     else state.betaVolume
@@ -1058,20 +1045,20 @@ class Simulation:
         return self._step
 
     def _ensureStateArrays(self):
-        if "betaVolume" not in self._backendGainMedium.physical:
-            self._backendGainMedium.get("betaVolume").value = np.zeros(
-                self._backendGainMedium.get("betaVolume").expectedShape,
+        if "betaVolume" not in self._simulationState.physical:
+            self._simulationState.get("betaVolume").value = np.zeros(
+                self._simulationState.get("betaVolume").expectedShape,
                 dtype=np.float64,
             )
 
     def _refreshExcitationState(self):
         values = np.asarray(
-            self._backendGainMedium.get("betaVolume").value,
+            self._simulationState.get("betaVolume").value,
             dtype=np.float64,
         ).reshape(-1, order="F")
         domains = []
         domainValues = []
-        cellMaps = self._backendGainMedium.__dict__["_domainCellMaps"]
+        cellMaps = self._simulationState.__dict__["_domainCellMaps"]
         for component in self.gainMedium.components:
             selectedValues = []
             for topology, mask in component.domain._shards:

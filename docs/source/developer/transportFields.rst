@@ -2,7 +2,7 @@ Adding and Removing Transported Fields
 ======================================
 
 Frontend primitives describe their transported fields in
-``_transportDescription()``. The corresponding backend primitive reads those
+``_transportDescription()``. The corresponding C++ primitive reads those
 fields in ``fromTransport(reader, prefix)``. Field names use lower camel case
 on both sides.
 
@@ -41,7 +41,7 @@ pass it as the second argument:
    transportField("totalPower", "total_power"),
 
 Add the transport name and backend member to
-``include/backend/primitives/Material.hpp``:
+``include/data/Material.hpp``:
 
 .. code-block:: cpp
 
@@ -54,7 +54,7 @@ Add the transport name and backend member to
    double nonlinearIndex{};
 
 Read the field in ``Material::fromTransport()`` in
-``src/backend/primitives/Material.cpp``:
+``src/data/Material.cpp``:
 
 .. code-block:: cpp
 
@@ -171,9 +171,9 @@ To remove ``nonlinearIndex`` from ``Material``:
 #. Remove the field from the frontend constructor, validation, assignment, and
    public attributes in ``material_library/model.py``.
 #. Remove ``FieldName::nonlinearIndex`` and the ``nonlinearIndex`` member from
-   ``include/backend/primitives/Material.hpp``.
+   ``include/data/Material.hpp``.
 #. Remove its ``reader.assign`` call from
-   ``src/backend/primitives/Material.cpp``.
+   ``src/data/Material.cpp``.
 #. Remove or update tests and examples that construct, transport, or inspect
    the field.
 

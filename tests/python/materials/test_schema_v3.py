@@ -1,4 +1,5 @@
 import yaml
+import pytest
 
 from hase_units import units
 from material_library import Material
@@ -106,8 +107,10 @@ def test_simulation_from_yaml_reuses_injected_objects_and_owns_excitation(tmp_pa
     assert simulation.opticalComponents[0].material is resolved_material
     assert simulation.exteriorSurface.entityKind == "surface"
     assert not hasattr(simulation, "opticalDomain")
-    assert simulation._backendGainMedium.get("betaVolume").value.tolist() == [0.2, 0.2]
-    assert simulation.pump.sources[0].crossSections is simulation.crossSections
+    assert simulation._simulationState.get("betaVolume").value.tolist() == [0.2, 0.2]
+    assert not hasattr(simulation, "crossSections")
+    assert not hasattr(simulation.pump.sources[0], "crossSections")
+    assert simulation.gainMedium.components[0].material.crossSections is resolved_material.crossSections
     assert not hasattr(simulation.pumps[0], "cross_sections")
     assert all(
         value.entityKind == "surface"
@@ -139,8 +142,9 @@ def test_simulation_from_yaml_lowers_passive_component_outside_gain_medium(tmp_p
 
     assert simulation.gainMedium.components == (simulation.opticalComponents[0],)
     assert simulation.opticalComponents[1].material is claddingMaterial
-    assert simulation._backendGainMedium.get("claddingCellTypes").value.tolist() == [0, 1]
-    assert simulation._backendGainMedium.get("claddingAbsorption").value == 5.5
+    assert simulation.opticalComponents[1].domain is not simulation.opticalComponents[0].domain
+    assert not claddingMaterial.isActive
+    assert claddingMaterial.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
     topology = simulation.opticalComponents[0].domain.topologies[0]
     assert not (
         simulation.exteriorSurface.maskFor(topology) & (topology.neighborCells >= 0)

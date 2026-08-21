@@ -88,7 +88,7 @@ def test_gainMediumOwnsPhysicalProperties():
 def test_frontendExportsOnlyOpenPmdApi():
     import HASEonGPU
 
-    for name in ("HostMesh", "ExperimentParameters", "ComputeParameters", "Mesh"):
+    for name in ("TraceData", "AseTraceControls", "ExecutionPolicy", "Mesh"):
         assert not hasattr(HASEonGPU, name)
     assert not hasattr(HASEonGPU, "calcPhiASE")
 

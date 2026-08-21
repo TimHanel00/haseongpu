@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include <core/mesh.hpp>
+#include <data/TraceData.hpp>
 #include <kernels/forward/barycentric.hpp>
 
 #include <limits>
@@ -42,12 +42,12 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point faceCentroid(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         unsigned const localFace)
     {
         hase::core::Point sum{0.0, 0.0, 0.0};
-        for(unsigned localVertex = 0u; localVertex < hase::core::tet4FaceWidth; ++localVertex)
+        for(unsigned localVertex = 0u; localVertex < hase::data::tet4FaceWidth; ++localVertex)
         {
             int const point = mesh.getCellFacePoint(tet, localFace, localVertex);
             if(point < 0)
@@ -56,11 +56,11 @@ namespace hase::kernels::forward
             }
             sum = sum + mesh.getPoint(static_cast<unsigned>(point));
         }
-        return sum * (1.0 / static_cast<double>(hase::core::tet4FaceWidth));
+        return sum * (1.0 / static_cast<double>(hase::data::tet4FaceWidth));
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point outwardFaceNormal(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         unsigned const localFace)
     {
@@ -104,13 +104,13 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceIntersection nextFaceIntersection(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         hase::core::Point const origin,
         hase::core::Point const direction,
         int const forbiddenFace)
     {
-        alpaka::Vec<double, hase::core::tet4FaceCount> candidates{0.0, 0.0, 0.0, 0.0};
+        alpaka::Vec<double, hase::data::tet4FaceCount> candidates{0.0, 0.0, 0.0, 0.0};
         Tet4FaceIntersection result;
 
         // The first decreasing face coordinate to reach zero is the Tet4 exit face.
@@ -167,38 +167,43 @@ namespace hase::kernels::forward
         return tiedFaceMask != 0u && (tiedFaceMask & (tiedFaceMask - 1u)) != 0u;
     }
 
+    /**
+     * @brief Resolve attenuation or gain from the material of the current cell.
+     *
+     * Cross sections are interpolated at the ray wavelength on the device.
+     * This keeps propagation valid when a ray enters a cell owned by another
+     * material without copying or rebinding a launch-global spectrum.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC double localGainCoefficient(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
-        double const sigmaA,
-        double const sigmaE)
+        double const wavelength)
     {
-        if(mesh.getCellType(tet) == mesh.claddingNumber)
-        {
-            return -mesh.claddingAbsorption;
-        }
-        double const gainPerDensity = mesh.getBetaVolume(tet) * (sigmaE + sigmaA) - sigmaA;
-        return static_cast<double>(mesh.nTot) * gainPerDensity;
+        auto const crossSections = mesh.crossSectionsForCell(tet, wavelength);
+        double const stimulatedCoefficient
+            = mesh.isActive(tet) ? mesh.activeIonDensity(tet)
+                                       * (mesh.getBetaVolume(tet) * (crossSections.emission + crossSections.absorption)
+                                          - crossSections.absorption)
+                                 : 0.0;
+        return stimulatedCoefficient - mesh.bulkAttenuation(tet);
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC double localSegmentGain(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         double const length,
-        double const sigmaA,
-        double const sigmaE)
+        double const wavelength)
     {
-        return alpaka::math::exp(localGainCoefficient(mesh, tet, sigmaA, sigmaE) * length);
+        return alpaka::math::exp(localGainCoefficient(mesh, tet, wavelength) * length);
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC double localSegmentTrackLengthIntegral(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         double const length,
-        double const sigmaA,
-        double const sigmaE)
+        double const wavelength)
     {
-        double const gainCoefficient = localGainCoefficient(mesh, tet, sigmaA, sigmaE);
+        double const gainCoefficient = localGainCoefficient(mesh, tet, wavelength);
         double const gainLength = gainCoefficient * length;
         if(alpaka::math::abs(gainLength) < 1.0e-8)
         {
@@ -208,7 +213,7 @@ namespace hase::kernels::forward
     }
 
     [[nodiscard]] inline ALPAKA_FN_ACC double segmentCenterWeight(
-        hase::core::DeviceMeshView const& mesh,
+        hase::data::TraceView const& mesh,
         unsigned const tet,
         hase::core::Point const midpoint)
     {

@@ -10,8 +10,8 @@
 
 #if !defined(DISABLE_MPI) && defined(MPI_FOUND)
 
+#    include <core/Runtime.hpp>
 #    include <core/calcPhiAseThreaded.hpp>
-#    include <core/types.hpp>
 #    include <mpi.h>
 
 #    include <algorithm>
@@ -84,9 +84,9 @@ namespace hase::core
         /** @brief Bind the current rank to exactly one persistent local device context. */
         MPIRank(
             MPI_Comm const communicator,
-            DeviceMeshView const mesh,
+            hase::data::TraceView const mesh,
             ForwardPhiAseDeviceContext<T_Device, T_Exec>& deviceContext,
-            ExperimentParameters const& experiment,
+            AseTraceControls const& experiment,
             double const betaVolumeTotal,
             unsigned const volumeCount,
             unsigned const vertexCount,
@@ -112,9 +112,9 @@ namespace hase::core
         MPI_Comm m_communicator;
         unsigned m_workerIndex = 0u;
         unsigned m_workerCount = 1u;
-        DeviceMeshView m_mesh;
+        hase::data::TraceView m_mesh;
         ForwardPhiAseDeviceContext<T_Device, T_Exec>& m_deviceContext;
-        ExperimentParameters const& m_experiment;
+        AseTraceControls const& m_experiment;
         double m_betaVolumeTotal;
         unsigned m_volumeCount;
         unsigned m_vertexCount;
@@ -232,7 +232,7 @@ namespace hase::core
                     MPI_UNSIGNED,
                     MPI_SUM,
                     policy.m_communicator);
-                global.raw.srmStatus = static_cast<SrmStatus>(globalStatus[0u]);
+                global.raw.srmStatus = static_cast<data::SrmStatus>(globalStatus[0u]);
                 global.raw.srmPasses = globalStatus[1u];
                 global.raw.srmMaxIterations = globalStatus[2u];
                 global.raw.srmDivergenceStreak = globalStatus[3u];
@@ -297,15 +297,9 @@ namespace hase::core
     {
         using T_Policy = MPIRank<T_Device, T_Exec>;
 
-        [[nodiscard]] static Result run(T_Policy& policy, FinalizeForwardAse const& item)
+        [[nodiscard]] static data::PhiAseResult run(T_Policy& policy, FinalizeForwardAse const& item)
         {
-            policy.m_deviceContext.uploadAndFinalize(
-                policy.m_mesh,
-                item.raw,
-                policy.m_betaVolumeTotal,
-                item.fluorescenceRate,
-                item.sigmaA,
-                item.sigmaE);
+            policy.m_deviceContext.uploadAndFinalize(policy.m_mesh, item.raw, policy.m_betaVolumeTotal);
             auto result = policy.m_deviceContext.downloadFinalizedResult(true, true, true, true);
             result.dndtAse = policy.m_deviceContext.downloadVolumeDndtAse();
             result.srmStatus = item.raw.srmStatus;

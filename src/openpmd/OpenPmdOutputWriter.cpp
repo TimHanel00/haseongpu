@@ -1,4 +1,4 @@
-#include <core/simulationRunControl.hpp>
+#include <core/SimulationControls.hpp>
 #include <openPMD/openPMD.hpp>
 #include <openpmd/OpenPmdOutputWriter.hpp>
 
@@ -65,11 +65,11 @@ namespace hase::internal::openpmd::output
         component.storeChunk(data, io::Offset{0u}, io::Extent{values.size()});
     }
 
-    void writeResultStatus(io::Iteration& iteration, std::string const& root, core::Result const& result)
+    void writeResultStatus(io::Iteration& iteration, std::string const& root, data::PhiAseResult const& result)
     {
         iteration.setAttribute(
             "hase__attribute__" + encodePath(root + "/srmStatus"),
-            std::string{core::toString(result.srmStatus)});
+            std::string{data::toString(result.srmStatus)});
         iteration.setAttribute("hase__attribute__" + encodePath(root + "/srmPasses"), result.srmPasses);
         iteration.setAttribute(
             "hase__attribute__" + encodePath(root + "/srmRemainingFraction"),
@@ -131,7 +131,7 @@ namespace hase::openpmd
     OutputWriter& OutputWriter::operator=(OutputWriter&&) noexcept = default;
     OutputWriter::~OutputWriter() = default;
 
-    void OutputWriter::writeResult(std::uint64_t iterationIndex, core::Result const& result)
+    void OutputWriter::writeResult(std::uint64_t iterationIndex, data::PhiAseResult const& result)
     {
         auto iteration = m_impl->series->snapshots()[iterationIndex];
         setRoot(iteration, "phiAseResult");
@@ -145,7 +145,7 @@ namespace hase::openpmd
         m_impl->series->flush();
     }
 
-    void OutputWriter::writeSnapshot(std::uint64_t iterationIndex, core::SimulationSnapshot const& snapshot)
+    void OutputWriter::writeSnapshot(std::uint64_t iterationIndex, data::SimulationSnapshot const& snapshot)
     {
         auto iteration = m_impl->series->snapshots()[iterationIndex];
         setRoot(iteration, "simulationSnapshot");

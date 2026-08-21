@@ -1,6 +1,6 @@
 #pragma once
 
-#include <backend/primitives/Simulation.hpp>
+#include <data/Simulation.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -16,7 +16,7 @@ namespace hase::openpmd
     struct TransportIteration
     {
         std::uint64_t index{};
-        backend::Simulation simulation;
+        data::Simulation simulation;
     };
 
     class InputSession
@@ -48,7 +48,7 @@ namespace hase::openpmd
         Parser(std::filesystem::path inputPath, MPI_Comm comm);
 #endif
 
-        [[nodiscard]] backend::Simulation read() const;
+        [[nodiscard]] data::Simulation read() const;
         [[nodiscard]] InputSession open() const;
 
     private:

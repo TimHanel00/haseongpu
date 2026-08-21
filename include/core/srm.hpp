@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include <core/types.hpp>
+#include <core/Runtime.hpp>
 
 #include <string_view>
 
@@ -21,10 +21,10 @@ namespace hase::core
 
     [[nodiscard]] unsigned positiveEnvironmentUnsigned(std::string_view name, unsigned fallback);
 
-    [[nodiscard]] SrmControls resolveSrmControls(ExperimentParameters const& experiment);
+    [[nodiscard]] SrmControls resolveSrmControls(AseTraceControls const& experiment);
 
     [[nodiscard]] bool srmDebugLoggingEnabled();
 
-    [[nodiscard]] unsigned srmStatusPriority(SrmStatus status);
+    [[nodiscard]] unsigned srmStatusPriority(data::SrmStatus status);
 
 } // namespace hase::core
