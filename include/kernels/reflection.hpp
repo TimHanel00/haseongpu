@@ -8,7 +8,7 @@
 #pragma once
 
 #include <core/mesh.hpp>
-#include <kernels/propagateRay.hpp>
+#include <kernels/forward/rayWalk.hpp>
 
 namespace hase::kernels::forward
 {
