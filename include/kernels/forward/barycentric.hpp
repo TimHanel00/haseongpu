@@ -19,6 +19,13 @@ namespace hase::kernels::forward
 {
     using BarycentricTet4 = std::array<double, 4u>;
 
+    /**
+     * @param a First Tet4 vertex.
+     * @param b Second Tet4 vertex.
+     * @param c Third Tet4 vertex.
+     * @param d Fourth Tet4 vertex.
+     * @return Six times the oriented tetrahedron volume.
+     */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC double signedTetVolume6(
         hase::core::Point const a,
         hase::core::Point const b,
@@ -28,6 +35,14 @@ namespace hase::kernels::forward
         return hase::core::dot(hase::core::cross(b - a, c - a), d - a);
     }
 
+    /**
+     * @param point Cartesian point to express in Tet4 coordinates.
+     * @param a First Tet4 vertex.
+     * @param b Second Tet4 vertex.
+     * @param c Third Tet4 vertex.
+     * @param d Fourth Tet4 vertex.
+     * @return Four affine barycentric coordinates, or equal weights for a degenerate Tet4.
+     */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC BarycentricTet4 barycentricCoordinates(
         hase::core::Point const point,
         hase::core::Point const a,
@@ -49,6 +64,12 @@ namespace hase::kernels::forward
             signedTetVolume6(a, b, c, point) * invDenominator};
     }
 
+    /**
+     * @param mesh Device trace containing Tet4 connectivity.
+     * @param tet Cell index of the Tet4.
+     * @param point Cartesian point to express.
+     * @return Four affine barycentric coordinates in local-vertex order.
+     */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC BarycentricTet4 barycentricCoordinates(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -62,6 +83,12 @@ namespace hase::kernels::forward
             mesh.getCellPoint(tet, 3u));
     }
 
+    /**
+     * @param mesh Device trace containing Tet4 connectivity.
+     * @param tet Cell index of the Tet4.
+     * @param point Cartesian contribution point.
+     * @return Non-negative vertex weights normalized to sum to one.
+     */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC BarycentricTet4 normalizedBarycentricVertexWeights(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -84,17 +111,29 @@ namespace hase::kernels::forward
         return weights;
     }
 
+    /**
+     * @param mesh Device trace containing Tet4 connectivity.
+     * @param tet Cell index of the traversed Tet4.
+     * @param position Segment origin.
+     * @param direction Unit segment direction.
+     * @param length Segment length.
+     * @return Normalized barycentric weights at the segment midpoint.
+     */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC BarycentricTet4 segmentMidpointBarycentricVertexWeights(
-        hase::data::TraceView const& mesh,
+        data::TraceView const& mesh,
         unsigned const tet,
-        hase::core::Point const position,
-        hase::core::Point const direction,
+        core::Point const position,
+        core::Point const direction,
         double const length)
     {
         auto const midpoint = position + direction * (0.5 * length);
         return normalizedBarycentricVertexWeights(mesh, tet, midpoint);
     }
 
+    /**
+     * @param barycentric Four Tet4 barycentric coordinates.
+     * @return Linearized proximity to the Tet4 center, clamped to `[0, 1]`.
+     */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC double centerProximityWeight(BarycentricTet4 const& barycentric)
     {
         double distanceSquared = 0.0;

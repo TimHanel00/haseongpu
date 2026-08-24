@@ -19,12 +19,14 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <stdexcept>
 #include <vector>
 
 namespace hase::core
 {
+    /** @brief Multiply excitation fraction by cell volume for a device reduction. */
     struct BetaVolumeContribution
     {
         constexpr auto operator()(alpaka::concepts::Simd auto const& beta, alpaka::concepts::Simd auto const& volume)
@@ -34,17 +36,48 @@ namespace hase::core
         }
     };
 
+    /**
+     * @brief Allocate zero-initialized host accumulators for a forward trace.
+     * @param volumeCount Number of cells represented by volume accumulators.
+     * @param vertexCount Number of material-vertex accumulation entries per batch.
+     * @param batchCount Number of independent RSE batches.
+     * @return Raw result with consistently sized, zero-filled arrays.
+     */
     [[nodiscard]] ForwardPhiAseRawResult makeForwardRawResult(
         unsigned volumeCount,
         unsigned vertexCount,
         unsigned batchCount = kernels::forward::defaultForwardRseBatchCount);
 
+    /**
+     * @param trace Prepared host trace containing the cumulative source-strength prefix.
+     * @return Total spontaneous source strength, or zero for an empty trace.
+     */
     [[nodiscard]] double calcForwardSourceStrengthTotal(hase::data::TraceData const& trace);
 
+    /**
+     * @brief Add one raw batch result into a compatible aggregate.
+     * @param target Aggregate updated in place.
+     * @param source Raw accumulators and counters to add.
+     * @throws std::invalid_argument If the accumulator layouts differ.
+     */
     void mergeForwardRawResult(ForwardPhiAseRawResult& target, ForwardPhiAseRawResult const& source);
 
+    /**
+     * @param scoreSum Sum of per-ray scores for one cell.
+     * @param scoreSquareSum Sum of squared per-ray scores for the same cell.
+     * @param rayCount Number of histories represented by the moments.
+     * @return Relative standard error, or infinity when it is undefined.
+     */
     [[nodiscard]] double calcForwardRelativeStandardError(double scoreSum, double scoreSquareSum, unsigned rayCount);
 
+    /**
+     * @param scoreSum Sum of per-ray scores for one cell.
+     * @param scoreSquareSum Sum of squared per-ray scores for the same cell.
+     * @param rayCount Number of histories represented by the moments.
+     * @param normalizationVolume Total excited-volume normalization.
+     * @param volumeSize Physical volume of the receiving cell.
+     * @return Absolute standard error after physical normalization.
+     */
     [[nodiscard]] double calcForwardStandardError(
         double scoreSum,
         double scoreSquareSum,
@@ -52,56 +85,74 @@ namespace hase::core
         double normalizationVolume,
         double volumeSize);
 
+    /**
+     * @brief Normalize raw accumulators using the source total stored in `hostMesh`.
+     * @param hostMesh Prepared geometry, material, and excitation data.
+     * @param rawResult Unnormalized batch accumulators.
+     * @param result Final cell-ordered values replaced in place.
+     */
     void finalizeForwardPhiAse(
         hase::data::TraceData const& hostMesh,
         ForwardPhiAseRawResult const& rawResult,
         data::PhiAseResult& result);
 
+    /**
+     * @brief Normalize raw accumulators with an explicitly supplied source total.
+     * @param hostMesh Prepared geometry and material data.
+     * @param rawResult Unnormalized batch accumulators.
+     * @param betaVolumeTotal Total excitation-volume normalization.
+     * @param result Final cell-ordered values replaced in place.
+     */
     void finalizeForwardPhiAse(
         hase::data::TraceData const& hostMesh,
         ForwardPhiAseRawResult const& rawResult,
         double betaVolumeTotal,
         data::PhiAseResult& result);
 
-    template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
+    /** @brief Persistent device allocations and queue for one forward ASE worker. */
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     class ForwardPhiAseDeviceContext
     {
         using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::nonBlocking));
         using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1}));
         using T_FloatBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<float>(std::declval<T_Device&>(), std::size_t{1}));
         using T_UnsignedBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), std::size_t{1}));
-        using T_CharBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), std::size_t{1}));
-        using T_RseBatchRayCounts = hase::alpakaUtils::GetHybridBuffer_t<T_Device, std::vector<unsigned>>;
-        using T_BetaVolumeTotal = hase::alpakaUtils::GetHybridBuffer_t<T_Device, std::array<double, 1u>>;
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::size_t{1}));
+        using T_ByteBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), std::size_t{1}));
+        using T_RseBatchRayCountsBuffer = alpakaUtils::GetHybridBuffer_t<T_Device, std::vector<std::uint32_t>>;
+        using T_BetaVolumeTotalBuffer = alpakaUtils::GetHybridBuffer_t<T_Device, std::array<double, 1u>>;
 
     public:
+        /**
+         * @param device Device that owns all persistent buffers and the internal queue.
+         * @param executor Executor used for trace, reduction, and finalization kernels.
+         * @param experiment Controls used to size optional reflection storage.
+         * @param hostMesh Prepared trace whose dimensions determine buffer extents.
+         */
         ForwardPhiAseDeviceContext(
             T_Device const& device,
             T_Exec const& executor,
             AseTraceControls const& experiment,
-            hase::data::TraceData const& hostMesh)
+            data::TraceData const& hostMesh)
             : m_devBundle(device, executor)
             , m_queue(m_devBundle.device.makeQueue(alpaka::queueKind::nonBlocking))
-            , m_rseBatchRayCounts(hase::kernels::forward::defaultForwardRseBatchCount, 0u)
-            , m_rseBatchRayCountsBuffer(hase::alpakaUtils::getHybridBuffer(m_devBundle.device, m_rseBatchRayCounts))
+            , m_rseBatchRayCounts(kernels::forward::defaultForwardRseBatchCount, 0u)
+            , m_rseBatchRayCountsBuffer(alpakaUtils::getHybridBuffer(m_devBundle.device, m_rseBatchRayCounts))
             , m_sourceStrengthTotalHost{}
-            , m_sourceStrengthTotal(hase::alpakaUtils::getHybridBuffer(m_devBundle.device, m_sourceStrengthTotalHost))
+            , m_sourceStrengthTotal(alpakaUtils::getHybridBuffer(m_devBundle.device, m_sourceStrengthTotalHost))
             , m_vertexBatchScoreSum(
                   alpaka::onHost::alloc<double>(
                       m_devBundle.device,
                       hase::kernels::forward::defaultForwardRseBatchCount * hostMesh.numberOfMaterials
                           * static_cast<std::size_t>(hostMesh.numberOfMeshPoints)))
             , m_volumeRayVisits(
-                  alpaka::onHost::alloc<unsigned>(
+                  alpaka::onHost::alloc<std::uint32_t>(
                       m_devBundle.device,
                       static_cast<std::size_t>(hostMesh.numberOfCells)))
             , m_droppedRays(
-                  alpaka::onHost::alloc<unsigned>(
+                  alpaka::onHost::alloc<std::uint32_t>(
                       m_devBundle.device,
                       static_cast<std::size_t>(hostMesh.numberOfCells)))
-            , m_lumpedMaterialVertexVolume(
-                  hase::alpakaUtils::toDevice(m_queue, hase::kernels::makeLumpedMaterialVertexVolumes(hostMesh)))
             , m_volumePhiAse(
                   alpaka::onHost::alloc<float>(m_devBundle.device, static_cast<std::size_t>(hostMesh.numberOfCells)))
             , m_standardError(
@@ -109,8 +160,6 @@ namespace hase::core
             , m_relativeStandardError(
                   alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(hostMesh.numberOfCells)))
             , m_volumeDndtAse(
-                  alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(hostMesh.numberOfCells)))
-            , m_sourceStrengthWeights(
                   alpaka::onHost::alloc<double>(m_devBundle.device, static_cast<std::size_t>(hostMesh.numberOfCells)))
             , m_sourceStrengthPrefixScanBuffer(
                   alpaka::onHost::alloc<char>(
@@ -123,15 +172,16 @@ namespace hase::core
         {
             if(experiment.useReflections)
             {
-                m_srmWorkspace = std::make_unique<ForwardSrmWorkspace<T_Device>>(
+                m_srmScratch = std::make_unique<ReflectionResamplingScratch<T_Device>>(
                     m_devBundle.device,
-                    m_volumeCount * hase::data::tet4FaceCount,
-                    experiment.surfaceReservoirSize,
                     std::max(experiment.maxRays, experiment.resolvedForwardRayCount()));
             }
         }
 
-        /** @brief Resize persistent batch accumulation storage for a worker group. */
+        /**
+         * @brief Resize persistent batch accumulation storage for a worker group.
+         * @param batchCount Positive number of independent statistical batches.
+         */
         void configureBatchCount(unsigned const batchCount)
         {
             if(batchCount == 0u)
@@ -147,6 +197,16 @@ namespace hase::core
             m_rseBatchRayCountsBuffer = hase::alpakaUtils::getHybridBuffer(m_devBundle.device, m_rseBatchRayCounts);
         }
 
+        /**
+         * @brief Reset or extend accumulators and enqueue one forward-ray batch.
+         * @param mesh Device-resident trace view.
+         * @param rayCount Number of histories in this launch.
+         * @param rngSeed Seed for this adaptive launch.
+         * @param rseBatch Statistical batch receiving the scores.
+         * @param betaVolumeTotal Current total excitation-volume normalization.
+         * @param experiment Trace and reflection controls.
+         * @param resetAccumulators Whether to clear results before this launch.
+         */
         void begin(
             hase::data::TraceView const mesh,
             unsigned rayCount,
@@ -197,8 +257,8 @@ namespace hase::core
             m_srmResult.rayCount = rayCount;
             if(experiment.useReflections)
             {
-                if(!m_srmWorkspace)
-                    throw std::runtime_error("persistent forward SRM workspace was not initialized");
+                if(!m_srmScratch)
+                    throw std::runtime_error("reflection resampling scratch was not initialized");
                 auto const controls = resolveSrmControls(experiment);
                 m_srmResult.srmMaxIterations = controls.maxIterations;
                 m_srmResult.srmDivergenceStreak = controls.divergenceStreak;
@@ -216,7 +276,7 @@ namespace hase::core
                     m_droppedRays,
                     rngSeed,
                     controls,
-                    *m_srmWorkspace);
+                    *m_srmScratch);
             }
             else
             {
@@ -234,6 +294,12 @@ namespace hase::core
             }
         }
 
+        /**
+         * @brief Wait for the current launch and optionally download raw accumulators.
+         * @param result Host result replaced with current counters and SRM metadata.
+         * @param runtime Wall-clock seconds since `begin`, replaced on return.
+         * @param downloadAccumulators Whether to copy score, visit, and dropped-ray arrays.
+         */
         void finish(ForwardPhiAseRawResult& result, float& runtime, bool downloadAccumulators = true)
         {
             result = makeForwardRawResult(m_volumeCount, m_materialVertexCount, m_batchCount);
@@ -260,6 +326,17 @@ namespace hase::core
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - m_started).count());
         }
 
+        /**
+         * @brief Enqueue and finish one independently reset statistical batch.
+         * @param mesh Device-resident trace view.
+         * @param result Downloaded raw result.
+         * @param runtime Measured wall-clock seconds.
+         * @param rayCount Number of histories to trace.
+         * @param rngSeed Adaptive-launch seed.
+         * @param rseBatch Statistical batch index.
+         * @param betaVolumeTotal Current total excitation-volume normalization.
+         * @param experiment Trace and reflection controls.
+         */
         void evaluate(
             hase::data::TraceView const mesh,
             ForwardPhiAseRawResult& result,
@@ -274,6 +351,12 @@ namespace hase::core
             finish(result, runtime);
         }
 
+        /**
+         * @brief Normalize resident raw accumulators into cell result buffers.
+         * @param mesh Device-resident trace view.
+         * @param rayCount Total histories represented by the raw accumulators.
+         * @param sourceStrengthTotal Total source-strength normalization.
+         */
         void finalizeCellPhiAse(hase::data::TraceView const mesh, unsigned rayCount, double sourceStrengthTotal)
         {
             m_rseBatchRayCountsBuffer.toDevice(m_queue);
@@ -283,7 +366,6 @@ namespace hase::core
                 mesh,
                 m_vertexBatchScoreSum,
                 m_rseBatchRayCountsBuffer.toDeviceView(),
-                m_lumpedMaterialVertexVolume,
                 m_droppedRays,
                 m_volumePhiAse,
                 m_standardError,
@@ -301,6 +383,9 @@ namespace hase::core
          * This is the explicit host/device boundary after a thread or MPI
          * gather. Normalization, RSE evaluation, and ASE derivative generation
          * remain device-side.
+         * @param mesh Device-resident trace view used for finalization.
+         * @param rawResult Gathered host accumulators to upload.
+         * @param sourceStrengthTotal Total source-strength normalization.
          */
         void uploadAndFinalize(
             hase::data::TraceView const mesh,
@@ -319,7 +404,15 @@ namespace hase::core
             finalizeCellPhiAse(mesh, rawResult.rayCount, sourceStrengthTotal);
         }
 
-        double rebuildSourceStrengthPrefix(hase::data::ResidentTrace<T_Device>& meshContainer, auto const& betaVolume)
+        /**
+         * @brief Rebuild the resident cumulative source-strength array from excitation.
+         * @param meshContainer Owning resident trace whose prefix buffer is updated.
+         * @param betaVolume Current cell excitation view on the same device.
+         * @return Total source strength copied back to the host.
+         */
+        double rebuildSourceStrengthPrefix(
+            hase::data::ResidentTrace<T_Device>& meshContainer,
+            alpaka::concepts::IView<double> auto const& betaVolume)
         {
             auto mesh = meshContainer.view();
             mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getExtents().x());
@@ -329,20 +422,19 @@ namespace hase::core
             }
             else
             {
+                auto sourceStrengthPrefix = meshContainer.sourceStrengthPrefix.toDeviceView();
                 auto const cellFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
                     m_devBundle.device,
                     m_devBundle.executor,
                     alpaka::Vec{mesh.numberOfCells});
                 m_queue.enqueue(
                     cellFrameSpec,
-                    alpaka::KernelBundle{hase::kernels::BuildSourceStrengthWeights{}, mesh, m_sourceStrengthWeights});
-                auto sourceStrengthPrefix = meshContainer.sourceStrengthPrefix.toDeviceView();
-                alpaka::onHost::inclusiveScan(
+                    alpaka::KernelBundle{hase::kernels::BuildSourceStrengthWeights{}, mesh, sourceStrengthPrefix});
+                alpaka::onHost::inclusiveScanInPlace(
                     m_queue,
                     m_devBundle.executor,
                     m_sourceStrengthPrefixScanBuffer,
-                    sourceStrengthPrefix,
-                    m_sourceStrengthWeights);
+                    sourceStrengthPrefix);
                 auto const scalarFrameSpec
                     = alpaka::onHost::getFrameSpec(m_devBundle.device, m_devBundle.executor, alpaka::Vec{1u});
                 m_queue.enqueue(
@@ -357,6 +449,7 @@ namespace hase::core
             return m_sourceStrengthTotal.getHostView()[0u];
         }
 
+        /** @return Cell-ordered ASE population derivative after waiting for its download. */
         std::vector<double> downloadVolumeDndtAse()
         {
             std::vector<double> result(m_volumeCount, 0.0);
@@ -365,6 +458,13 @@ namespace hase::core
             return result;
         }
 
+        /**
+         * @param includePhiAse Whether to download ASE flux.
+         * @param includeStandardError Whether to download absolute standard error.
+         * @param includeRelativeStandardError Whether to download relative standard error.
+         * @param includeTotalRays Whether to download visit and dropped-ray counters.
+         * @return Finalized result containing only requested arrays.
+         */
         data::PhiAseResult downloadFinalizedResult(
             bool includePhiAse,
             bool includeStandardError,
@@ -398,11 +498,13 @@ namespace hase::core
             return result;
         }
 
+        /** @return Owning device buffer containing finalized cell ASE flux. */
         [[nodiscard]] auto& volumePhiAse()
         {
             return m_volumePhiAse;
         }
 
+        /** @return Owning device buffer containing the cell ASE population derivative. */
         [[nodiscard]] auto& volumeDndtAse()
         {
             return m_volumeDndtAse;
@@ -411,21 +513,19 @@ namespace hase::core
     private:
         hase::alpakaUtils::DevBundle<T_Device, T_Exec> m_devBundle;
         T_Queue m_queue;
-        std::vector<unsigned> m_rseBatchRayCounts;
-        T_RseBatchRayCounts m_rseBatchRayCountsBuffer;
+        std::vector<std::uint32_t> m_rseBatchRayCounts;
+        T_RseBatchRayCountsBuffer m_rseBatchRayCountsBuffer;
         std::array<double, 1u> m_sourceStrengthTotalHost;
-        T_BetaVolumeTotal m_sourceStrengthTotal;
+        T_BetaVolumeTotalBuffer m_sourceStrengthTotal;
         T_DoubleBuffer m_vertexBatchScoreSum;
         T_UnsignedBuffer m_volumeRayVisits;
         T_UnsignedBuffer m_droppedRays;
-        T_DoubleBuffer m_lumpedMaterialVertexVolume;
         T_FloatBuffer m_volumePhiAse;
         T_DoubleBuffer m_standardError;
         T_DoubleBuffer m_relativeStandardError;
         T_DoubleBuffer m_volumeDndtAse;
-        T_DoubleBuffer m_sourceStrengthWeights;
-        T_CharBuffer m_sourceStrengthPrefixScanBuffer;
-        std::unique_ptr<ForwardSrmWorkspace<T_Device>> m_srmWorkspace;
+        T_ByteBuffer m_sourceStrengthPrefixScanBuffer;
+        std::unique_ptr<ReflectionResamplingScratch<T_Device>> m_srmScratch;
         ForwardPhiAseRawResult m_srmResult;
         unsigned m_volumeCount;
         unsigned m_materialVertexCount;

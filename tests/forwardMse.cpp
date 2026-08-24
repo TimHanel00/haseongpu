@@ -6,7 +6,9 @@
 #include <core/haseWorker.hpp>
 #include <kernels/forward/rayTransition.hpp>
 #include <kernels/forward/rayWalk.hpp>
+#include <kernels/forward/reflectionResampling.hpp>
 #include <kernels/forward/volumeSampling.hpp>
+#include <random/randomEngine.hpp>
 
 #include <algorithm>
 #include <array>
@@ -465,12 +467,40 @@ TEST_CASE("forward random histories are separated by ray, pass, and sampling dom
     CHECK(rayHistoryId(1u, 7u) != surfaceSamplingHistoryId(1u));
 
     constexpr unsigned seed = 1234u;
-    auto first = alpaka::rand::engine::Philox4x32x10{seed, rayHistoryId(3u, 11u)};
-    auto repeated = alpaka::rand::engine::Philox4x32x10{seed, rayHistoryId(3u, 11u)};
-    auto otherRay = alpaka::rand::engine::Philox4x32x10{seed, rayHistoryId(3u, 12u)};
+    auto first = hase::random::makeRandomEngine(seed, rayHistoryId(3u, 11u));
+    auto repeated = hase::random::makeRandomEngine(seed, rayHistoryId(3u, 11u));
+    auto otherRay = hase::random::makeRandomEngine(seed, rayHistoryId(3u, 12u));
 
     CHECK(first() == repeated());
     CHECK(first() != otherRay());
+}
+
+TEST_CASE("reflected histories use exact systematic weighted resampling", "[forward][reflection][sampling]")
+{
+    using hase::kernels::forward::reflectionCandidateIndex;
+
+    constexpr std::array<double, 2u> cdf{9.0, 10.0};
+    std::array<unsigned, 2u> selected{};
+    for(unsigned ray = 0u; ray < 10u; ++ray)
+        ++selected[reflectionCandidateIndex(cdf, cdf.size(), cdf.back(), ray, 10u, 0.5)];
+
+    CHECK(selected == std::array<unsigned, 2u>{9u, 1u});
+    CHECK(reflectionCandidateIndex(cdf, cdf.size(), cdf.back(), 0u, 10u, 0.5) == 0u);
+    CHECK(reflectionCandidateIndex(cdf, cdf.size(), cdf.back(), 8u, 10u, 0.5) == 0u);
+    CHECK(reflectionCandidateIndex(cdf, cdf.size(), cdf.back(), 9u, 10u, 0.5) == 1u);
+}
+
+TEST_CASE("reflection resampling offset depends only on seed and pass", "[forward][reflection][sampling]")
+{
+    using hase::kernels::forward::reflectionResamplingOffset;
+
+    constexpr unsigned seed = 5489u;
+    double const first = reflectionResamplingOffset(seed, 3u);
+    CHECK(first > 0.0);
+    CHECK(first < 1.0);
+    CHECK(first == reflectionResamplingOffset(seed, 3u));
+    CHECK(first != reflectionResamplingOffset(seed + 1u, 3u));
+    CHECK(first != reflectionResamplingOffset(seed, 4u));
 }
 
 TEST_CASE("forward Tet4 face planes are barycentric", "[forward][traversal]")

@@ -118,7 +118,7 @@ def constructExplicitSphereTopology(radius, *, samplePoints=None, meshSizeDiviso
             if surfaces:
                 gmshApi.model.addPhysicalGroup(2, surfaces, 2)
                 gmshApi.model.setPhysicalName(2, 2, "outer")
-            meshSize = max(float(radius) / float(meshSizeDivisor), 1.0e-3)
+            meshSize = max(float(radius) / float(meshSizeDivisor), 1.0e-5)
             gmshApi.option.setNumber("Mesh.CharacteristicLengthMin", meshSize)
             gmshApi.option.setNumber("Mesh.CharacteristicLengthMax", meshSize)
             gmshApi.model.mesh.generate(3)
@@ -149,14 +149,14 @@ def centeredVolumeIndex(topology, radius):
     return centerVolume
 
 
-nTot = np.float64(1.38e20 * 1.0)
-sigmaA = np.float64(0.11e-20)
-sigmaE = np.float64(2.1e-20)
+nTot = np.float64(1.38e26)
+sigmaA = np.float64(0.11e-24)
+sigmaE = np.float64(2.1e-24)
 sphereCases = [
-    (np.float64(radiusValue), np.float64(g0Value / 100))
-    for radiusValue in np.geomspace(0.1, 100, num=8)
-    for g0Value in np.geomspace(5, 400, num=8)
-    if 5.0 >= np.float64(radiusValue) * np.float64(g0Value / 100) >= 1.0 >= calcBetaFromGain(g0Value / 100, nTot, sigmaA, sigmaE) >= 0.0
+    (np.float64(radiusValue), np.float64(gainValue))
+    for radiusValue in np.geomspace(0.001, 1.0, num=8)
+    for gainValue in np.geomspace(5, 400, num=8)
+    if 5.0 >= np.float64(radiusValue) * np.float64(gainValue) >= 1.0 >= calcBetaFromGain(gainValue, nTot, sigmaA, sigmaE) >= 0.0
 ]
 
 
@@ -189,9 +189,9 @@ def testForwardSphereCenterVolumeMatchesAnalyticalSolution(radius, gain, openpmd
     if backend == _NO_ANALYTICAL_SPHERE_BACKEND:
         pytest.fail("analytical sphere test requires at least one Alpaka backend")
 
-    nTot = np.float64(1.38e20)
-    sigmaA = np.float64(0.11e-20)
-    sigmaE = np.float64(2.1e-20)
+    nTot = np.float64(1.38e26)
+    sigmaA = np.float64(0.11e-24)
+    sigmaE = np.float64(2.1e-24)
     beta = calcBetaFromGain(gain, nTot, sigmaA=sigmaA, sigmaE=sigmaE)
     flourescenceLifetime = np.float64(9.41e-4)
     topology = constructExplicitSphereTopology(radius, meshSizeDivisor=analyticalSphereMeshSizeDivisor())
@@ -205,11 +205,11 @@ def testForwardSphereCenterVolumeMatchesAnalyticalSolution(radius, gain, openpmd
         fluorescenceLifetime=flourescenceLifetime * units.s,
         crossSections=CrossSectionTable.monochromatic(
             wavelength=np.float64(1030e-9) * units.m,
-            absorption=sigmaA * units.cm**2,
-            emission=sigmaE * units.cm**2,
+            absorption=sigmaA * units.m**2,
+            emission=sigmaE * units.m**2,
         ),
         active=True,
-        activeIonDensity=nTot / units.cm**3,
+        activeIonDensity=nTot / units.m**3,
     )
     component = OpticalComponent(domain=Domain.fromTopology(topology), material=material)
     medium = GainMedium([component])

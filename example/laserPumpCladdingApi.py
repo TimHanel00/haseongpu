@@ -192,7 +192,6 @@ def buildSimulation(
         "useReflections": True,
         "reflectionMaxIterations": 40,
         "reflectionTolerance": 1.0e-4,
-        "surfaceReservoirSize": 32,
         "monochromatic": False,
         "backend": backend,
         "openpmdBackend": openpmdBackend,
@@ -204,8 +203,8 @@ def buildSimulation(
     phiAseParameters.update(aseOverrides)
 
     pumpProfile = SuperGaussianPumpProfile(
-        radius_u=1.5,
-        radius_v=1.5,
+        radius_u=0.015,
+        radius_v=0.015,
         exponent=40,
     )
     profileArea = integrate_pump_profile(
@@ -214,7 +213,7 @@ def buildSimulation(
         pumpProfile,
     )
     pump = Pump(
-        total_power=16e3 * profileArea,
+        total_power=1.6e8 * profileArea,
         spectrum=PumpSpectrum.monochromatic(940e-9),
         ray_count=pumpRayCount,
         pump_steps=pumpSteps,
@@ -323,7 +322,10 @@ def writeVtkFields(
             * np.float64(bulkAttenuation)
             * claddingMask
         ),
-        "localGain": calcGainFromState(state, crossSections, nTot),
+        # calcGainFromState consumes cross sections in cm^2 and density in cm^-3;
+        # VTK coordinates are SI, so export local gain in m^-1.
+        "localGain": calcGainFromState(state, crossSections, nTot)
+        * (units.cm**-1).unitSI,
     }
     path = Path(vtkOutputDir) / f"laserPumpCladding_{state.step:03d}.vtk"
     if hasattr(state.topology, "cellPointIndices"):

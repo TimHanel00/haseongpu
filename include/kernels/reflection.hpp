@@ -15,8 +15,15 @@ namespace hase::kernels::forward
     /**
      * @brief Return the SRM reflection weight for an outward boundary hit.
      *
-     * The forward surface-reservoir method relaunches reflected rays from
+     * The forward surface-resampling method relaunches reflected rays from
      * this boundary and continues along the reflected forward direction.
+     * @param mesh Trace view containing boundary optics and material indices.
+     * @param tet Incident cell index.
+     * @param localFace Cell-local boundary face index.
+     * @param direction Incident ray direction.
+     * @param outwardNormal Unit face normal pointing out of `tet`.
+     * @return One for total internal reflection, otherwise the non-negative
+     * configured constant reflectivity; zero for a non-boundary face.
      */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC double boundaryReflectance(
         hase::data::TraceView const& mesh,

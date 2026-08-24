@@ -24,7 +24,6 @@ namespace hase::data
             static constexpr char const* useReflections = "useReflections";
             static constexpr char const* reflectionMaxIterations = "reflectionMaxIterations";
             static constexpr char const* reflectionTolerance = "reflectionTolerance";
-            static constexpr char const* surfaceReservoirSize = "surfaceReservoirSize";
             static constexpr char const* monochromatic = "monochromatic";
             static constexpr char const* backend = "backend";
             static constexpr char const* parallelMode = "parallelMode";
@@ -47,7 +46,6 @@ namespace hase::data
         bool useReflections{};
         std::uint64_t reflectionMaxIterations{};
         double reflectionTolerance{};
-        std::uint64_t surfaceReservoirSize{};
         bool monochromatic{};
         std::optional<std::string> backend;
         std::string parallelMode;
@@ -59,6 +57,12 @@ namespace hase::data
         std::optional<std::uint64_t> rngSeed;
         std::optional<std::uint64_t> aseSteps;
 
+        /**
+         * @brief Read user-facing ASE controls from one graph node.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the PhiASE node.
+         * @return Transported ASE controls without execution preparation.
+         */
         static PhiAse fromTransport(transport::TransportReader const& reader, transport::TransportPath const& prefix);
     };
 } // namespace hase::data

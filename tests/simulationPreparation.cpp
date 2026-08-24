@@ -77,7 +77,6 @@ TEST_CASE("simulation preparation builds material-local trace data", "[transport
     phiAse->adaptiveSteps = 3u;
     phiAse->reflectionMaxIterations = 40u;
     phiAse->reflectionTolerance = 1.0e-4;
-    phiAse->surfaceReservoirSize = 32u;
     phiAse->backend = "test-backend";
     phiAse->parallelMode = "single";
     phiAse->numDevices = 1u;
@@ -204,7 +203,6 @@ TEST_CASE(
     phiAse->adaptiveSteps = 0u;
     phiAse->reflectionMaxIterations = 40u;
     phiAse->reflectionTolerance = 1.0e-4;
-    phiAse->surfaceReservoirSize = 32u;
     phiAse->backend = "test-backend";
     phiAse->parallelMode = "single";
     phiAse->numDevices = 1u;

@@ -386,7 +386,7 @@ namespace hase::data
             Point const b,
             Point const c,
             Point const d,
-            alpaka::rand::engine::Philox4x32x10& rndEngine) const
+            alpaka::rand::concepts::UniformRandomEngine auto& rndEngine) const
         {
             double r0 = alpaka::rand::distribution::UniformReal<double>{}(rndEngine);
             double r1 = alpaka::rand::distribution::UniformReal<double>{}(rndEngine);
@@ -409,7 +409,7 @@ namespace hase::data
         ALPAKA_FN_ACC Point genRndPointInCell(
             Point& origin,
             unsigned cell,
-            alpaka::rand::engine::Philox4x32x10& rndEngine) const
+            alpaka::rand::concepts::UniformRandomEngine auto& rndEngine) const
         {
             Point const p0 = getCellPoint(cell, 0u);
             Point const p1 = getCellPoint(cell, 1u);

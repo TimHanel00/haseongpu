@@ -15,7 +15,7 @@ import warnings
 
 
 import numpy as np
-from ..openpmd import BackendFlatArray, FieldSpec, GroupFieldSpec, PrimitiveSchema, PrimitiveSchemaDefinition, schemaFields
+from ..fields import BackendFlatArray, FieldSpec
 from .domains import DomainMap, SurfaceOptics, _coerceOptics, surfaceOpticsArrays
 from .msh import Gmsh
 from .vtk import gainMediumFromVtk, writeGainMediumVtk
@@ -295,10 +295,6 @@ class PrimitiveElement:
     def getFields(self):
         return [PrimitiveElementField(self, name) for name in self._view.keys()]
 
-    def _applyGroup(self, group):
-        self._view._applyGroup(self.index, group)
-
-
 _MISSING_FIELD_VALUE = object()
 
 
@@ -330,7 +326,6 @@ class PrimitiveView:
         self.shape = tuple(shape)
         self._fields = dict(fields)
         self._metadata = dict(metadata or {})
-        self._groupAssignments = {}
 
     def keys(self):
         return self._fields.keys()
@@ -344,43 +339,6 @@ class PrimitiveView:
 
     def get(self, name):
         return self._fields[name]
-
-
-    def _applyGroup(self, index, group):
-        for spec, value in group.fieldItems():
-            self._assignGroupField(index, group, spec, value)
-
-    def _assignGroupField(self, index, group, spec: GroupFieldSpec, value):
-        name = spec.target
-        assignments = self._groupAssignments.setdefault(name, {})
-        existing = assignments.get(tuple(index))
-        if existing is not None and existing is not group._groupToken:
-            raise ValueError(
-                f"{self.name} element {tuple(index)} already belongs to a group assigning field '{name}'"
-            )
-
-        arr_value = np.asarray(value, dtype=spec.dtype)
-        if name not in self._fields:
-            field_shape = self.shape + tuple(arr_value.shape)
-            self._fields[name] = np.zeros(field_shape, dtype=np.dtype(spec.dtype))
-            self._metadata[name] = {
-                "name": name,
-                "entity": self.name,
-                "axes": (self.name,),
-                "dtype": str(np.dtype(spec.dtype)),
-                "unit": spec.unit,
-                "shape": field_shape,
-                "isSet": True,
-            }
-
-        field = self._fields[name]
-        expected = field[tuple(index)].shape if hasattr(field[tuple(index)], "shape") else ()
-        if tuple(arr_value.shape) != tuple(expected):
-            raise ValueError(
-                f"group field '{name}' value has shape {arr_value.shape}, expected {expected} for {self.name} element"
-            )
-        field[tuple(index)] = arr_value
-        assignments[tuple(index)] = group._groupToken
 
     def asDict(self):
         return dict(self._fields)
@@ -1253,43 +1211,6 @@ class GainMedium:
             userDefined=True,
         )
         return self._storeCustomField(spec, values)
-
-    def withPrimitiveSchema(self, schema, **values):
-        for spec in self._schemaFieldSpecs(schema):
-            if spec.name in schemaFields and not spec.userDefined:
-                continue
-            field_spec = self._asUserFieldSpec(spec)
-            value = values.get(spec.name)
-            if value is None:
-                value = np.zeros(field_spec.expectedShape(self._fieldContext()), dtype=field_spec.dtypeObject)
-            self._storeCustomField(field_spec, value)
-        return self
-
-    def _schemaFieldSpecs(self, schema):
-        if isinstance(schema, PrimitiveSchema):
-            return schema.fieldSpecs()
-        if isinstance(schema, type) and issubclass(schema, PrimitiveSchemaDefinition):
-            return schema.fieldSpecs()
-        if hasattr(schema, "fieldSpecs"):
-            return schema.fieldSpecs()
-        raise TypeError("schema must be a Python PrimitiveSchema or PrimitiveSchemaDefinition subclass")
-
-    def _asUserFieldSpec(self, spec):
-        primitive_shape = spec.expectedShape(self._fieldContext())
-        return FieldSpec(
-            name=spec.name,
-            recordName=spec.recordName,
-            axes=spec.axes,
-            dtype=spec.dtypeObject,
-            shape=lambda _context, shape=primitive_shape: shape,
-            unit=spec.unit,
-            unitSI=spec.unitSI,
-            unitDimension=spec.unitDimension,
-            dynamic=spec.dynamic,
-            backendRequired=spec.backendRequired,
-            userDefined=True,
-            schemaRole=spec.schemaRole,
-        )
 
     def _fieldContext(self):
         if hasattr(self.topology, "cellPointIndices"):

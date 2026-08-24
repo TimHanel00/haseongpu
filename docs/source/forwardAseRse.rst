@@ -46,7 +46,6 @@ Limitations
 -----------
 
 RSE measures Monte Carlo sampling uncertainty. It does not measure mesh
-discretization error, uncertainty in material data, or model error. For
-reflected ASE, the batches share the surface reflection reservoir, so the
-reported RSE does not independently resample uncertainty introduced while
-constructing that reservoir.
+discretization error, uncertainty in material data, or model error. Reflected
+ASE resamples the complete ray-indexed boundary-candidate distribution within
+each statistical batch, so this uncertainty contributes to the batch estimate.

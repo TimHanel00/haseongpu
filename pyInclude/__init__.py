@@ -14,18 +14,8 @@ _activate_openpmd_python_provider()
 del _activate_openpmd_python_provider
 
 from .alpakaUtils import AlpakaBackends
-from .openpmd import (
-    BaseGroup,
-    BaseSchema,
-    GroupFieldSpec,
-    OpenPmdBackends,
-    PointSchema,
-    PrimitiveFieldSpec,
-    PrismSchema,
-    TriangleSchema,
-    backendFlat,
-    unitDimension,
-)
+from .openpmd import OpenPmdBackends
+from .fields import backendFlat
 from .geometry import (
     DomainMap,
     Gmsh,

@@ -63,7 +63,7 @@ namespace hase::kernels::forward
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeByVolume(
         hase::data::TraceView const& mesh,
         double const totalVolume,
-        alpaka::rand::engine::Philox4x32x10& rndEngine)
+        alpaka::rand::concepts::UniformRandomEngine auto& rndEngine)
     {
         if(mesh.numberOfCells == 0u)
         {
@@ -138,7 +138,7 @@ namespace hase::kernels::forward
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeBySourceStrength(
         hase::data::TraceView const& mesh,
         double const sourceStrengthTotal,
-        alpaka::rand::engine::Philox4x32x10& rndEngine)
+        alpaka::rand::concepts::UniformRandomEngine auto& rndEngine)
     {
         if(mesh.numberOfCells == 0u || sourceStrengthTotal <= 0.0
            || mesh.sourceStrengthPrefix.size() != mesh.numberOfCells)
@@ -169,7 +169,7 @@ namespace hase::kernels::forward
         unsigned const globalRayIndex,
         unsigned const globalRayCount,
         double const shift,
-        alpaka::rand::engine::Philox4x32x10& rndEngine)
+        alpaka::rand::concepts::UniformRandomEngine auto& rndEngine)
     {
         if(mesh.numberOfCells == 0u || sourceStrengthTotal <= 0.0
            || mesh.sourceStrengthPrefix.size() != mesh.numberOfCells || globalRayCount == 0u)
@@ -190,7 +190,7 @@ namespace hase::kernels::forward
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point samplePointInVolume(
         hase::data::TraceView const& mesh,
         unsigned const tet,
-        alpaka::rand::engine::Philox4x32x10& rndEngine)
+        alpaka::rand::concepts::UniformRandomEngine auto& rndEngine)
     {
         return mesh.genRndPointInTetra(
             mesh.getCellPoint(tet, 0u),
@@ -206,7 +206,7 @@ namespace hase::kernels::forward
      * @return Unit vector uniformly distributed on the sphere.
      */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point sampleIsotropicDirection(
-        alpaka::rand::engine::Philox4x32x10& rndEngine)
+        alpaka::rand::concepts::UniformRandomEngine auto& rndEngine)
     {
         constexpr double pi = 3.14159265358979323846;
         double const z = 2.0 * alpaka::rand::distribution::UniformReal<double>{}(rndEngine) -1.0;

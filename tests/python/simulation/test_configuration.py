@@ -87,7 +87,6 @@ def _config():
                 "use_reflections": True,
                 "reflection_max_iterations": 7,
                 "reflection_tolerance": 1.0e-5,
-                "surface_reservoir_size": 9,
                 "backend": "Host_Cpu_CpuSerial",
                 "ase_steps": 3,
             },

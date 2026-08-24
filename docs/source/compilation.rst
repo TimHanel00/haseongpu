@@ -123,6 +123,17 @@ Core HASE Options
 ``HASE_TESTING``
    Default ``OFF``.  Enables test targets.
 
+``HASE_EXACT_PUMP_CACHE``
+   Default ``ON``. Uses exact per-ray planar-relay registration for the pump.
+   Set ``OFF`` to compile the bounded, priority-key surface-reservoir path
+   instead. The exact registration cache and pump reservoir are mutually
+   exclusive in a configured build.
+
+``HASE_RESERVOIR_SLOTS_PUMP``
+   Default ``64``. Sets the compile-time number of retained pump records per
+   physical boundary face. It is active only when
+   ``HASE_EXACT_PUMP_CACHE=OFF``.
+
 ``HASE_BENCHMARK``
    Default ``OFF``. Enables timing scopes around forward PhiASE batches,
    individual device work, and synchronized propagation kernels. Rows are

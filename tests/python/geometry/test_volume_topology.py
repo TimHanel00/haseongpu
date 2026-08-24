@@ -360,7 +360,7 @@ def testVolumeTopologyImportsClosed3dStlAndRunsBackendOnce(tmp_path, monkeypatch
         crossSections=CrossSectionTable.monochromatic(
             wavelength=1000e-9 * units.m,
             absorption=0.0 * units.cm**2,
-            emission=0.0 * units.cm**2,
+            emission=1.0e-20 * units.cm**2,
         ),
         active=True,
         activeIonDensity=1.0 / units.cm**3,

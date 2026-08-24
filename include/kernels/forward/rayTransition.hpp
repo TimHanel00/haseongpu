@@ -15,8 +15,9 @@
 namespace hase::kernels::forward
 {
     inline constexpr unsigned maxImmediateFaceTransitions = 32u;
-    inline constexpr double ownershipProbeEpsilon = 1.0e-12;
+    inline constexpr double ownershipProbeDistance = 1.0e-14;
 
+    /** @brief Result category for ownership resolution at a Tet4 face. */
     enum class Tet4TransitionStatus : std::uint8_t
     {
         enteredCell,
@@ -24,6 +25,7 @@ namespace hase::kernels::forward
         failed
     };
 
+    /** @brief Resolved cell ownership or exterior-boundary state after a face hit. */
     struct Tet4FaceTransition
     {
         unsigned cell = 0u;
@@ -32,6 +34,12 @@ namespace hase::kernels::forward
         Tet4TransitionStatus status = Tet4TransitionStatus::enteredCell;
     };
 
+    /**
+     * @param mesh Device trace containing affine face coordinates.
+     * @param tet Candidate cell.
+     * @param point Point to test.
+     * @return Whether any local face coordinate is within traversal tolerance of zero.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC bool isNearTet4Face(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -48,6 +56,14 @@ namespace hase::kernels::forward
         return false;
     }
 
+    /**
+     * @param mesh Device trace containing affine face coordinates.
+     * @param tet Current cell.
+     * @param point Current position on or near a face.
+     * @param direction Ray direction.
+     * @param forbiddenFace Entry face excluded from immediate exit.
+     * @return Local outward-crossed face, or `-1` when none exists.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC int immediateExitFace(
         data::TraceView const& mesh,
         unsigned const tet,
@@ -71,6 +87,15 @@ namespace hase::kernels::forward
         return -1;
     }
 
+    /**
+     * @brief Resolve cell ownership after an edge, vertex, or round-off-degenerate hit.
+     * @param mesh Device trace containing neighbor and face-coordinate data.
+     * @param cell Cell owning the original hit.
+     * @param exitFace Candidate local exit face.
+     * @param point Fixed intersection position.
+     * @param direction Ray direction used for the epsilon ownership probe.
+     * @return Entered-cell, exterior-boundary, or failed transition.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition recoverFaceTransition(
         data::TraceView const& mesh,
         unsigned cell,
@@ -120,7 +145,7 @@ namespace hase::kernels::forward
                     coordinate = 0.0;
                 }
                 double const directionalChange = mesh.getFaceBarycentricDirection(cell, localFace, direction);
-                double const probeCoordinate = coordinate + ownershipProbeEpsilon * directionalChange;
+                double const probeCoordinate = coordinate + ownershipProbeDistance * directionalChange;
                 if(probeCoordinate >= 0.0)
                 {
                     continue;
@@ -153,6 +178,14 @@ namespace hase::kernels::forward
         return result;
     }
 
+    /**
+     * @param mesh Device trace containing face-neighbor ownership.
+     * @param cell Cell owning the completed segment.
+     * @param intersection Selected face intersection and tie mask.
+     * @param point Cartesian intersection point.
+     * @param direction Ray direction.
+     * @return Resolved next-cell or exterior-boundary transition.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition transitionAcrossIntersection(
         hase::data::TraceView const& mesh,
         unsigned const cell,

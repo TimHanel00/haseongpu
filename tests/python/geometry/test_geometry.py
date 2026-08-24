@@ -11,7 +11,8 @@ import numpy as np
 import pytest
 import yaml
 
-from HASEonGPU import Grid, MeshTopology, backendFlat, unitDimension
+from HASEonGPU import Grid, MeshTopology, backendFlat
+from hase_units import TIME
 from pyInclude.geometry.core import GainMedium
 
 
@@ -199,7 +200,7 @@ def test_defineFieldAttachesCustomFields():
         entity=("cell", "layer"),
         values=temperature,
         unit="K",
-        unitDimension=unitDimension.tFluo,
+        unitDimension=TIME,
     )
     medium.defineField("triangleMarker", entity="triangle", values=marker, dtype=np.int32, unit="1")
 
@@ -211,7 +212,7 @@ def test_defineFieldAttachesCustomFields():
     np.testing.assert_array_equal(prismView, temperature)
     np.testing.assert_array_equal(triangleView, marker)
     assert np.shares_memory(prismView, medium.customFields["temperature"].value)
-    assert medium.customFields["temperature"].spec.unitDimension == unitDimension.tFluo
+    assert medium.customFields["temperature"].spec.unitDimension == TIME
 
     prismView[1, 1] = 333.0
     assert medium.customFields["temperature"].value[1 + topology.numberOfTriangles] == 333.0
@@ -273,14 +274,12 @@ def test_phi_ase_reflection_controls_are_openpmd_attributes():
         useReflections=True,
         reflectionMaxIterations=3,
         reflectionTolerance=2.5e-3,
-        surfaceReservoirSize=5,
     )
     attributes = phi.openPmdAttributes(numberOfSamples=4)
 
     assert attributes["useReflections"] is True
     assert attributes["reflectionMaxIterations"] == 3
     assert attributes["reflectionTolerance"] == 2.5e-3
-    assert attributes["surfaceReservoirSize"] == 5
     assert "forwardRayLength" not in attributes
 
 

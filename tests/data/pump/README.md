@@ -9,3 +9,7 @@ frozen-Phi-ASE RK4 steps. The archive contains every-step `betaCells`,
 The general-pump regression configures one collimated 940 nm super-Gaussian
 source on `ase_bottom`, a unit-transmission planar retro-relay on `ase_top`,
 and total power obtained by integrating the former 16 kW/cm2 peak profile.
+
+The archived geometry and volume-weighted rates use the historical centimetre
+convention. Current regressions retain this fixture and apply the explicit
+``1 cm^3 = 1e-6 m^3`` conversion when comparing SI volume integrals.

@@ -161,7 +161,7 @@ class _YamlContext:
             self._path(source["path"]),
             key=source.get("key"),
             temperature=(None if "temperature" not in spec else float(spec["temperature"]) * units.K),
-            activeIonDensity=float(spec.get("active_ion_density", 0.0)) / units.cm**3,
+            activeIonDensity=float(spec.get("active_ion_density", 0.0)) / units.m**3,
             spectralResolution=spec.get("spectral_resolution"),
             interpolation=spec.get("interpolation", "exact"),
             name=spec.get("name", registryName),
@@ -180,7 +180,7 @@ class _YamlContext:
             )
         if attenuationNames:
             name = attenuationNames.pop()
-            material.bulkAttenuation = float(spec[name]) / units.cm
+            material.bulkAttenuation = float(spec[name]) / units.m
         return material.validate()
 
     def _topologyValue(self, value, path):
@@ -353,7 +353,6 @@ def _phiAse(spec):
         "use_reflections": "useReflections",
         "reflection_max_iterations": "reflectionMaxIterations",
         "reflection_tolerance": "reflectionTolerance",
-        "surface_reservoir_size": "surfaceReservoirSize",
         "rng_seed": "rngSeed",
         "openpmd_backend": "openpmdBackend",
         "parallel_mode": "parallelMode",

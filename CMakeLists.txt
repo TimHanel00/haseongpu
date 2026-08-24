@@ -177,6 +177,30 @@ option(
     OFF
 )
 option(HASE_DEBUG_LOGGING "Enable additional backend debug logging." OFF)
+option(
+    HASE_EXACT_PUMP_CACHE
+    "Use exact per-ray planar-pump relay registration instead of the pump surface reservoir"
+    ON
+)
+set(HASE_RESERVOIR_SLOTS_PUMP
+    "64"
+    CACHE STRING
+    "Compile-time pump surface-reservoir slots per face; active only when HASE_EXACT_PUMP_CACHE=OFF"
+)
+if(
+    NOT HASE_EXACT_PUMP_CACHE
+    AND NOT HASE_RESERVOIR_SLOTS_PUMP MATCHES "^[1-9][0-9]*$"
+)
+    message(
+        FATAL_ERROR
+        "HASE_RESERVOIR_SLOTS_PUMP must be a positive integer when exact pump caching is disabled"
+    )
+endif()
+if(HASE_EXACT_PUMP_CACHE)
+    set(HASE_COMPILED_RESERVOIR_SLOTS_PUMP 1)
+else()
+    set(HASE_COMPILED_RESERVOIR_SLOTS_PUMP ${HASE_RESERVOIR_SLOTS_PUMP})
+endif()
 set(HASE_RUNTIME_DIR
     "${CMAKE_SOURCE_DIR}/build"
     CACHE PATH
@@ -886,6 +910,8 @@ target_compile_definitions(
     INTERFACE
         HASE_ENABLE_OPENPMD
         HASE_OPENPMD_FILE_EXTENSION=\"${HASE_OPENPMD_FILE_EXTENSION}\"
+        HASE_EXACT_PUMP_CACHE=$<BOOL:${HASE_EXACT_PUMP_CACHE}>
+        HASE_RESERVOIR_SLOTS_PUMP=${HASE_COMPILED_RESERVOIR_SLOTS_PUMP}
 )
 target_link_libraries(hase_core INTERFACE alpaka::alpaka)
 if(TARGET CUDA::cudart)

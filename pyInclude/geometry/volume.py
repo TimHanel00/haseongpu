@@ -17,6 +17,7 @@ import warnings
 import numpy as np
 
 from hase_transport import PrimitiveDescription, field as transportField
+from hase_units import units
 
 try:
     from numba import njit
@@ -231,7 +232,7 @@ def _tet4GeometryKernel(points, cells, localFaces):
 
 @dataclass
 class VolumeTopology:
-    """Explicit Tet4 volume-cell topology."""
+    """Explicit Tet4 volume-cell topology with coordinates in metres."""
 
     points: np.ndarray
     cellPointIndices: np.ndarray
@@ -244,7 +245,7 @@ class VolumeTopology:
         return PrimitiveDescription(
             "volumeTopology",
             fields=(
-                transportField("points", lambda owner: np.asarray(owner.points).T, axes=("coordinate", "point")),
+                transportField("points", lambda owner: np.asarray(owner.points).T * units.m, axes=("coordinate", "point")),
                 transportField(
                     "cellPointIndices",
                     lambda owner: np.asarray(owner.cellPointIndices).T,
@@ -262,7 +263,7 @@ class VolumeTopology:
                 transportField("faceBoundaries", lambda owner: np.asarray(owner.faceBoundaries).T, axes=("localFace", "cell")),
                 transportField(
                     "faceCenters",
-                    lambda owner: np.asarray(owner.faceCenters).transpose(2, 1, 0),
+                    lambda owner: np.asarray(owner.faceCenters).transpose(2, 1, 0) * units.m,
                     axes=("coordinate", "localFace", "cell"),
                 ),
                 transportField(
@@ -270,11 +271,15 @@ class VolumeTopology:
                     lambda owner: np.asarray(owner.faceNormals).transpose(2, 1, 0),
                     axes=("coordinate", "localFace", "cell"),
                 ),
-                transportField("faceAreas", lambda owner: np.asarray(owner.faceAreas).T, axes=("localFace", "cell")),
-                transportField("cellCenters", lambda owner: np.asarray(owner.cellCenters).T, axes=("coordinate", "cell")),
-                transportField("cellVolumes", axes=("cell",)),
-                transportField("samplePoints", lambda owner: np.asarray(owner.samplePoints).T, axes=("coordinate", "sample")),
-                transportField("metadata", encoding="json"),
+                transportField("faceAreas", lambda owner: np.asarray(owner.faceAreas).T * units.m**2, axes=("localFace", "cell")),
+                transportField("cellCenters", lambda owner: np.asarray(owner.cellCenters).T * units.m, axes=("coordinate", "cell")),
+                transportField("cellVolumes", lambda owner: np.asarray(owner.cellVolumes) * units.m**3, axes=("cell",)),
+                transportField("samplePoints", lambda owner: np.asarray(owner.samplePoints).T * units.m, axes=("coordinate", "sample")),
+                transportField(
+                    "metadata",
+                    lambda owner: {key: value for key, value in owner.metadata.items() if key != "gmsh"},
+                    encoding="json",
+                ),
             ),
         )
 

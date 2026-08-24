@@ -30,6 +30,7 @@ REFERENCE_PATH = (
     / "phiase_reference.npz"
 )
 INTEGRAL_RTOL = 0.05
+LEGACY_LENGTH_UNIT_SI = 1.0e-2
 LEGACY_WEDGE_FORWARD_RAYS = int(
     os.environ.get("HASE_TEST_LEGACY_WEDGE_FORWARD_RAYS", "200000")
 )
@@ -167,7 +168,7 @@ def testCurrentTet4WithoutReflectionsMatchesLegacyWedgeIntegral(
         legacyNoReflectionReference["points"],
         legacyNoReflectionReference["cells"],
         legacyNoReflectionReference["phiASE"],
-    )
+    ) * LEGACY_LENGTH_UNIT_SI
     np.testing.assert_allclose(
         observed_integrals,
         reference_integrals,

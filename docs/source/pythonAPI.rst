@@ -97,21 +97,5 @@ Utilities
    calcGainFromState
    writeParaviewState
 
-Low-level transport schemas
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. autosummary::
-   :toctree: generated
-   :nosignatures:
-
-   BaseGroup
-   BaseSchema
-   GroupFieldSpec
-   PointSchema
-   TriangleSchema
-   PrismSchema
-   PrimitiveFieldSpec
-
 The ``units`` namespace contains unit values used to construct ``Quantity``
-objects. The ``unitDimension`` namespace contains predefined openPMD
-unit-dimension tuples for HASE transport variables and common dimensions.
+objects. Each unit carries its openPMD SI scale and unit-dimension tuple.

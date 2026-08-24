@@ -772,8 +772,6 @@ namespace hase::data
         ase.reflectionMaxIterations
             = narrow<unsigned>(simulation.phiAse->reflectionMaxIterations, "phiAse.reflectionMaxIterations");
         ase.reflectionTolerance = simulation.phiAse->reflectionTolerance;
-        ase.surfaceReservoirSize
-            = narrow<unsigned>(simulation.phiAse->surfaceReservoirSize, "phiAse.surfaceReservoirSize");
 
         if(!simulation.phiAse->backend)
             invalid("phiAse backend was not resolved before transport");

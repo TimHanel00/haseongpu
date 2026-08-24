@@ -7,7 +7,6 @@
 #include <transport/TransportReader.hpp>
 
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -19,7 +18,8 @@ namespace
 {
     std::filesystem::path transportPath()
     {
-        auto path = std::filesystem::temp_directory_path() / "hase_transport_reader.bp";
+        auto path
+            = std::filesystem::temp_directory_path() / ("hase_transport_reader." HASE_OPENPMD_TEST_FILE_EXTENSION);
         std::filesystem::remove_all(path);
         return path;
     }
@@ -185,11 +185,7 @@ TEST_CASE("dynamic transport explicitly replaces a resized cross-section table",
 
 TEST_CASE("frontend graph parses through Simulation into trace preparation", "[transport][integration]")
 {
-    auto const* input = std::getenv("HASE_TEST_TRANSPORT_GRAPH");
-    if(input == nullptr)
-        SKIP("HASE_TEST_TRANSPORT_GRAPH is not set");
-
-    io::Series series(input, io::Access::READ_ONLY);
+    io::Series series(HASE_TEST_TRANSPORT_GRAPH, io::Access::READ_ONLY);
     auto iteration = series.snapshots().begin()->second;
     hase::transport::TransportReader reader(series, iteration);
     auto const componentPaths = reader.referencePaths(reader.root().child("opticalComponents").string());

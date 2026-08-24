@@ -237,11 +237,12 @@ boundary. Domain-assigned ``SurfaceOptics`` determines the reflected fraction.
 The current model applies specular reflection with either total internal
 reflection or a configured constant reflectivity.
 
-The surface-reservoir method (SRM) retains a bounded weighted sample of the
-direction, spectral bin, and weight arriving at each reflective boundary face.
-The face weights define the source distribution for a new reflected pass. The
-new pass contributes through the same track-length estimator and fills the
-reservoir for the following pass.
+The surface-resampling method (SRM) records at most one reflected boundary
+candidate per input history. A fixed-order cumulative sum preserves the exact
+candidate weights, and seed-driven systematic resampling selects the source
+histories for the next pass with replacement. The new pass contributes through
+the same track-length estimator and records the candidates for the following
+pass.
 
 Reflection terminates when the remaining source weight is below
 ``reflectionTolerance``, reaches a non-growing stable state, exceeds the
@@ -334,7 +335,7 @@ The current transport model does not include polarization, Fresnel
 transmission, detailed coating stacks, general internal optical interfaces,
 unlimited pump-cavity recirculation, or custom Python transport callbacks
 inside compiled time steps. Volume transport supports Tet4 cells. Runtime and
-available device memory limit practical ray and surface-reservoir counts.
+available device memory limit practical ray and reflected-candidate counts.
 
 References
 ----------

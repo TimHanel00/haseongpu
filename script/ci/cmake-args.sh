@@ -7,6 +7,7 @@ make_hase_cmake_args() {
     HASE_CMAKE_ARGS=(
         -DBUILD_TESTING=ON
         -DHASE_TESTING=ON
+        "-DPython3_EXECUTABLE=$HASE_CI_VENV/bin/python"
     )
 
     if [[ "${HASE_CI_MPI:-off}" == on ]]; then

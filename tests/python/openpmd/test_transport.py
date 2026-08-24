@@ -16,12 +16,11 @@ import pyInclude.openpmd.graph as graph_transport
 import pyInclude.openpmd.transport as transport
 from openpmd_backend_matrix import openpmd_runtime_backend, openpmd_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
+from pyInclude.fields import backendFlat
 from pyInclude.geometry import MeshTopology, OpenPmdScalarField, VolumeTopology
 from pyInclude.geometry.core import GainMedium
 from hase_units import units
 from material_library import CrossSectionTable, Material
-from pyInclude.laser import CrossSectionData
-from pyInclude.openpmd import HASE_TRANSPORT_VERSION, PrimitiveFieldSpec, PrismSchema, backendFlat, backendFlatArray, fieldSpec, haseTransportAttributes, primitiveView, spectralContext, unitDimension
 from pyInclude.physical import Domain, GainMedium as PhysicalGainMedium, OpticalComponent
 from pyInclude.simulation import PhiASE, _AseSimulationRequest
 
@@ -129,16 +128,6 @@ def asymmetric_medium():
     )
 
 
-def asymmetric_cross_sections():
-    return CrossSectionData(
-        wavelengthsAbsorption=SPECTRAL_FIELD_VALUES["lambdaAbsorption"],
-        crossSectionAbsorption=SPECTRAL_FIELD_VALUES["sigmaAbsorption"],
-        wavelengthsEmission=SPECTRAL_FIELD_VALUES["lambdaEmission"],
-        crossSectionEmission=SPECTRAL_FIELD_VALUES["sigmaEmission"],
-        resolution=3,
-    )
-
-
 def asymmetric_phi_ase():
     return PhiASE(
         minRays=1,
@@ -191,16 +180,6 @@ def launch_smoke_request(phi_ase=None):
         launch_smoke_phi_ase() if phi_ase is None else phi_ase,
         medium,
         0.0,
-    )
-
-
-def launch_smoke_cross_sections():
-    return CrossSectionData(
-        wavelengthsAbsorption=np.array([900e-9], dtype=np.float64),
-        crossSectionAbsorption=np.array([0.0], dtype=np.float64),
-        wavelengthsEmission=np.array([1000e-9], dtype=np.float64),
-        crossSectionEmission=np.array([0.0], dtype=np.float64),
-        resolution=1,
     )
 
 
@@ -359,110 +338,6 @@ def _read_component(series, component):
     chunk = component.load_chunk()
     series.flush()
     return np.array(chunk, copy=True)
-
-
-def _attribute_list(value):
-    if isinstance(value, str):
-        return [value]
-    try:
-        return list(value)
-    except TypeError:
-        return [value]
-
-
-def _record_metadata(record, spec):
-    return {
-        "transport_version": record.get_attribute("haseTransportVersion"),
-        "entity": record.get_attribute("haseEntity"),
-        "axes": _attribute_list(record.get_attribute("haseAxes")),
-        "axes_string": record.get_attribute("haseAxesString"),
-        "layout": record.get_attribute("haseLayoutOrder"),
-        "primitive_shape": _attribute_list(record.get_attribute("hasePrimitiveShape")),
-        "static": record.get_attribute("haseStatic"),
-        "dynamic": record.get_attribute("haseDynamic"),
-        "backend_required": record.get_attribute("haseBackendRequired"),
-        "unit": record.get_attribute("haseUnit"),
-        "axis_labels": list(record.axis_labels),
-        "axis_labels_string": record.get_attribute("haseAxisLabelsString"),
-        "unit_si": record[_io().Mesh_Record_Component.SCALAR].unit_SI,
-    }
-
-
-def _unit_dimension_values(record, io):
-    value = record.unit_dimension
-    if isinstance(value, (list, tuple)):
-        return tuple(float(item) for item in value)
-    labels = (
-        io.Unit_Dimension.L,
-        io.Unit_Dimension.M,
-        io.Unit_Dimension.T,
-        io.Unit_Dimension.I,
-        io.Unit_Dimension.theta,
-        io.Unit_Dimension.N,
-        io.Unit_Dimension.J,
-    )
-    return tuple(float(value.get(label, 0.0)) for label in labels)
-
-
-def _assert_base_openpmd_scalar_metadata(record, *, axis_labels, unit_si=1.0, unit_dimension=None):
-    io = _io()
-    expected_dimension = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0) if unit_dimension is None else unit_dimension
-
-    assert record.get_attribute("geometry") == "other"
-    assert record.get_attribute("dataOrder") == "C"
-    assert list(record.axis_labels) == list(axis_labels)
-    assert list(record.grid_spacing) == [1.0] * len(axis_labels)
-    assert list(record.grid_global_offset) == [0.0] * len(axis_labels)
-    assert record.grid_unit_SI == 1.0
-    assert _unit_dimension_values(record, io) == expected_dimension
-
-    component = record[io.Mesh_Record_Component.SCALAR]
-    assert component.unit_SI == unit_si
-    assert list(component.position) == [0.0] * len(axis_labels)
-
-
-def _assert_hase_metadata(record, spec, context):
-    assert _record_metadata(record, spec) == {
-        "transport_version": HASE_TRANSPORT_VERSION,
-        "entity": spec.entity,
-        "axes": list(spec.axes),
-        "axes_string": ",".join(spec.axes),
-        "layout": "backendFlat",
-        "primitive_shape": list(spec.expectedShape(context)),
-        "static": not spec.dynamic,
-        "dynamic": spec.dynamic,
-        "backend_required": spec.backendRequired,
-        "unit": spec.unit,
-        "axis_labels": ["flatIndex"],
-        "axis_labels_string": "flatIndex",
-        "unit_si": spec.unitSI,
-    }
-    assert _unit_dimension_values(record, _io()) == spec.unitDimension
-
-
-def _context_for_spec(spec_name):
-    if spec_name in SPECTRAL_FIELD_VALUES:
-        return spectralContext(SPECTRAL_FIELD_VALUES[spec_name])
-    return _field_context()
-
-
-def test_layoutHelpersDefineExactBackendFlatContract():
-    mesh = asymmetric_mesh()
-    for name, values in _mesh_field_values(mesh).items():
-        spec = fieldSpec(name)
-        flat = backendFlatArray(values, spec, mesh, layoutOrder="backendFlat")
-        np.testing.assert_array_equal(flat, values.astype(spec.dtypeObject, copy=False))
-        view = primitiveView(backendFlat(values), spec, mesh)
-        assert view.shape == spec.expectedShape(mesh)
-        assert view.dtype == spec.dtypeObject
-        np.testing.assert_array_equal(view.reshape(-1, order="F"), flat)
-
-    for name, values in SPECTRAL_FIELD_VALUES.items():
-        spec = fieldSpec(name)
-        context = spectralContext(values)
-        flat = backendFlatArray(values, spec, context, layoutOrder="backendFlat")
-        np.testing.assert_array_equal(flat, values.astype(spec.dtypeObject, copy=False))
-        assert primitiveView(backendFlat(values), spec, context).shape == spec.expectedShape(context)
 
 
 def test_backendNamesMapToConfigs(monkeypatch):
@@ -1347,15 +1222,6 @@ def test_openPmdApiPreferenceRejectsMismatchedBundledBuild(monkeypatch, tmp_path
 
     with pytest.raises(RuntimeError, match="same openPMD-api build"):
         transport._prefer_matching_openpmd_api(Path("calcPhiASE"))
-
-
-def test_layoutHelpersRejectAccidentalTransposeViews():
-    mesh = asymmetric_mesh()
-    spec = fieldSpec("betaVolume")
-    primitive = primitiveView(backendFlat(MESH_FIELD_VALUES["betaVolume"]), spec, mesh)
-    transposed_same_size = np.asfortranarray(primitive.T)
-    with pytest.raises(ValueError, match="expects primitive shape"):
-        backendFlatArray(transposed_same_size, spec, mesh)
 
 
 def _openpmd_backend_values():

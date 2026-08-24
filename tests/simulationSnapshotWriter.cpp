@@ -24,7 +24,7 @@ TEST_CASE("simulation snapshots contain dynamic state instead of a host mesh", "
     STATIC_REQUIRE(std::is_same_v<decltype(hase::data::SimulationSnapshot::aseResult), hase::data::PhiAseResult>);
 }
 
-TEST_CASE("simulation run fields expose only cell-centered state", "[simulation]")
+TEST_CASE("simulation run fields expose supported output and control state", "[simulation]")
 {
     using hase::core::SimulationControlField;
     using hase::core::SimulationOutputField;
@@ -39,7 +39,7 @@ TEST_CASE("simulation run fields expose only cell-centered state", "[simulation]
             "total_rays",
             "dndt_ase",
             "dndt_pump"});
-    CHECK(SimulationControlField::all() == std::vector<std::string>{"beta_volume"});
+    CHECK(SimulationControlField::all() == std::vector<std::string>{"beta_volume", "cross_sections"});
 }
 
 TEST_CASE("simulation snapshot writer runs synchronously when requested", "[openpmd][mpi]")

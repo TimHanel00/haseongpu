@@ -9,9 +9,9 @@ materials:
     from_hdf5:
       path: ../material_library/data/materials.h5
       key: YbYAG
-    # Canonical YAML units: K and cm^-3.
+    # Canonical YAML units: K and m^-3.
     temperature: 293.15
-    active_ion_density: 2.776e20
+    active_ion_density: 2.776e26
     interpolation: exact
     spectral_resolution: 1000
   cladding_glass:
@@ -112,7 +112,6 @@ simulation:
     use_reflections: true
     reflection_max_iterations: 40
     reflection_tolerance: 1.0e-4
-    surface_reservoir_size: 32
     monochromatic: false
     backend: Host_Cpu_CpuOmpBlocks
     openpmd_backend: auto
@@ -132,8 +131,8 @@ simulation:
         collimated: {}
       profile:
         kind: super_gaussian
-        radius_u: 1.5
-        radius_v: 1.5
+        radius_u: 0.015
+        radius_v: 0.015
         exponent: 40
         center: [0.0, 0.0, 0.0]
         axis_u: [1.0, 0.0, 0.0]

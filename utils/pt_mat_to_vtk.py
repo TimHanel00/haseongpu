@@ -17,6 +17,7 @@ import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CENTIMETRES_TO_METRES = 1.0e-2
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -35,9 +36,9 @@ def _text_medium(input_dir: Path) -> GainMedium:
     number_of_points = _scalar(input_dir / "numberOfPoints.txt", int)
     number_of_triangles = _scalar(input_dir / "numberOfTriangles.txt", int)
     number_of_levels = _scalar(input_dir / "numberOfLevels.txt", int)
-    thickness = _scalar(input_dir / "thickness.txt", float)
+    thickness = _scalar(input_dir / "thickness.txt", float) * CENTIMETRES_TO_METRES
 
-    points = _array(input_dir / "points.txt", np.float64)
+    points = _array(input_dir / "points.txt", np.float64) * CENTIMETRES_TO_METRES
     if points.size != 2 * number_of_points:
         raise ValueError(f"{input_dir}/points.txt has {points.size} values, expected {2 * number_of_points}")
     points = points.reshape((2, number_of_points)).T
@@ -67,14 +68,14 @@ def _text_medium(input_dir: Path) -> GainMedium:
     )
 
 
-def _pt_mat_medium(material_path: Path, *, number_of_levels: int = 10, length: float = 0.7) -> GainMedium:
+def _pt_mat_medium(material_path: Path, *, number_of_levels: int = 10, length: float = 0.007) -> GainMedium:
     try:
         from scipy.io import loadmat
     except ImportError as exc:
         raise RuntimeError("scipy is required to convert pt.mat") from exc
 
     material = loadmat(material_path)
-    points = np.asarray(material["p"], dtype=np.float64)
+    points = np.asarray(material["p"], dtype=np.float64) * CENTIMETRES_TO_METRES
     triangles = np.asarray(material["t"], dtype=np.int64) - 1
     if np.any(triangles < 0):
         raise ValueError(f"{material_path} does not contain MATLAB-style 1-based triangle indices")
