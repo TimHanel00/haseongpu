@@ -58,6 +58,22 @@ namespace hase::alpakaUtils
         }
     };
 
+    /**
+     * @brief Allocate device storage and synchronously copy a source buffer into it.
+     *
+     * @param queue Queue whose device owns the returned allocation and performs
+     * the copy.
+     * @param inputBuffer Source accepted by `alpaka::onHost::allocLike` and
+     * `alpaka::onHost::memcpy`; built-in adapters explicitly cover
+     * `std::vector` and Alpaka views.
+     * @return An owning device buffer with the source element type and extents.
+     *
+     * The copy is complete when this function returns. Additional source
+     * representations can specialize `ToDevice::Op`.
+     *
+     * @note The source remains unconstrained because the supported adapters,
+     * notably `std::vector` and `IView`, share no existing semantic concept.
+     */
     auto toDevice(concepts::Queue auto const& queue, auto const& inputBuffer)
     {
         return hase::alpakaUtils::ToDevice::Op<ALPAKA_TYPEOF(inputBuffer)>{}(queue, inputBuffer);

@@ -41,22 +41,29 @@ namespace hase::core
 {
     namespace detail
     {
-        template<bool MATLAB>
+        /**
+         * @brief Select the requested backend and run one prepared ASE evaluation.
+         * @param experiment Physical and statistical controls.
+         * @param compute Mutable backend selection and device scheduling state.
+         * @param result Host result replaced by the evaluation output.
+         * @param hostMesh Prepared host trace retained across the evaluation.
+         * @return Zero on a completed matching backend, nonzero if none ran.
+         */
         int runPreparedPhiAse(
             AseTraceControls& experiment,
             ExecutionPolicy& compute,
             data::PhiAseResult& result,
             hase::data::TraceData& hostMesh)
         {
-            auto backends = alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors);
+            auto backends
+                = alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors);
             bool oneDidRun = false;
             auto i = alpaka::onHost::executeForEachIfHasDevice(
-                [&](auto const& backend) -> int
+                [&](alpaka::concepts::BackendSpec auto const& backend) -> int
                 {
-                    auto deviceSpec = backend[alpaka::object::deviceSpec];
-                    auto exec = backend[alpaka::object::exec];
+                    auto const exec = alpaka::getExecutor(backend);
 
-                    auto devSelector = alpaka::onHost::makeDeviceSelector(deviceSpec);
+                    auto devSelector = alpaka::onHost::makeDeviceSelector(backend);
 
                     std::size_t deviceCount = devSelector.getDeviceCount();
                     if(deviceCount == 0u)
@@ -346,11 +353,13 @@ namespace hase::core
      *
      * Preparation is scoped to this call. Long-lived time simulations use
      * ForwardPhiAseContext to retain device allocations between traces.
+     * @param simulation Primitive simulation graph to validate and prepare.
+     * @return Final cell-ordered ASE values and convergence metadata.
      */
     [[nodiscard]] inline data::PhiAseResult runPhiAse(data::Simulation const& simulation)
     {
         auto state = data::prepareSimulation(simulation);
-        int const status = detail::runPreparedPhiAse<false>(state.ase, state.execution, state.result, state.trace);
+        int const status = detail::runPreparedPhiAse(state.ase, state.execution, state.result, state.trace);
         if(status != 0)
             throw std::runtime_error("ASE trace failed with return code " + std::to_string(status));
         return std::move(state.result);

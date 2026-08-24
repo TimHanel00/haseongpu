@@ -11,6 +11,7 @@
 
 #include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
+#include <concepts/concepts.hpp>
 #include <core/Runtime.hpp>
 #include <core/calcForwardPhiAse.hpp>
 #include <core/calcPhiAseThreaded.hpp>
@@ -36,17 +37,33 @@ namespace hase::core
 {
     namespace detail
     {
-        template<typename T_Buffer>
-        std::vector<typename T_Buffer::value_type> copyToVector(auto const& queue, T_Buffer const& buffer)
+        /**
+         * @brief Copy a device buffer into a newly allocated host vector.
+         * @param queue Queue on the buffer's device; the copy waits for completion.
+         * @param buffer Contiguous device buffer to download.
+         * @return Host vector containing every buffer element.
+         */
+        auto copyToVector(hase::concepts::Queue auto const& queue, alpaka::concepts::IBuffer auto const& buffer)
         {
-            std::vector<typename T_Buffer::value_type> result(buffer.getExtents().product());
+            using T_Value = alpaka::trait::GetValueType_t<ALPAKA_TYPEOF(buffer)>;
+            std::vector<T_Value> result(buffer.getExtents().product());
             auto hybridBuffer = hase::alpakaUtils::getHybridBuffer(result, buffer);
             hybridBuffer.toHost(queue);
             return result;
         }
 
-        template<typename T_Buffer, typename T>
-        void copyVectorToBuffer(auto const& queue, std::vector<T> const& values, T_Buffer& buffer)
+        /**
+         * @brief Enqueue a complete host-vector upload into an existing buffer.
+         * @tparam T Element type shared by the vector and buffer.
+         * @param queue Queue on the destination buffer's device.
+         * @param values Host values to upload.
+         * @param buffer Destination device buffer with a compatible extent.
+         */
+        template<typename T>
+        void copyVectorToBuffer(
+            hase::concepts::Queue auto const& queue,
+            std::vector<T> const& values,
+            alpaka::concepts::IBuffer<T> auto& buffer)
         {
             auto hybridBuffer = hase::alpakaUtils::getHybridBuffer(values, buffer);
             hybridBuffer.toDevice(queue);
@@ -86,7 +103,13 @@ namespace hase::core
         std::vector<unsigned> convergenceRayCounts;
     };
 
-    /** @brief Flatten gathered worker containers while retaining batch indices. */
+    /**
+     * @brief Flatten gathered worker containers while retaining batch indices.
+     * @param workerResults Per-worker collections produced by a gather operation.
+     * @param batchCount Required number of unique statistical batches.
+     * @return Batch-index-ordered collection containing every expected batch.
+     * @throws std::runtime_error If a batch is missing, duplicated, or out of range.
+     */
     [[nodiscard]] inline ForwardRayBatchResults flattenBatchResults(
         std::vector<ForwardRayBatchResults> const& workerResults,
         unsigned const batchCount)
@@ -110,6 +133,10 @@ namespace hase::core
      * beta state. Complete ray batches are mapped to workers, traced on their
      * owned devices, gathered with their batch identities intact, and only then
      * combined for normalization and adaptive RSE evaluation.
+     * @tparam T_WorkerPolicy Worker policy supplying mapping, collectives, and work dispatch.
+     * @param worker Participating worker with a stable group identity.
+     * @param context Trace controls and immutable launch inputs shared by the group.
+     * @return Gathered raw accumulators, convergence result, runtime, and launch metadata.
      */
     template<typename T_WorkerPolicy>
     [[nodiscard]] ForwardSimulationResult runForwardSimulation(
@@ -180,10 +207,17 @@ namespace hase::core
      * compact boundary-ray queues between iterations without changing the
      * domain-local evaluator.
      */
-    template<typename T_Device, typename T_Executor>
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Executor>
     class ForwardPhiAseContext
     {
     public:
+        /**
+         * @brief Allocate persistent trace and evaluator state on a non-empty device set.
+         * @param devices Devices owned by this context, one per local worker.
+         * @param executor Executor copied into each device context.
+         * @param experiment Controls used to size optional reflection scratch storage.
+         * @param hostMesh Host arrays that back and initialize the resident traces.
+         */
         ForwardPhiAseContext(
             std::vector<T_Device> devices,
             T_Executor executor,
@@ -211,31 +245,43 @@ namespace hase::core
                         hostMesh));
         }
 
+        /** @return First device, used as the time integrator's primary resident device. */
         [[nodiscard]] T_Device& primaryDevice()
         {
             return m_meshes.front().m_device;
         }
 
+        /** @return Resident trace owned by the primary device. */
         [[nodiscard]] hase::data::ResidentTrace<T_Device>& primaryMesh()
         {
             return m_meshes.front();
         }
 
+        /** @return Non-owning device view of the primary trace's excitation array. */
         [[nodiscard]] auto primaryBetaVolume()
         {
             return m_meshes.front().betaVolume.toDeviceView();
         }
 
+        /** @return Whether excitation must be downloaded to distribute it to secondary devices. */
         [[nodiscard]] bool requiresHostBetaVolume() const
         {
             return m_meshes.size() > 1u;
         }
 
+        /** @return Cell-ordered ASE population derivative downloaded from the primary device. */
         std::vector<double> downloadPrimaryVolumeDndtAse()
         {
             return m_deviceContexts.front()->downloadVolumeDndtAse();
         }
 
+        /**
+         * @param includePhiAse Whether to download cell ASE flux.
+         * @param includeStandardError Whether to download absolute standard error.
+         * @param includeRelativeStandardError Whether to download relative standard error.
+         * @param includeTotalRays Whether to download per-cell ray visits.
+         * @return Finalized result containing only the requested large arrays.
+         */
         data::PhiAseResult downloadPrimaryResult(
             bool const includePhiAse,
             bool const includeStandardError,
@@ -249,11 +295,13 @@ namespace hase::core
                 includeTotalRays);
         }
 
+        /** @return Owning device buffer containing the primary ASE population derivative. */
         [[nodiscard]] auto& primaryVolumeDndtAse()
         {
             return m_deviceContexts.front()->volumeDndtAse();
         }
 
+        /** @return Owning device buffer containing the primary finalized ASE flux. */
         [[nodiscard]] auto& primaryVolumePhiAse()
         {
             return m_deviceContexts.front()->volumePhiAse();
@@ -264,6 +312,7 @@ namespace hase::core
          *
          * Geometry allocations are deliberately retained. The next evaluate
          * call rebuilds source-strength prefixes from its current beta buffer.
+         * @param hostTrace Prepared host trace supplying replacement material arrays.
          */
         void refreshMaterials(hase::data::TraceData& hostTrace)
         {
@@ -275,11 +324,21 @@ namespace hase::core
             }
         }
 
+        /**
+         * @brief Execute adaptive forward tracing for the supplied excitation state.
+         * @param experiment Physical and statistical controls; retained for worker dispatch.
+         * @param compute Backend, device, seed, and adaptive scheduling controls.
+         * @param hostMesh Host trace used for multi-device or MPI synchronization.
+         * @param betaVolume Cell excitation view resident on the primary device.
+         * @param result Host convergence result replaced by the final adaptive result.
+         * @param allowDeviceResident Whether finalized primary buffers may remain device-only.
+         * @return Runtime, device-topology, ray-count, and convergence metadata.
+         */
         ForwardPhiAseEvaluation evaluate(
             AseTraceControls& experiment,
             ExecutionPolicy& compute,
             hase::data::TraceData& hostMesh,
-            auto const& betaVolume,
+            alpaka::concepts::IView<double> auto const& betaVolume,
             data::PhiAseResult& result,
             bool const allowDeviceResident = true)
         {
@@ -417,7 +476,8 @@ namespace hase::core
         }
 
     private:
-        [[nodiscard]] hase::data::TraceView primaryMeshView(auto const& betaVolume) const
+        [[nodiscard]] hase::data::TraceView primaryMeshView(
+            alpaka::concepts::IView<double> auto const& betaVolume) const
         {
             auto mesh = m_meshes.front().view();
             mesh.betaVolume = std::span<double const>(betaVolume.data(), betaVolume.getExtents().x());
@@ -425,7 +485,7 @@ namespace hase::core
         }
 
         void refreshDynamicMeshes(
-            auto const& betaVolume,
+            alpaka::concepts::IView<double> auto const& betaVolume,
             hase::data::TraceData& hostMesh,
             bool const requireHostValues,
             bool const synchronizePrimaryMesh)

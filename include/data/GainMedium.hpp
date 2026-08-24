@@ -28,6 +28,12 @@ namespace hase::data
         std::optional<std::string> name;
         std::vector<std::shared_ptr<OpticalComponent>> components;
 
+        /**
+         * @brief Read a gain-medium selection from one graph node.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the gain-medium node.
+         * @return Gain medium retaining shared optical-component references.
+         */
         static GainMedium fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

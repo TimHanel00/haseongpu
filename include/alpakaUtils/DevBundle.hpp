@@ -10,8 +10,21 @@
 
 namespace hase::alpakaUtils
 {
+    /**
+     * @brief Select a backend-appropriate frame specification.
+     *
+     * @tparam T_DataType Element type used by backends whose frame selection
+     * depends on the data type.
+     * @param device Device on which the frame will execute.
+     * @param executor Executor used when Alpaka provides an executor-aware overload.
+     * @param extents Logical work-item extents.
+     * @return Alpaka frame specification for the requested work extent.
+     */
     template<typename T_DataType>
-    auto getFrameSpec(auto const& device, auto const& executor, auto const& extents)
+    auto getFrameSpec(
+        alpaka::onHost::concepts::Device auto const& device,
+        alpaka::concepts::Executor auto const& executor,
+        alpaka::concepts::Vector auto const& extents)
     {
         if constexpr(requires { alpaka::onHost::getFrameSpec(device, executor, extents); })
         {
@@ -23,6 +36,12 @@ namespace hase::alpakaUtils
         }
     }
 
+    /**
+     * @brief Device and executor pair passed to HASE enqueue interfaces.
+     *
+     * @tparam T_Device Alpaka host device type.
+     * @tparam T_Executor Executor used to construct frame specifications.
+     */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Executor>
     struct DevBundle
     {

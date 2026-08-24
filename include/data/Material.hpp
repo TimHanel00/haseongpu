@@ -46,6 +46,12 @@ namespace hase::data
         std::string metadata;
         std::shared_ptr<CrossSectionTable> crossSections;
 
+        /**
+         * @brief Read one material and its shared cross-section reference.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the material node.
+         * @return Material with coefficients converted to transport SI units.
+         */
         static Material fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

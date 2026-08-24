@@ -15,6 +15,7 @@
 
 namespace hase::data
 {
+    /** @brief Selected fields published for one completed simulation step. */
     struct SimulationSnapshot
     {
         unsigned step = 0u;
@@ -25,6 +26,10 @@ namespace hase::data
         std::vector<double> dndtAse;
         std::vector<std::string> fields;
 
+        /**
+         * @param field Stable simulation-output field name.
+         * @return Whether this snapshot includes that field.
+         */
         [[nodiscard]] bool contains(std::string const& field) const
         {
             return std::ranges::find(fields, field) != fields.end();

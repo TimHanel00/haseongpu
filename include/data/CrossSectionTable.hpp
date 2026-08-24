@@ -38,11 +38,21 @@ namespace hase::data
             std::vector<double> absorptionValues,
             std::vector<double> emissionValues);
 
+        /**
+         * @brief Read a complete cross-section table from one graph node.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the cross-section-table node.
+         * @return Validated material-owned spectral table in transport SI units.
+         */
         static CrossSectionTable fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);
 
-        /** @brief Apply one explicit dynamic openPMD update to this table. */
+        /**
+         * @brief Apply one explicit dynamic openPMD update to this table.
+         * @param reader Typed reader for the update iteration.
+         * @param prefix Path of the updated cross-section-table node.
+         */
         void updateFromTransport(transport::TransportReader const& reader, transport::TransportPath const& prefix);
     };
 } // namespace hase::data

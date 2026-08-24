@@ -13,6 +13,7 @@
 
 namespace hase::data
 {
+    /** @brief Termination state of the forward surface-reservoir iteration. */
     enum class SrmStatus
     {
         disabled,
@@ -22,6 +23,10 @@ namespace hase::data
         maxIterations
     };
 
+    /**
+     * @param status Surface-reservoir termination state.
+     * @return Stable lowercase transport spelling of `status`.
+     */
     [[nodiscard]] inline char const* toString(SrmStatus const status)
     {
         switch(status)
@@ -40,6 +45,7 @@ namespace hase::data
         return "max_iterations";
     }
 
+    /** @brief Cell-ordered ASE estimates, uncertainty, diagnostics, and depletion rates. */
     struct PhiAseResult
     {
         PhiAseResult() = default;

@@ -52,6 +52,12 @@ namespace hase::data
         transport::Array<double> samplePoints;
         std::string metadata;
 
+        /**
+         * @brief Read one complete host-side topology node.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the topology node.
+         * @return Topology arrays converted to transport SI units where applicable.
+         */
         static VolumeTopology fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

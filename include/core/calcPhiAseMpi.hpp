@@ -16,6 +16,7 @@
 
 #    include <algorithm>
 #    include <array>
+#    include <concepts>
 #    include <limits>
 #    include <memory>
 #    include <stdexcept>
@@ -77,7 +78,7 @@ namespace hase::core
      * @tparam T_Device Alpaka device type.
      * @tparam T_Exec Alpaka executor type.
      */
-    template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     class MPIRank
     {
     public:
@@ -126,7 +127,7 @@ namespace hase::core
     };
 
     /** @brief Identity and collective dispatch for one-rank/one-device workers. */
-    template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     struct HaseWorkerDispatch<MPIRank<T_Device, T_Exec>>
     {
         using T_Policy = MPIRank<T_Device, T_Exec>;
@@ -248,8 +249,11 @@ namespace hase::core
             return gathered;
         }
 
-        template<typename T_Value, typename T_Reduction>
-        [[nodiscard]] static T_Value reduce(T_Policy& policy, T_Value value, T_Reduction reduction)
+        template<typename T_Value>
+        [[nodiscard]] static T_Value reduce(
+            T_Policy& policy,
+            T_Value value,
+            std::invocable<T_Value, T_Value const&> auto reduction)
         {
             static_assert(std::is_trivially_copyable_v<T_Value>, "MPI reduction values must be trivially copyable");
             std::vector<T_Value> values(policy.m_workerCount);
@@ -269,7 +273,7 @@ namespace hase::core
     };
 
     /** @brief Execute one complete forward-ray batch on the rank-owned device. */
-    template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayBatch>
     {
         using T_Policy = MPIRank<T_Device, T_Exec>;
@@ -292,7 +296,7 @@ namespace hase::core
     };
 
     /** @brief Finalize gathered batches on the rank-owned device. */
-    template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, FinalizeForwardAse>
     {
         using T_Policy = MPIRank<T_Device, T_Exec>;

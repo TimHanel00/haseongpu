@@ -20,6 +20,12 @@ namespace hase::data
         std::shared_ptr<Domain> domain;
         std::shared_ptr<SurfaceOptics> optics;
 
+        /**
+         * @brief Read a surface-domain to optics association.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the assignment node.
+         * @return Assignment retaining shared domain and optics references.
+         */
         static SurfaceOpticsAssignment fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

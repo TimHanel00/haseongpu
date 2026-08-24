@@ -61,8 +61,8 @@ namespace hase::core
     };
 
     /**
-     * @brief An output stream that writes to std::cout or std::cerr (depending
-     *        on the verbosity that is set.
+     * @brief An output stream that writes to std::cout or std::cerr depending
+     *        on the configured verbosity.
      *
      *        usage:
      *        dout(V_ERROR) << ...
@@ -70,6 +70,7 @@ namespace hase::core
      *
      * @param activation_level a bitmask containing all the bits, on which
      *        verbosity levels the output should appear
+     * @return Selected output stream, or a sink stream when the level is disabled.
      *
      */
     std::ostream& dout(unsigned activation_level);

@@ -10,6 +10,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
+#include <concepts>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -23,10 +24,14 @@ namespace hase
      * follows the original stride multiplied by `n`. Across all workers every
      * index is produced exactly once. A mapped work item is indivisible and
      * must not be repartitioned by the receiving worker.
+     * @param worker Worker facade or policy exposing `workerIndex()` and `workerCount()`.
+     * @param range One-dimensional source range to partition.
+     * @return Strided subrange owned by this worker; it may be empty.
      */
-    [[nodiscard]] constexpr auto mapIdx(auto const& worker, auto const& range)
+    [[nodiscard]] constexpr auto mapIdx(
+        auto const& worker,
+        alpaka::concepts::IdxRange<alpaka::NotRequired, 1u> auto const& range)
     {
-        static_assert(std::remove_cvref_t<decltype(range)>::dim() == 1u, "HASE workers currently map 1D ranges");
         unsigned const workerCount = worker.workerCount();
         unsigned const workerIndex = worker.workerIndex();
         if(workerCount == 0u || workerIndex >= workerCount)
@@ -69,30 +74,36 @@ namespace hase::core
     class HaseWorker
     {
     public:
-        /** @brief Construct a worker by taking ownership of its policy state. */
+        /** @brief Construct a worker by taking ownership of its policy state. @param policy Policy state to move in.
+         */
         explicit HaseWorker(T_WorkerPolicy policy) : m_policy(std::move(policy))
         {
         }
 
-        /** @brief Return this worker's zero-based index in its worker group. */
+        /** @return This worker's zero-based index in its worker group. */
         [[nodiscard]] unsigned workerIndex() const
         {
             return HaseWorkerDispatch<T_WorkerPolicy>::workerIndex(m_policy);
         }
 
-        /** @brief Return the number of workers participating in the group. */
+        /** @return Number of workers participating in the group. */
         [[nodiscard]] unsigned workerCount() const
         {
             return HaseWorkerDispatch<T_WorkerPolicy>::workerCount(m_policy);
         }
 
-        /** @brief Return whether this worker owns root-only host responsibilities. */
+        /** @return Whether this worker owns root-only host responsibilities. */
         [[nodiscard]] bool isRoot() const
         {
             return HaseWorkerDispatch<T_WorkerPolicy>::isRoot(m_policy);
         }
 
-        /** @brief Execute one complete work item through its dispatch specialization. */
+        /**
+         * @brief Execute one complete work item through its dispatch specialization.
+         * @tparam T_WorkItem Work-item type with a matching dispatch specialization.
+         * @param workItem Item forwarded to the policy-specific executor.
+         * @return The dispatch specialization's result.
+         */
         template<typename T_WorkItem>
         auto operator()(T_WorkItem&& workItem)
         {
@@ -100,23 +111,38 @@ namespace hase::core
             return HaseWorkItemDispatch<T_WorkerPolicy, T_Item>::run(m_policy, std::forward<T_WorkItem>(workItem));
         }
 
-        /** @brief Scatter root-owned worker inputs according to the policy. */
+        /**
+         * @brief Scatter root-owned worker inputs according to the policy.
+         * @param value Root value, or a placeholder on non-root workers.
+         * @return The root value delivered to this worker.
+         */
         template<typename T_Value>
         auto scatter(T_Value&& value)
         {
             return HaseWorkerDispatch<T_WorkerPolicy>::scatter(m_policy, std::forward<T_Value>(value));
         }
 
-        /** @brief Gather indexed results without replacing batch identity by worker identity. */
+        /**
+         * @brief Gather indexed results without replacing batch identity by worker identity.
+         * @param value Worker-local value to contribute.
+         * @return Policy-defined shared view of all contributions.
+         */
         template<typename T_Value>
         auto gather(T_Value&& value)
         {
             return HaseWorkerDispatch<T_WorkerPolicy>::gather(m_policy, std::forward<T_Value>(value));
         }
 
-        /** @brief Reduce a genuinely additive or ordered diagnostic quantity. */
-        template<typename T_Value, typename T_Reduction>
-        auto reduce(T_Value&& value, T_Reduction reduction)
+        /**
+         * @brief Reduce a genuinely additive or ordered diagnostic quantity.
+         * @param value Worker-local contribution.
+         * @param reduction Binary operation combining the accumulated value with one contribution.
+         * @return Reduced value delivered to every worker.
+         */
+        template<typename T_Value>
+        auto reduce(
+            T_Value&& value,
+            std::invocable<std::remove_cvref_t<T_Value>, std::remove_cvref_t<T_Value> const&> auto reduction)
         {
             return HaseWorkerDispatch<T_WorkerPolicy>::reduce(
                 m_policy,
@@ -124,7 +150,7 @@ namespace hase::core
                 std::move(reduction));
         }
 
-        /** @brief Access policy state for worker-group lifecycle management. */
+        /** @return Mutable policy state for worker-group lifecycle management. */
         [[nodiscard]] T_WorkerPolicy& policy()
         {
             return m_policy;

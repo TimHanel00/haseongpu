@@ -12,9 +12,24 @@ namespace hase::data
     class ExcitationLayout
     {
     public:
+        /**
+         * @brief Store the prepared mapping from excitation domains to cells.
+         * @param active Per-cell active-material mask in prepared cell order.
+         * @param domainCells Cell indices selected by each excitation domain.
+         */
         ExcitationLayout(std::vector<std::uint8_t> active, std::vector<std::vector<unsigned>> domainCells);
 
+        /**
+         * @param state Domain-indexed excitation values to project.
+         * @return One excitation value per prepared cell; inactive cells are zero.
+         */
         [[nodiscard]] std::vector<double> values(ExcitationState const& state) const;
+
+        /**
+         * @brief Project excitation values into existing prepared cell storage.
+         * @param state Domain-indexed excitation values to project.
+         * @param destination Cell-ordered output vector to replace.
+         */
         void apply(ExcitationState const& state, std::vector<double>& destination) const;
 
     private:
@@ -35,9 +50,17 @@ namespace hase::data
         ExcitationLayout excitation;
     };
 
-    /** @brief Prepare the primitive graph for a direct ASE trace. */
+    /**
+     * @brief Prepare the primitive graph for a direct ASE trace.
+     * @param simulation Host-authoritative primitive graph.
+     * @return Flattened execution state with prepared tracing arrays and controls.
+     */
     [[nodiscard]] SimulationState prepareSimulation(Simulation const& simulation);
 
-    /** @brief Prepare a time-stepped run and retain its excitation projection. */
+    /**
+     * @brief Prepare a time-stepped run and retain its excitation projection.
+     * @param simulation Host-authoritative primitive graph.
+     * @return Prepared execution state plus the reusable excitation layout.
+     */
     [[nodiscard]] SimulationPreparation prepareSimulationWithUpdates(Simulation const& simulation);
 } // namespace hase::data

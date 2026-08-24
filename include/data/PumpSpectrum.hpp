@@ -17,6 +17,12 @@ namespace hase::data
         transport::Array<double> wavelengths;
         transport::Array<double> weights;
 
+        /**
+         * @brief Read weighted pump wavelengths from one graph node.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the pump-spectrum node.
+         * @return Discrete spectrum in transport units.
+         */
         static PumpSpectrum fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

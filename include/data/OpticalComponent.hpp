@@ -36,6 +36,12 @@ namespace hase::data
         std::shared_ptr<Material> material;
         std::vector<std::shared_ptr<SurfaceOpticsAssignment>> surfaceOptics;
 
+        /**
+         * @brief Read one optical component and its referenced primitives.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the optical-component node.
+         * @return Component retaining shared domain, material, and surface-optics references.
+         */
         static OpticalComponent fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

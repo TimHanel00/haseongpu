@@ -29,7 +29,16 @@
 
 namespace hase::utils
 {
-
+    /**
+     * @brief Linearly resample values onto an equidistant grid over the input range.
+     *
+     * @param y Values at the coordinates in `x`.
+     * @param x Strictly increasing source coordinates.
+     * @param nInterpolations Number of output samples, including both endpoints.
+     * @return Resampled values ordered from `x.front()` to `x.back()`.
+     * @pre `x` and `y` are non-empty, equally sized, and `nInterpolations` is
+     * at least their size.
+     */
     std::vector<double> interpolateLinear(
         std::vector<double> const& y,
         std::vector<double> const& x,

@@ -29,6 +29,12 @@ namespace hase::data
         transport::Array<double> axisU;
         transport::Array<double> axisV;
 
+        /**
+         * @brief Read an oriented super-Gaussian profile from one graph node.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the profile node.
+         * @return Profile parameters in transport units.
+         */
         static SuperGaussianPumpProfile fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

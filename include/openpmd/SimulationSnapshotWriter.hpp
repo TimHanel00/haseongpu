@@ -20,11 +20,22 @@
 
 namespace hase::openpmd
 {
+    /**
+     * @brief Bounded optional background writer for simulation snapshots.
+     *
+     * At most one snapshot waits behind the active write. Background failures
+     * are rethrown by the next `enqueue()` or by `finish()`.
+     */
     class AsyncSimulationSnapshotWriter
     {
     public:
         using WriteSnapshot = std::function<void(data::SimulationSnapshot const&)>;
 
+        /**
+         * @param enabled Whether submitted snapshots are written at all.
+         * @param writeSnapshot Callback that persists one complete snapshot.
+         * @param asynchronous Run the callback on a background thread when true.
+         */
         AsyncSimulationSnapshotWriter(bool enabled, WriteSnapshot writeSnapshot, bool asynchronous = true)
             : m_enabled(enabled)
             , m_asynchronous(asynchronous)
@@ -53,6 +64,12 @@ namespace hase::openpmd
         AsyncSimulationSnapshotWriter(AsyncSimulationSnapshotWriter const&) = delete;
         AsyncSimulationSnapshotWriter& operator=(AsyncSimulationSnapshotWriter const&) = delete;
 
+        /**
+         * @brief Submit one snapshot, blocking while the single pending slot is occupied.
+         * @param snapshot Snapshot copied into the pending queue.
+         * @throws std::logic_error If finishing has already begun.
+         * @throws Any exception previously raised by the writer callback.
+         */
         void enqueue(data::SimulationSnapshot const& snapshot)
         {
             if(!m_enabled)
@@ -81,6 +98,10 @@ namespace hase::openpmd
             m_ready.notify_one();
         }
 
+        /**
+         * @brief Drain pending output and join the writer thread.
+         * @throws Any exception raised by the writer callback.
+         */
         void finish()
         {
             if(!m_enabled || m_finished)

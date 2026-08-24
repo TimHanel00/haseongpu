@@ -19,6 +19,12 @@ namespace hase::data
         transport::Array<double> azimuthalAngles;
         transport::Array<double> weights;
 
+        /**
+         * @brief Read weighted polar and azimuthal launch samples.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the angular-distribution node.
+         * @return Discrete angular distribution in transport units.
+         */
         static PumpAngularDistribution fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

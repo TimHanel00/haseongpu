@@ -11,16 +11,22 @@
 
 #include <alpakaUtils/DevBundle.hpp>
 #include <alpakaUtils/utils.hpp>
+#include <concepts/concepts.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
 
+#include <cstdint>
 #include <limits>
 
 namespace hase::kernels
 {
+    /** @brief Device operation building per-cell spontaneous-source weights. */
     struct BuildSourceStrengthWeights
     {
-        ALPAKA_FN_ACC void operator()(auto const& acc, data::TraceView const mesh, auto sourceStrengthWeights) const
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            data::TraceView const mesh,
+            alpaka::concepts::IView<double> auto sourceStrengthWeights) const
         {
             for(auto [cell] : alpaka::onAcc::makeIdxMap(
                     acc,
@@ -35,45 +41,36 @@ namespace hase::kernels
         }
     };
 
+    /** @brief Device operation copying the final prefix sum into scalar storage. */
     struct CaptureSourceStrengthTotal
     {
         ALPAKA_FN_ACC void operator()(
-            auto const&,
+            alpaka::onAcc::concepts::Acc auto const&,
             unsigned const numberOfCells,
-            auto sourceStrengthPrefix,
-            auto sourceStrengthTotal) const
+            alpaka::concepts::IView<double> auto sourceStrengthPrefix,
+            alpaka::concepts::IView<double> auto sourceStrengthTotal) const
         {
             sourceStrengthTotal[0u] = numberOfCells == 0u ? 0.0 : sourceStrengthPrefix[numberOfCells - 1u];
         }
     };
 
+    /** @brief Normalize forward scores and derive cell PhiASE, RSE, and ASE rate. */
     struct FinalizeForwardVolumePhiAse
     {
         unsigned rayCount;
         unsigned batchCount;
         double sourceStrengthTotal;
 
-        template<
-            typename T_Acc,
-            typename T_VertexBatchScoreSum,
-            typename T_RseBatchRayCounts,
-            typename T_LumpedMaterialVertexVolume,
-            typename T_DroppedRays,
-            typename T_VolumePhiAse,
-            typename T_StandardError,
-            typename T_RelativeStandardError,
-            typename T_VolumeDndtAse>
         ALPAKA_FN_ACC void operator()(
-            T_Acc const& acc,
+            alpaka::onAcc::concepts::Acc auto const& acc,
             data::TraceView const mesh,
-            T_VertexBatchScoreSum vertexBatchScoreSum,
-            T_RseBatchRayCounts rseBatchRayCounts,
-            T_LumpedMaterialVertexVolume lumpedMaterialVertexVolume,
-            T_DroppedRays droppedRays,
-            T_VolumePhiAse volumePhiAse,
-            T_StandardError standardError,
-            T_RelativeStandardError relativeStandardError,
-            T_VolumeDndtAse volumeDndtAse) const
+            alpaka::concepts::IView<double const> auto vertexBatchScoreSum,
+            alpaka::concepts::IView<std::uint32_t> auto rseBatchRayCounts,
+            alpaka::concepts::IView<std::uint32_t const> auto droppedRays,
+            alpaka::concepts::IView<float> auto volumePhiAse,
+            alpaka::concepts::IView<double> auto standardError,
+            alpaka::concepts::IView<double> auto relativeStandardError,
+            alpaka::concepts::IView<double> auto volumeDndtAse) const
         {
             for(auto [cell] : alpaka::onAcc::makeIdxMap(
                     acc,
@@ -100,7 +97,7 @@ namespace hase::kernels
                             unsigned const materialVertex
                                 = materialVertexOffset
                                   + mesh.cellPointIndices[cell * mesh.numberOfCellVertices + localVertex];
-                            double const vertexVolume = lumpedMaterialVertexVolume[materialVertex];
+                            double const vertexVolume = mesh.lumpedMaterialVertexVolumes[materialVertex];
                             unsigned const vertex
                                 = batch * (mesh.numberOfMaterials * mesh.numberOfMeshPoints) + materialVertex;
                             batchScoreDensity += vertexVolume > 0.0 ? vertexBatchScoreSum[vertex] / vertexVolume : 0.0;
@@ -151,29 +148,34 @@ namespace hase::kernels
         }
     };
 
-    template<
-        typename T_DevBundle,
-        typename T_Queue,
-        typename T_VertexBatchScoreSum,
-        typename T_RseBatchRayCounts,
-        typename T_LumpedMaterialVertexVolume,
-        typename T_DroppedRays,
-        typename T_VolumePhiAse,
-        typename T_StandardError,
-        typename T_RelativeStandardError,
-        typename T_VolumeDndtAse>
+    /**
+     * @brief Enqueue final normalization of accumulated forward-ray statistics.
+     * @param devBundle Device and executor used to build the cell launch.
+     * @param queue Queue receiving the finalization kernel.
+     * @param mesh Device-resident trace view and lumped material-vertex volumes.
+     * @param vertexBatchScoreSum Raw score sums indexed by batch and material vertex.
+     * @param rseBatchRayCounts Number of histories contributing to each batch.
+     * @param droppedRays Per-cell traversal-failure counts.
+     * @param volumePhiAse Cell PhiASE output.
+     * @param standardError Cell absolute standard-error output.
+     * @param relativeStandardError Cell relative standard-error output.
+     * @param volumeDndtAse Cell ASE population-rate output.
+     * @param rayCount Total histories represented by all batches.
+     * @param batchCount Number of statistical batches.
+     * @param sourceStrengthTotal Integral used to normalize the sampled source.
+     */
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Executor>
     void enqueueFinalizeForwardCellPhiAse(
-        T_DevBundle& devBundle,
-        T_Queue const& queue,
+        alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
+        concepts::Queue auto const& queue,
         data::TraceView const mesh,
-        T_VertexBatchScoreSum const& vertexBatchScoreSum,
-        T_RseBatchRayCounts const& rseBatchRayCounts,
-        T_LumpedMaterialVertexVolume const& lumpedMaterialVertexVolume,
-        T_DroppedRays const& droppedRays,
-        T_VolumePhiAse& volumePhiAse,
-        T_StandardError& standardError,
-        T_RelativeStandardError& relativeStandardError,
-        T_VolumeDndtAse& volumeDndtAse,
+        alpaka::concepts::IBuffer<double> auto const& vertexBatchScoreSum,
+        alpaka::concepts::IView<std::uint32_t> auto const& rseBatchRayCounts,
+        alpaka::concepts::IBuffer<std::uint32_t> auto const& droppedRays,
+        alpaka::concepts::IBuffer<float> auto& volumePhiAse,
+        alpaka::concepts::IBuffer<double> auto& standardError,
+        alpaka::concepts::IBuffer<double> auto& relativeStandardError,
+        alpaka::concepts::IBuffer<double> auto& volumeDndtAse,
         unsigned rayCount,
         unsigned batchCount,
         double sourceStrengthTotal)
@@ -189,7 +191,6 @@ namespace hase::kernels
                 mesh,
                 vertexBatchScoreSum,
                 rseBatchRayCounts,
-                lumpedMaterialVertexVolume,
                 droppedRays,
                 volumePhiAse,
                 standardError,

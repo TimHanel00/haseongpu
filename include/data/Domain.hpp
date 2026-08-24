@@ -30,6 +30,12 @@ namespace hase::data
         transport::RaggedArray<std::uint8_t> masks;
         std::vector<std::shared_ptr<VolumeTopology>> topologies;
 
+        /**
+         * @brief Read one domain selection and resolve its topology references.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the domain node.
+         * @return Domain retaining the transported entity kind, masks, and shared topologies.
+         */
         static Domain fromTransport(transport::TransportReader const& reader, transport::TransportPath const& prefix);
     };
 } // namespace hase::data

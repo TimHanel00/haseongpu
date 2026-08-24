@@ -16,6 +16,13 @@ namespace hase::kernels::forward
     // Direct histories sample a spectral bin, a beta-volume-weighted source,
     // and an isotropic direction.  Stratification preserves those densities.
     // Cover the spectrum as evenly as possible; phase randomizes surplus bins.
+    /**
+     * @param spectrumSize Number of discrete wavelength bins.
+     * @param globalRayIndex Zero-based history index in the complete launch.
+     * @param globalRayCount Number of histories in the complete launch.
+     * @param phase Deterministic cyclic spectrum offset.
+     * @return Stratified spectrum index, or zero for an empty launch or spectrum.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned stratifiedSpectrumIndex(
         unsigned const spectrumSize,
         unsigned const globalRayIndex,
@@ -31,6 +38,12 @@ namespace hase::kernels::forward
         return (evenlySpacedIndex + phase % spectrumSize) % spectrumSize;
     }
 
+    /**
+     * @param globalRayIndex Zero-based history index.
+     * @param globalRayCount Number of histories in the stratified set.
+     * @param shift Shared randomized offset in `[0, 1)`.
+     * @return Stratified unit-interval coordinate, or zero for an empty set.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC double stratifiedUnitInterval(
         unsigned const globalRayIndex,
         unsigned const globalRayCount,
@@ -41,6 +54,12 @@ namespace hase::kernels::forward
                    : (static_cast<double>(globalRayIndex) + shift) / static_cast<double>(globalRayCount);
     }
 
+    /**
+     * @param mesh Device trace containing a cumulative cell-volume prefix.
+     * @param totalVolume Final prefix value; non-positive values select cells uniformly.
+     * @param rndEngine Random engine advanced by the selection.
+     * @return Selected cell index, or zero for an empty mesh.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeByVolume(
         hase::data::TraceView const& mesh,
         double const totalVolume,
@@ -78,6 +97,11 @@ namespace hase::kernels::forward
         return lower < mesh.numberOfCells ? lower : mesh.numberOfCells - 1u;
     }
 
+    /**
+     * @param mesh Device trace containing a cumulative source-strength prefix.
+     * @param target Target in the prefix-sum domain.
+     * @return First cell whose cumulative source strength exceeds `target`.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeBySourceStrengthTarget(
         hase::data::TraceView const& mesh,
         double const target)
@@ -99,7 +123,18 @@ namespace hase::kernels::forward
         return lower < mesh.numberOfCells ? lower : mesh.numberOfCells - 1u;
     }
 
-    // Source probability is beta * volume * active-ion density / fluorescence lifetime.
+    /**
+     * @brief Sample the spontaneous source distribution.
+     *
+     * Source probability is beta times volume times active-ion density divided
+     * by fluorescence lifetime.
+     *
+     * @param mesh Device trace containing source and volume prefixes.
+     * @param sourceStrengthTotal Final source-strength prefix value.
+     * @param rndEngine Random engine advanced by the selection.
+     * @return Selected source cell, falling back to volume sampling when the
+     * source distribution is empty.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleVolumeBySourceStrength(
         hase::data::TraceView const& mesh,
         double const sourceStrengthTotal,
@@ -118,7 +153,16 @@ namespace hase::kernels::forward
         return sampleVolumeBySourceStrengthTarget(mesh, target);
     }
 
-    // One randomized systematic CDF point per globally assigned source ray.
+    /**
+     * @brief Select one cell using a randomized systematic source CDF point.
+     * @param mesh Device trace containing source and volume prefixes.
+     * @param sourceStrengthTotal Final source-strength prefix value.
+     * @param globalRayIndex Zero-based history index in the complete launch.
+     * @param globalRayCount Number of histories in the complete launch.
+     * @param shift Shared randomized systematic offset.
+     * @param rndEngine Fallback random engine for an unavailable source CDF.
+     * @return Selected source cell.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned sampleStratifiedVolumeBySourceStrength(
         hase::data::TraceView const& mesh,
         double const sourceStrengthTotal,
@@ -137,6 +181,12 @@ namespace hase::kernels::forward
             stratifiedUnitInterval(globalRayIndex, globalRayCount, shift) * sourceStrengthTotal);
     }
 
+    /**
+     * @param mesh Device trace containing Tet4 connectivity.
+     * @param tet Cell index of the Tet4 to sample.
+     * @param rndEngine Random engine advanced by barycentric sampling.
+     * @return Uniformly distributed point inside the Tet4.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point samplePointInVolume(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -150,7 +200,11 @@ namespace hase::kernels::forward
             rndEngine);
     }
 
-    // Geometry-independent physical source distribution; no inferred axis.
+    /**
+     * @brief Sample a geometry-independent isotropic unit direction.
+     * @param rndEngine Random engine advanced by angular sampling.
+     * @return Unit vector uniformly distributed on the sphere.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point sampleIsotropicDirection(
         alpaka::rand::engine::Philox4x32x10& rndEngine)
     {

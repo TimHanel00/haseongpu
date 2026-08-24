@@ -44,6 +44,10 @@ namespace hase::core
 {
     namespace detail
     {
+        /**
+         * @param run Prepared simulation controls to validate before allocating devices.
+         * @throws std::runtime_error If time, fields, pump sources, or synchronization settings are invalid.
+         */
         inline void validateRunParameters(SimulationControls const& run)
         {
             if(run.timeStep <= 0.0)
@@ -117,7 +121,8 @@ namespace hase::core
         }
     } // namespace detail
 
-    template<typename T_Device, typename T_Executor>
+    /** @brief Persistent device state and integration loop for one compiled backend selection. */
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Executor>
     class CompiledSimulationRunner
     {
         using T_Queue = ALPAKA_TYPEOF(std::declval<T_Device>().makeQueue(alpaka::queueKind::nonBlocking));
@@ -125,6 +130,14 @@ namespace hase::core
         using T_FloatBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<float>(std::declval<T_Device&>(), std::size_t{1}));
 
     public:
+        /**
+         * @param devices Non-empty local device set; the first device owns integration state.
+         * @param executor Executor used for all kernels.
+         * @param experiment Mutable ASE controls retained for each enabled ASE step.
+         * @param compute Mutable execution policy retained for adaptive traces.
+         * @param run Validated time, pump, output, and control configuration.
+         * @param hostMesh Prepared host trace backing resident allocations.
+         */
         CompiledSimulationRunner(
             std::vector<T_Device> devices,
             T_Executor const& executor,
@@ -156,8 +169,6 @@ namespace hase::core
                   alpaka::onHost::alloc<double>(
                       m_device,
                       static_cast<std::size_t>(m_mesh.numberOfMaterials) * m_mesh.numberOfMeshPoints))
-            , m_lumpedGainVertexVolume(
-                  hase::alpakaUtils::toDevice(m_queue, hase::kernels::makeLumpedMaterialVertexVolumes(hostMesh)))
             , m_generalPumpSources(
                   hase::kernels::prepareGeneralPumpDeviceSources<T_Device>(m_queue, hostMesh, m_run.pump))
         {
@@ -165,6 +176,11 @@ namespace hase::core
                 throw std::runtime_error("simulation beta_volume must contain exactly one value per cell");
         }
 
+        /**
+         * @brief Advance every configured time step and publish requested snapshots.
+         * @param callback Consumer invoked synchronously at output boundaries.
+         * @param receiveControl Optional provider of a newly prepared trace after a completed step.
+         */
         void run(
             std::function<void(data::SimulationSnapshot const&)> const& callback,
             std::function<data::TraceData(unsigned)> const& receiveControl)
@@ -255,7 +271,7 @@ namespace hase::core
         /** @brief Advance one physical time step through its integration stages on the device. */
         void advanceTimeStep(unsigned const simulationStep, bool const pumpEnabled, bool const aseEnabled)
         {
-            auto evaluateStage = [&](auto& beta, bool const refreshAse = true)
+            auto evaluateStage = [&](alpaka::concepts::IBuffer<double> auto& beta, bool const refreshAse = true)
             {
                 if(refreshAse && aseEnabled)
                 {
@@ -273,7 +289,6 @@ namespace hase::core
                         m_generalPumpSources,
                         beta,
                         m_vertexPumpIntegral,
-                        m_lumpedGainVertexVolume,
                         m_dndtPump,
                         simulationStep);
                 }
@@ -359,7 +374,7 @@ namespace hase::core
             enqueueClip(m_betaNext);
         }
 
-        void integrateRungeKutta4(auto&& evaluateStage)
+        void integrateRungeKutta4(std::invocable<T_DoubleBuffer&, bool> auto&& evaluateStage)
         {
             evaluateStage(m_beta);
             alpaka::onHost::memcpy(m_queue, m_k1, m_derivative);
@@ -378,7 +393,7 @@ namespace hase::core
             enqueueRungeKutta4();
         }
 
-        void integrateFrozenPhiAseRungeKutta4(auto&& evaluateStage)
+        void integrateFrozenPhiAseRungeKutta4(std::invocable<T_DoubleBuffer&, bool> auto&& evaluateStage)
         {
             evaluateStage(m_beta, true);
             alpaka::onHost::memcpy(m_queue, m_k1, m_derivative);
@@ -397,7 +412,7 @@ namespace hase::core
             enqueueRungeKutta4();
         }
 
-        void integrateImplicitEuler(auto&& evaluateStage)
+        void integrateImplicitEuler(std::invocable<T_DoubleBuffer&, bool> auto&& evaluateStage)
         {
             alpaka::onHost::memcpy(m_queue, m_stage, m_beta);
             for(unsigned iteration = 0u; iteration < std::max(1u, m_run.timeIntegration.implicitIterations);
@@ -511,7 +526,11 @@ namespace hase::core
                 m_run.outputFields};
         }
 
-        void enqueueAddScaled(auto& base, auto& slope, auto& out, double scale)
+        void enqueueAddScaled(
+            alpaka::concepts::IBuffer<double> auto& base,
+            alpaka::concepts::IBuffer<double> auto& slope,
+            alpaka::concepts::IBuffer<double> auto& out,
+            double scale)
         {
             alpaka::onHost::transform(
                 m_queue,
@@ -522,7 +541,11 @@ namespace hase::core
                 slope);
         }
 
-        void enqueueHeun(auto& base, auto& first, auto& second, auto& out)
+        void enqueueHeun(
+            alpaka::concepts::IBuffer<double> auto& base,
+            alpaka::concepts::IBuffer<double> auto& first,
+            alpaka::concepts::IBuffer<double> auto& second,
+            alpaka::concepts::IBuffer<double> auto& out)
         {
             alpaka::onHost::transform(
                 m_queue,
@@ -550,22 +573,21 @@ namespace hase::core
 
         void enqueueExponentialEuler()
         {
-            auto frameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
-                m_devBundle.device,
+            alpaka::onHost::transform(
+                m_queue,
                 m_devBundle.executor,
-                alpaka::Vec{m_mesh.numberOfCells});
-            m_queue.enqueue(
-                frameSpec,
-                alpaka::KernelBundle{
-                    hase::kernels::ExponentialEulerUpdate{m_run.timeStep},
-                    m_mesh,
-                    m_beta,
-                    m_dndtPump,
-                    m_dndtAse,
-                    m_betaNext});
+                m_betaNext,
+                hase::kernels::ExponentialEulerUpdate{
+                    m_run.timeStep,
+                    m_mesh.materialActive,
+                    m_mesh.materialFluorescenceLifetimes},
+                m_beta,
+                m_dndtPump,
+                m_dndtAse,
+                m_forwardAseContext.primaryMesh().cellMaterialIds.toDeviceView());
         }
 
-        void enqueueClip(auto& beta)
+        void enqueueClip(alpaka::concepts::IBuffer<double> auto& beta)
         {
             alpaka::onHost::transform(m_queue, m_devBundle.executor, beta, hase::kernels::ClipBeta{}, beta);
         }
@@ -592,7 +614,6 @@ namespace hase::core
         T_DoubleBuffer m_k3;
         T_DoubleBuffer m_k4;
         T_DoubleBuffer m_vertexPumpIntegral;
-        T_DoubleBuffer m_lumpedGainVertexVolume;
         std::vector<hase::kernels::GeneralPumpDeviceSource<T_Device>> m_generalPumpSources;
         data::PhiAseResult m_lastAseResult;
         std::size_t m_nextOutputStep = 0u;
@@ -601,6 +622,16 @@ namespace hase::core
 
     namespace detail
     {
+        /**
+         * @brief Select a backend and run an already prepared time simulation.
+         * @param experiment ASE tracing controls.
+         * @param compute Mutable backend and device scheduling state.
+         * @param run Time integration, pump, output, and control configuration.
+         * @param hostMesh Prepared host trace retained across steps.
+         * @param callback Consumer invoked for each requested output snapshot.
+         * @param receiveControl Optional synchronized update provider keyed by completed step.
+         * @return Zero after the matching backend completes.
+         */
         inline int runPreparedSimulation(
             AseTraceControls& experiment,
             ExecutionPolicy& compute,
@@ -610,14 +641,14 @@ namespace hase::core
             std::function<data::TraceData(unsigned)> const& receiveControl = {})
         {
             detail::validateRunParameters(run);
-            auto backends = alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors);
+            auto backends
+                = alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors);
             bool oneDidRun = false;
             alpaka::onHost::executeForEachIfHasDevice(
-                [&](auto const& backend)
+                [&](alpaka::concepts::BackendSpec auto const& backend)
                 {
-                    auto deviceSpec = backend[alpaka::object::deviceSpec];
-                    auto exec = backend[alpaka::object::exec];
-                    auto devSelector = alpaka::onHost::makeDeviceSelector(deviceSpec);
+                    auto const exec = alpaka::getExecutor(backend);
+                    auto devSelector = alpaka::onHost::makeDeviceSelector(backend);
                     if(devSelector.getDeviceCount() == 0u)
                     {
                         return 0;
@@ -675,6 +706,10 @@ namespace hase::core
      * The optional control callback mutates the same graph at a synchronized
      * step boundary. Preparation then detects material-table changes and
      * refreshes only material-resident buffers; topology remains resident.
+     * @param simulation Primitive graph prepared initially and after synchronized updates.
+     * @param callback Consumer invoked for each requested output snapshot.
+     * @param receiveControl Optional callback that mutates `simulation` at control boundaries.
+     * @return Zero after successful completion.
      */
     inline int runSimulation(
         data::Simulation& simulation,

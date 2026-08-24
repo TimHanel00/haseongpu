@@ -13,6 +13,7 @@
 
 namespace hase::data
 {
+    /** @brief Prepared trace arrays, controls, and result storage for one simulation. */
     struct SimulationState
     {
         core::AseTraceControls ase;

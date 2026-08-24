@@ -23,6 +23,12 @@ namespace hase::data
         std::optional<std::uint64_t> iterations;
         std::optional<double> tolerance;
 
+        /**
+         * @brief Read one time-integration algorithm selection.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the solver node.
+         * @return Solver name and optional iteration controls.
+         */
         static TimeIntegrationSolver fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);
