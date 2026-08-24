@@ -20,7 +20,7 @@
 namespace hase::tests
 {
     using TestBackends = std::decay_t<
-        decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors))>;
+        decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors))>;
 
     hase::data::TraceData makeTraversalMesh(
         std::vector<hase::core::Point> const& points,
@@ -165,10 +165,10 @@ TEMPLATE_LIST_TEST_CASE(
     hase::tests::TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
         return;
     }
     auto device = deviceSelector.makeDevice(0);
@@ -206,8 +206,7 @@ TEMPLATE_LIST_TEST_CASE(
 
     hase::core::Point const origin = points[1u] * 0.2 + points[3u] * 0.1 + points[4u] * 0.3;
     hase::core::Point const direction = hase::kernels::forward::normalize(origin * -1.0);
-    auto const result
-        = hase::tests::traverseOneRay(device, backend[alpaka::object::exec], mesh, 0u, origin, direction);
+    auto const result = hase::tests::traverseOneRay(device, alpaka::getExecutor(backend), mesh, 0u, origin, direction);
 
     CHECK(hase::kernels::forward::hasMultipleTiedFaces(result.intersection.tiedFaceMask));
     CHECK(result.intersection.tiedFaceMask == ((1u << 1u) | (1u << 2u) | (1u << 3u)));
@@ -226,10 +225,10 @@ TEMPLATE_LIST_TEST_CASE(
     hase::tests::TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
         return;
     }
     auto device = deviceSelector.makeDevice(0);
@@ -245,8 +244,7 @@ TEMPLATE_LIST_TEST_CASE(
     CHECK(hase::core::dot(direction, planeEdge1) == 0.0);
 
     hase::core::Point const origin{-0.4, 0.2, 0.2};
-    auto const result
-        = hase::tests::traverseOneRay(device, backend[alpaka::object::exec], mesh, 0u, origin, direction);
+    auto const result = hase::tests::traverseOneRay(device, alpaka::getExecutor(backend), mesh, 0u, origin, direction);
 
     CHECK(result.intersection.localFace == 0);
     CHECK(result.intersection.tiedFaceMask == 1u);

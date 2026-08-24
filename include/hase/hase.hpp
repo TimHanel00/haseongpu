@@ -6,6 +6,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #pragma once
+
+/** @file
+ * @brief Umbrella include for the public simulation graph, runners, results, and version API.
+ */
 #include <core/simulation.hpp>
 #include <core/timeSteppedSimulation.hpp>
 #include <data/PhiAseResult.hpp>

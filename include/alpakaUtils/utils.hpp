@@ -25,6 +25,12 @@ namespace hase::alpakaUtils
     using Vec2D = alpaka::Vec<uint32_t, 2>;
     using Vec3D = alpaka::Vec<uint32_t, 3>;
 
+    /**
+     * @brief Linearize the calling accelerator thread's global index.
+     *
+     * @param acc Accelerator context supplying grid-thread indices and extents.
+     * @return Zero-based linear index within the thread grid.
+     */
     ALPAKA_FN_ACC auto getLinGlobalIdx(alpaka::onAcc::concepts::Acc auto const& acc)
     {
         auto idxMd = acc.getIdxWithin(alpaka::onAcc::origin::grid, alpaka::onAcc::unit::threads);
@@ -32,10 +38,16 @@ namespace hase::alpakaUtils
         return alpaka::linearize(extentMd, idxMd);
     }
 
-    template<typename T_Device>
+    template<alpaka::onHost::concepts::Device T_Device>
     using ApiFromDevice = typename hase::alpakaUtils::GetApiFromDevice<T_Device>::type;
 
-    template<typename T_Device>
+    /**
+     * @brief Produce an unevaluated API value for a device type.
+     *
+     * @tparam T_Device Alpaka device whose API type is requested.
+     * @return Value of `ApiFromDevice<T_Device>` for compile-time expressions.
+     */
+    template<alpaka::onHost::concepts::Device T_Device>
     constexpr auto getApiFromDevice()
     {
         return std::declval<ApiFromDevice<T_Device>>();

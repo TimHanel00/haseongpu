@@ -102,6 +102,7 @@ namespace hase::core
         static inline std::string const DNDT_ASE = "dndt_ase";
         static inline std::string const DNDT_PUMP = "dndt_pump";
 
+        /** @return Every supported output-field name in stable presentation order. */
         [[nodiscard]] static std::vector<std::string> all()
         {
             return {BETA_VOLUME, PHI_ASE, STANDARD_ERROR, RELATIVE_STANDARD_ERROR, TOTAL_RAYS, DNDT_ASE, DNDT_PUMP};
@@ -114,6 +115,7 @@ namespace hase::core
         static inline std::string const BETA_VOLUME = "beta_volume";
         static inline std::string const CROSS_SECTIONS = "cross_sections";
 
+        /** @return Every supported synchronized control-field name. */
         [[nodiscard]] static std::vector<std::string> all()
         {
             return {BETA_VOLUME, CROSS_SECTIONS};

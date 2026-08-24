@@ -188,6 +188,7 @@ namespace hase::data
         std::span<int const> cellNeighborLocalFaces;
         std::span<int const> cellFaceBoundaries;
         std::span<double const> cellVolumes;
+        std::span<double const> lumpedMaterialVertexVolumes;
         std::span<double const> cellVolumePrefix;
         std::span<double const> sourceStrengthPrefix;
         std::span<double const> cellCenters;
@@ -204,6 +205,7 @@ namespace hase::data
         float thickness;
         bool samplePointsAreMeshPoints;
 
+        /** @param pointIndex Global mesh-point index. @return Point coordinates in Cartesian layout. */
         [[nodiscard]] ALPAKA_FN_ACC Point getPoint(unsigned pointIndex) const
         {
             return Point{
@@ -212,16 +214,29 @@ namespace hase::data
                 points[pointIndex + 2u * numberOfMeshPoints]};
         }
 
+        /** @param cell Cell index. @param localVertex Cell-local vertex index. @return Referenced mesh point. */
         [[nodiscard]] ALPAKA_FN_ACC Point getCellPoint(unsigned cell, unsigned localVertex) const
         {
             return getPoint(cellPointIndices[cell * numberOfCellVertices + localVertex]);
         }
 
+        /**
+         * @param cell Cell index.
+         * @param localFace Cell-local face index.
+         * @param localVertex Face-local vertex index.
+         * @return Global mesh-point index, or the stored boundary sentinel.
+         */
         [[nodiscard]] ALPAKA_FN_ACC int getCellFacePoint(unsigned cell, unsigned localFace, unsigned localVertex) const
         {
             return cellFaces[(cell * numberOfFacesPerCell + localFace) * tet4FaceWidth + localVertex];
         }
 
+        /**
+         * @param cell Cell index.
+         * @param localFace Cell-local face index.
+         * @param point Point at which to evaluate the opposite-vertex coordinate.
+         * @return Affine barycentric face coordinate; zero lies on the face.
+         */
         [[nodiscard]] ALPAKA_FN_ACC double getFaceBarycentricCoordinate(
             unsigned const cell,
             unsigned const localFace,
@@ -232,6 +247,12 @@ namespace hase::data
                    + barycentricFacePlanes[offset + 2u] * point.z + barycentricFacePlanes[offset + 3u];
         }
 
+        /**
+         * @param cell Cell index.
+         * @param localFace Cell-local face index.
+         * @param direction Direction to project onto the face-coordinate gradient.
+         * @return Directional derivative of the barycentric face coordinate.
+         */
         [[nodiscard]] ALPAKA_FN_ACC double getFaceBarycentricDirection(
             unsigned const cell,
             unsigned const localFace,
@@ -242,56 +263,73 @@ namespace hase::data
                    + barycentricFacePlanes[offset + 2u] * direction.z;
         }
 
+        /** @param cell Cell index. @param localFace Cell-local face index. @return Neighbor cell or a boundary
+         * sentinel. */
         [[nodiscard]] ALPAKA_FN_ACC int getCellNeighbor(unsigned cell, unsigned localFace) const
         {
             return cellNeighborCells[cell * numberOfFacesPerCell + localFace];
         }
 
+        /** @param cell Cell index. @param localFace Cell-local face index. @return Matching local face in the
+         * neighbor. */
         [[nodiscard]] ALPAKA_FN_ACC int getCellNeighborLocalFace(unsigned cell, unsigned localFace) const
         {
             return cellNeighborLocalFaces[cell * numberOfFacesPerCell + localFace];
         }
 
+        /** @param cell Cell index. @return Excited-state fraction stored for the cell. */
         [[nodiscard]] ALPAKA_FN_ACC double getBetaVolume(unsigned cell) const
         {
             return betaVolume[cell];
         }
 
+        /** @param cell Cell index. @return Index of the cell's material. */
         [[nodiscard]] ALPAKA_FN_ACC unsigned getMaterialId(unsigned cell) const
         {
             return cellMaterialIds[cell];
         }
 
+        /** @param cell Cell index. @return Whether the assigned material contributes gain. */
         [[nodiscard]] ALPAKA_FN_ACC bool isActive(unsigned cell) const
         {
             return materialActive[getMaterialId(cell)] != 0u;
         }
 
+        /** @param cell Cell index. @return Active-ion number density of the assigned material. */
         [[nodiscard]] ALPAKA_FN_ACC double activeIonDensity(unsigned cell) const
         {
             return materialActiveIonDensities[getMaterialId(cell)];
         }
 
+        /** @param cell Cell index. @return Fluorescence lifetime of the assigned material. */
         [[nodiscard]] ALPAKA_FN_ACC double fluorescenceLifetime(unsigned cell) const
         {
             return materialFluorescenceLifetimes[getMaterialId(cell)];
         }
 
+        /** @param cell Cell index. @return Bulk attenuation coefficient of the assigned material. */
         [[nodiscard]] ALPAKA_FN_ACC double bulkAttenuation(unsigned cell) const
         {
             return materialBulkAttenuations[getMaterialId(cell)];
         }
 
+        /** @param material Material index. @return Number of spectral samples owned by the material. */
         [[nodiscard]] ALPAKA_FN_ACC unsigned crossSectionCount(unsigned material) const
         {
             return materialCrossSectionOffsets[material + 1u] - materialCrossSectionOffsets[material];
         }
 
+        /** @param material Material index. @param sample Material-local spectral index. @return Sample wavelength. */
         [[nodiscard]] ALPAKA_FN_ACC double emissionWavelength(unsigned material, unsigned sample) const
         {
             return crossSectionWavelengths[materialCrossSectionOffsets[material] + sample];
         }
 
+        /**
+         * @param material Material index.
+         * @param wavelength Wavelength at which to interpolate, clamped to the table endpoints.
+         * @return Absorption and emission cross sections for the material.
+         */
         [[nodiscard]] ALPAKA_FN_ACC CrossSections crossSections(unsigned material, double wavelength) const
         {
             unsigned const begin = materialCrossSectionOffsets[material];
@@ -323,17 +361,26 @@ namespace hase::data
                 crossSectionEmission[left] + fraction * (crossSectionEmission[right] - crossSectionEmission[left])};
         }
 
+        /** @param cell Cell index. @param wavelength Query wavelength. @return Cross sections of the cell's material.
+         */
         [[nodiscard]] ALPAKA_FN_ACC CrossSections crossSectionsForCell(unsigned cell, double wavelength) const
         {
             return crossSections(getMaterialId(cell), wavelength);
         }
 
+        /** @param a First vertex. @param b Second vertex. @param c Third vertex. @param d Fourth vertex. @return
+         * Tetrahedron volume. */
         [[nodiscard]] ALPAKA_FN_ACC double tetraVolume(Point const a, Point const b, Point const c, Point const d)
             const
         {
             return alpaka::math::abs(dot(cross(b - a, c - a), d - a)) / 6.0;
         }
 
+        /**
+         * @param a First vertex. @param b Second vertex. @param c Third vertex. @param d Fourth vertex.
+         * @param rndEngine Random engine advanced by the sampling operation.
+         * @return A uniformly distributed point inside the tetrahedron.
+         */
         ALPAKA_FN_ACC Point genRndPointInTetra(
             Point const a,
             Point const b,
@@ -353,6 +400,12 @@ namespace hase::data
             return a * (r0 * invSum) + b * (r1 * invSum) + c * (r2 * invSum) + d * (r3 * invSum);
         }
 
+        /**
+         * @param origin Point that the sample must not coincide with.
+         * @param cell Cell whose tetrahedron is sampled.
+         * @param rndEngine Random engine advanced by the sampling operation.
+         * @return A uniformly distributed point inside the cell distinct from `origin`.
+         */
         ALPAKA_FN_ACC Point genRndPointInCell(
             Point& origin,
             unsigned cell,
@@ -371,6 +424,7 @@ namespace hase::data
             return startPoint;
         }
 
+        /** @param sampleIndex Sample index. @return Sample coordinates from the structure-of-arrays layout. */
         [[nodiscard]] ALPAKA_FN_ACC Point getSamplePoint(unsigned sampleIndex) const
         {
             return Point{
@@ -379,16 +433,20 @@ namespace hase::data
                 samplePoints[sampleIndex + 2u * numberOfSamples]};
         }
 
+        /** @param cell Cell index. @return Precomputed cell center. */
         [[nodiscard]] ALPAKA_FN_ACC Point getCellCenterPoint(unsigned cell) const
         {
             return Point{cellCenters[cell], cellCenters[cell + numberOfCells], cellCenters[cell + 2u * numberOfCells]};
         }
 
+        /** @param cell Cell index. @return Physical cell volume. */
         [[nodiscard]] ALPAKA_FN_ACC double getCellVolume(unsigned cell) const
         {
             return cellVolumes[cell];
         }
 
+        /** @param cell Cell index. @param localFace Cell-local face index. @return Assigned constant reflectivity, or
+         * zero. */
         [[nodiscard]] ALPAKA_FN_ACC float getSurfaceReflectivity(unsigned cell, unsigned localFace) const
         {
             int const surfaceId = cellFaceBoundaries[cell * numberOfFacesPerCell + localFace];
@@ -399,6 +457,8 @@ namespace hase::data
             return 0.0f;
         }
 
+        /** @param cell Cell index. @param localFace Cell-local face index. @return Refractive index on the incident
+         * side. */
         [[nodiscard]] ALPAKA_FN_ACC float getSurfaceRefractiveIndexInside(unsigned cell, unsigned localFace) const
         {
             int const surfaceId = cellFaceBoundaries[cell * numberOfFacesPerCell + localFace];
@@ -412,6 +472,8 @@ namespace hase::data
                        : 1.0f;
         }
 
+        /** @param cell Cell index. @param localFace Cell-local face index. @return Refractive index on the exterior
+         * side. */
         [[nodiscard]] ALPAKA_FN_ACC float getSurfaceRefractiveIndexOutside(unsigned cell, unsigned localFace) const
         {
             int const surfaceId = cellFaceBoundaries[cell * numberOfFacesPerCell + localFace];
@@ -422,6 +484,8 @@ namespace hase::data
             return 1.0f;
         }
     };
+
+    class TraceData;
 
     /**
      * @brief HybridBuffer ownership for one device-local tracing domain.
@@ -472,6 +536,7 @@ namespace hase::data
             std::vector<int>& cellNeighborLocalFaces,
             std::vector<int>& cellFaceBoundaries,
             std::vector<double>& cellVolumes,
+            std::vector<double>& lumpedMaterialVertexVolumes,
             std::vector<double>& cellVolumePrefix,
             std::vector<double>& sourceStrengthPrefix,
             std::vector<double>& cellCenters,
@@ -504,6 +569,7 @@ namespace hase::data
             , cellNeighborLocalFaces(hase::alpakaUtils::getHybridBuffer(m_device, cellNeighborLocalFaces))
             , cellFaceBoundaries(hase::alpakaUtils::getHybridBuffer(m_device, cellFaceBoundaries))
             , cellVolumes(hase::alpakaUtils::getHybridBuffer(m_device, cellVolumes))
+            , lumpedMaterialVertexVolumes(hase::alpakaUtils::getHybridBuffer(m_device, lumpedMaterialVertexVolumes))
             , cellVolumePrefix(hase::alpakaUtils::getHybridBuffer(m_device, cellVolumePrefix))
             , sourceStrengthPrefix(hase::alpakaUtils::getHybridBuffer(m_device, sourceStrengthPrefix))
             , cellCenters(hase::alpakaUtils::getHybridBuffer(m_device, cellCenters))
@@ -521,6 +587,11 @@ namespace hase::data
         {
         }
 
+        /**
+         * @brief Enqueue host-to-device copies for every trace buffer.
+         * @param queue Queue associated with `m_device` on which copies are enqueued.
+         * @note The function does not wait; callers synchronize the queue before kernel use.
+         */
         void toDevice(concepts::Queue auto const& queue)
         {
             points.toDevice(queue);
@@ -548,6 +619,7 @@ namespace hase::data
             cellNeighborLocalFaces.toDevice(queue);
             cellFaceBoundaries.toDevice(queue);
             cellVolumes.toDevice(queue);
+            lumpedMaterialVertexVolumes.toDevice(queue);
             cellVolumePrefix.toDevice(queue);
             sourceStrengthPrefix.toDevice(queue);
             cellCenters.toDevice(queue);
@@ -559,38 +631,17 @@ namespace hase::data
          *
          * Topology buffers remain allocated and resident. This is the explicit
          * synchronization path for resized cross-section tables.
+         * @param trace Host trace providing replacement material arrays.
+         * @param queue Queue associated with `m_device` on which uploads are enqueued.
+         * @note The function does not wait for the uploads to complete.
          */
-        void refreshMaterials(auto& trace, concepts::Queue auto const& queue)
-        {
-            if(numberOfMaterials != trace.numberOfMaterials || numberOfCells != trace.numberOfCells)
-                throw std::runtime_error("material refresh changed the tracing-domain layout");
-            materialActive = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialActive);
-            materialRefractiveIndices = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialRefractiveIndices);
-            materialActiveIonDensities
-                = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialActiveIonDensities);
-            materialFluorescenceLifetimes
-                = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialFluorescenceLifetimes);
-            materialBulkAttenuations = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialBulkAttenuations);
-            materialPeakAbsorption = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialPeakAbsorption);
-            materialPeakEmission = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialPeakEmission);
-            materialCrossSectionOffsets
-                = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialCrossSectionOffsets);
-            crossSectionWavelengths = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionWavelengths);
-            crossSectionAbsorption = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionAbsorption);
-            crossSectionEmission = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionEmission);
-            materialActive.toDevice(queue);
-            materialRefractiveIndices.toDevice(queue);
-            materialActiveIonDensities.toDevice(queue);
-            materialFluorescenceLifetimes.toDevice(queue);
-            materialBulkAttenuations.toDevice(queue);
-            materialPeakAbsorption.toDevice(queue);
-            materialPeakEmission.toDevice(queue);
-            materialCrossSectionOffsets.toDevice(queue);
-            crossSectionWavelengths.toDevice(queue);
-            crossSectionAbsorption.toDevice(queue);
-            crossSectionEmission.toDevice(queue);
-        }
+        void refreshMaterials(TraceData& trace, concepts::Queue auto const& queue);
 
+        /**
+         * @brief Build the non-owning device view passed to tracing kernels.
+         * @return Spans into the current device allocations plus their layout metadata.
+         * @warning The view is invalidated when any referenced HybridBuffer is replaced.
+         */
         [[nodiscard]] auto view() const -> TraceView
         {
             return {
@@ -649,6 +700,9 @@ namespace hase::data
                     cellNeighborLocalFaces.getExtents().x()),
                 std::span<int const>(cellFaceBoundaries.toDeviceView().data(), cellFaceBoundaries.getExtents().x()),
                 std::span<double const>(cellVolumes.toDeviceView().data(), cellVolumes.getExtents().x()),
+                std::span<double const>(
+                    lumpedMaterialVertexVolumes.toDeviceView().data(),
+                    lumpedMaterialVertexVolumes.getExtents().x()),
                 std::span<double const>(cellVolumePrefix.toDeviceView().data(), cellVolumePrefix.getExtents().x()),
                 std::span<double const>(
                     sourceStrengthPrefix.toDeviceView().data(),
@@ -698,6 +752,7 @@ namespace hase::data
         T_Buffer<int> cellNeighborLocalFaces;
         T_Buffer<int> cellFaceBoundaries;
         T_Buffer<double> cellVolumes;
+        T_Buffer<double> lumpedMaterialVertexVolumes;
         T_Buffer<double> cellVolumePrefix;
         T_Buffer<double> sourceStrengthPrefix;
         T_Buffer<double> cellCenters;
@@ -750,6 +805,7 @@ namespace hase::data
         std::vector<int> cellNeighborLocalFaces;
         std::vector<int> cellFaceBoundaries;
         std::vector<double> cellVolumes;
+        std::vector<double> lumpedMaterialVertexVolumes;
         std::vector<double> cellVolumePrefix;
         std::vector<double> sourceStrengthPrefix;
         std::vector<double> cellCenters;
@@ -839,14 +895,39 @@ namespace hase::data
             precomputeBarycentricFacePlanes();
         }
 
+        /** @brief Recompute cell-volume, lumped-vertex-volume, and source-strength lookup arrays. */
         void rebuildStaticPrefixes()
         {
             cellVolumePrefix.resize(cellVolumes.size());
             std::partial_sum(cellVolumes.begin(), cellVolumes.end(), cellVolumePrefix.begin());
 
+            std::size_t const expectedCellPointCount = cellVolumes.size() * numberOfCellVertices;
+            bool const hasCompleteCellTopology
+                = cellPointIndices.size() == expectedCellPointCount && cellMaterialIds.size() >= cellVolumes.size();
+            if(hasCompleteCellTopology)
+            {
+                lumpedMaterialVertexVolumes.assign(
+                    static_cast<std::size_t>(numberOfMaterials) * numberOfMeshPoints,
+                    0.0);
+                for(std::size_t cell = 0u; cell < cellVolumes.size(); ++cell)
+                {
+                    double const share = cellVolumes[cell] / static_cast<double>(numberOfCellVertices);
+                    for(std::size_t localVertex = 0u; localVertex < numberOfCellVertices; ++localVertex)
+                    {
+                        std::size_t const point = cellPointIndices[cell * numberOfCellVertices + localVertex];
+                        std::size_t const materialVertex
+                            = static_cast<std::size_t>(cellMaterialIds[cell]) * numberOfMeshPoints + point;
+                        lumpedMaterialVertexVolumes.at(materialVertex) += share;
+                    }
+                }
+            }
+            else
+                lumpedMaterialVertexVolumes.clear();
+
             rebuildSourceStrengthPrefix();
         }
 
+        /** @brief Recompute the cumulative active source strength in cell order. */
         void rebuildSourceStrengthPrefix()
         {
             sourceStrengthPrefix.resize(cellVolumes.size());
@@ -863,13 +944,21 @@ namespace hase::data
             }
         }
 
+        /**
+         * @param values Cell-ordered excited-state fractions to adopt.
+         * @post The cumulative source-strength prefix reflects the new values.
+         */
         void setBetaVolume(std::vector<double> values)
         {
             betaVolume = std::move(values);
             rebuildSourceStrengthPrefix();
         }
 
-        /** @brief Return whether a prepared update changes material-resident data. */
+        /**
+         * @brief Compare all arrays that are refreshed as material-resident data.
+         * @param other Prepared trace to compare against this trace.
+         * @return Whether material assignment, coefficients, and spectra are equal.
+         */
         [[nodiscard]] bool hasSameMaterialData(TraceData const& other) const
         {
             return numberOfMaterials == other.numberOfMaterials && cellMaterialIds == other.cellMaterialIds
@@ -891,6 +980,8 @@ namespace hase::data
          *
          * Cell ordering and material assignment are immutable during a run;
          * only material coefficients and resizable spectra may change.
+         * @param other Prepared trace supplying replacement material arrays.
+         * @throws std::runtime_error If cell or material layout differs.
          */
         void replaceMaterialData(TraceData const& other)
         {
@@ -911,6 +1002,7 @@ namespace hase::data
             rebuildSourceStrengthPrefix();
         }
 
+        /** @brief Rebuild affine opposite-vertex coordinates for every valid tetrahedral face. */
         void precomputeBarycentricFacePlanes()
         {
             barycentricFacePlanes.assign(
@@ -983,9 +1075,17 @@ namespace hase::data
             }
         }
 
-        template<typename T_Device>
+        /**
+         * @brief Bind all host arrays to allocations on one device.
+         * @tparam T_Device Alpaka host-side device type.
+         * @param device Device that owns the returned allocations.
+         * @return Resident trace whose host views refer to this object's vectors.
+         * @note This prepares allocations but does not upload them; call `ResidentTrace::toDevice`.
+         */
+        template<alpaka::onHost::concepts::Device T_Device>
         [[nodiscard]] ResidentTrace<T_Device> makeResident(T_Device& device)
         {
+            rebuildStaticPrefixes();
             return ResidentTrace<T_Device>{
                 device,
                 numberOfMaterials,
@@ -1023,11 +1123,42 @@ namespace hase::data
                 cellNeighborLocalFaces,
                 cellFaceBoundaries,
                 cellVolumes,
+                lumpedMaterialVertexVolumes,
                 cellVolumePrefix,
                 sourceStrengthPrefix,
                 cellCenters,
                 samplePoints};
         }
     };
+
+    template<alpaka::onHost::concepts::Device T_Device>
+    void ResidentTrace<T_Device>::refreshMaterials(TraceData& trace, concepts::Queue auto const& queue)
+    {
+        if(numberOfMaterials != trace.numberOfMaterials || numberOfCells != trace.numberOfCells)
+            throw std::runtime_error("material refresh changed the tracing-domain layout");
+        materialActive = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialActive);
+        materialRefractiveIndices = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialRefractiveIndices);
+        materialActiveIonDensities = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialActiveIonDensities);
+        materialFluorescenceLifetimes
+            = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialFluorescenceLifetimes);
+        materialBulkAttenuations = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialBulkAttenuations);
+        materialPeakAbsorption = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialPeakAbsorption);
+        materialPeakEmission = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialPeakEmission);
+        materialCrossSectionOffsets = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialCrossSectionOffsets);
+        crossSectionWavelengths = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionWavelengths);
+        crossSectionAbsorption = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionAbsorption);
+        crossSectionEmission = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionEmission);
+        materialActive.toDevice(queue);
+        materialRefractiveIndices.toDevice(queue);
+        materialActiveIonDensities.toDevice(queue);
+        materialFluorescenceLifetimes.toDevice(queue);
+        materialBulkAttenuations.toDevice(queue);
+        materialPeakAbsorption.toDevice(queue);
+        materialPeakEmission.toDevice(queue);
+        materialCrossSectionOffsets.toDevice(queue);
+        crossSectionWavelengths.toDevice(queue);
+        crossSectionAbsorption.toDevice(queue);
+        crossSectionEmission.toDevice(queue);
+    }
 
 } // namespace hase::data

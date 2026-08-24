@@ -43,6 +43,7 @@ namespace hase::utils
 {
     namespace chr = std::chrono;
 
+    /** @brief Thread-aware terminal progress indicator with elapsed-time tracking. */
     struct ProgressBar
     {
         unsigned maxNTotal = 0;
@@ -54,7 +55,13 @@ namespace hase::utils
 
         ProgressBar();
 
+        /** @brief Reset progress and restart elapsed-time measurement. */
         void reset();
+
+        /**
+         * @brief Record and, when appropriate, print the current completed count.
+         * @param nTotal Number of completed units represented by this update.
+         */
         void printFancyProgressBar(unsigned nTotal);
     };
 

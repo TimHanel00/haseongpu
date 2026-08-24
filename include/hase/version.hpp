@@ -7,6 +7,10 @@
  */
 #pragma once
 
+/** @file
+ * @brief Compile-time HASEonGPU semantic-version components, string, and numeric encoding.
+ */
+
 #define HASEONGPU_VERSION_MAJOR 2
 #define HASEONGPU_VERSION_MINOR 2
 #define HASEONGPU_VERSION_PATCH 0

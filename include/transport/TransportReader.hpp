@@ -81,24 +81,59 @@ namespace hase::transport
             std::function<void(std::vector<std::function<void()>>&)> schedule;
         };
 
+        /**
+         * @param series Open openPMD series owning the iteration resources.
+         * @param iteration Iteration containing one transported primitive graph.
+         */
         TransportReader(openPMD::Series& series, openPMD::Iteration& iteration);
         TransportReader(TransportReader const&) = delete;
         TransportReader& operator=(TransportReader const&) = delete;
         TransportReader(TransportReader&&) = delete;
         TransportReader& operator=(TransportReader&&) = delete;
 
+        /** @return Root path declared by the transport iteration. */
         [[nodiscard]] TransportPath root() const;
+
+        /** @return Whether this iteration contains dynamic updates only. */
         [[nodiscard]] bool dynamicOnly() const;
+
+        /**
+         * @param path Object path to inspect.
+         * @return Transported primitive type name at `path`.
+         */
         [[nodiscard]] std::string typeName(TransportPath const& path) const;
+
+        /**
+         * @param prefix Object path containing the field.
+         * @param name Field name relative to `prefix`.
+         * @return Whether the field is present in this iteration.
+         */
         [[nodiscard]] bool contains(TransportPath const& prefix, char const* name) const;
+
+        /**
+         * @brief Execute queued numeric reads below one object path.
+         * @param prefix Object path whose pending numeric fields should be loaded.
+         */
         void prefetch(TransportPath const& prefix) const;
 
+        /**
+         * @brief Assign one required scalar field with `unitSI` conversion.
+         * @param destination Scalar replaced by the transported value.
+         * @param prefix Object path containing the field.
+         * @param name Field name relative to `prefix`.
+         */
         template<typename T>
         void assign(T& destination, TransportPath const& prefix, char const* name) const
         {
             assignScalar(destination, prefix.child(name).string());
         }
 
+        /**
+         * @brief Assign or clear one optional scalar field.
+         * @param destination Optional replaced by the value or reset when absent.
+         * @param prefix Object path containing the field.
+         * @param name Field name relative to `prefix`.
+         */
         template<typename T>
         void assign(std::optional<T>& destination, TransportPath const& prefix, char const* name) const
         {
@@ -113,6 +148,12 @@ namespace hase::transport
             destination = std::move(value);
         }
 
+        /**
+         * @brief Assign one required numeric array and its declared shape.
+         * @param destination Array replaced after checked conversion to `T`.
+         * @param prefix Object path containing the field.
+         * @param name Field name relative to `prefix`.
+         */
         template<typename T>
         void assign(Array<T>& destination, TransportPath const& prefix, char const* name) const
         {
@@ -122,6 +163,12 @@ namespace hase::transport
             destination.shape = value.shape;
         }
 
+        /**
+         * @brief Assign or clear one optional numeric array.
+         * @param destination Optional array replaced or reset when absent.
+         * @param prefix Object path containing the field.
+         * @param name Field name relative to `prefix`.
+         */
         template<typename T>
         void assign(std::optional<Array<T>>& destination, TransportPath const& prefix, char const* name) const
         {
@@ -135,6 +182,12 @@ namespace hase::transport
             destination = std::move(value);
         }
 
+        /**
+         * @brief Assign a required ragged numeric field.
+         * @param destination Concatenated values and offsets to replace.
+         * @param prefix Object path containing the field.
+         * @param name Field name relative to `prefix`.
+         */
         template<typename T>
         void assign(RaggedArray<T>& destination, TransportPath const& prefix, char const* name) const
         {
@@ -143,8 +196,20 @@ namespace hase::transport
             destination.offsets = cast<std::uint64_t>(numeric(path + "/offsets"), path + "/offsets");
         }
 
+        /**
+         * @brief Assign one required string array.
+         * @param destination String vector to replace.
+         * @param prefix Object path containing the field.
+         * @param name Field name relative to `prefix`.
+         */
         void assign(std::vector<std::string>& destination, TransportPath const& prefix, char const* name) const;
 
+        /**
+         * @brief Resolve one optional object reference through the identity cache.
+         * @param destination Shared pointer to replace or reset when no path is stored.
+         * @param prefix Object path containing the reference.
+         * @param name Reference field name relative to `prefix`.
+         */
         template<typename T>
         void assign(std::shared_ptr<T>& destination, TransportPath const& prefix, char const* name) const
         {
@@ -162,6 +227,12 @@ namespace hase::transport
             destination = object<T>(TransportPath{paths.front()});
         }
 
+        /**
+         * @brief Resolve an ordered reference array through the identity cache.
+         * @param destination Shared-pointer vector to replace.
+         * @param prefix Object path containing the references.
+         * @param name Reference field name relative to `prefix`.
+         */
         template<typename T>
         void assign(std::vector<std::shared_ptr<T>>& destination, TransportPath const& prefix, char const* name) const
         {
@@ -172,6 +243,11 @@ namespace hase::transport
             }
         }
 
+        /**
+         * @param path Referenced primitive node.
+         * @return Cached shared object, constructing it through `T::fromTransport`
+         * on first access.
+         */
         template<typename T>
         [[nodiscard]] std::shared_ptr<T> object(TransportPath const& path) const
         {
@@ -185,6 +261,10 @@ namespace hase::transport
             return result;
         }
 
+        /**
+         * @param path Complete path of a transported reference field.
+         * @return Referenced object paths in transported order.
+         */
         [[nodiscard]] std::vector<std::string> referencePaths(std::string const& path) const;
 
     private:

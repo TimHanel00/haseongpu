@@ -17,6 +17,12 @@ namespace hase::data
 
         std::string kind;
 
+        /**
+         * @brief Read a uniform spatial-profile marker.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the profile node.
+         * @return Uniform profile retaining its transported kind.
+         */
         static UniformPumpProfile fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

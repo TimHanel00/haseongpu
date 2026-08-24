@@ -20,27 +20,32 @@
 
 namespace hase::core::timing
 {
+    /** @brief Accumulated call count and wall time for one named host routine. */
     struct HostRoutineAggregate
     {
         std::uint64_t calls = 0u;
         double totalSeconds = 0.0;
     };
 
+    /** @return Process-wide aggregate map keyed by routine name. */
     inline std::map<std::string, HostRoutineAggregate>& hostRoutineAggregates()
     {
         static std::map<std::string, HostRoutineAggregate> aggregates;
         return aggregates;
     }
 
+    /** @return Mutex protecting the process-wide aggregate map. */
     inline std::mutex& hostRoutineMutex()
     {
         static std::mutex mutex;
         return mutex;
     }
 
+    /** @brief Scope timer that adds its elapsed time to a named aggregate. */
     class ScopedHostRoutine
     {
     public:
+        /** @param name Stable routine name used as the aggregate-map key. */
         explicit ScopedHostRoutine(std::string_view name) : m_name{name}, m_started{std::chrono::steady_clock::now()}
         {
         }
@@ -68,6 +73,12 @@ namespace hase::core::timing
         std::chrono::steady_clock::time_point m_started;
     };
 
+    /**
+     * @brief Write all aggregates to `HASE_HOST_ROUTINE_TIMING_CSV` when configured.
+     *
+     * Optional revision and backend columns come from `HASE_BENCHMARK_REVISION`
+     * and `HASE_BENCHMARK_BACKEND`.
+     */
     inline void writeHostRoutineTimingCsv()
     {
         auto const* path = std::getenv("HASE_HOST_ROUTINE_TIMING_CSV");
@@ -99,6 +110,7 @@ namespace hase::core::timing
 
 namespace hase::core::timing
 {
+    /** @brief No-op timing writer used when host timing is disabled. */
     inline void writeHostRoutineTimingCsv()
     {
     }

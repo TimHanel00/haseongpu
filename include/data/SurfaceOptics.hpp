@@ -19,6 +19,12 @@ namespace hase::data
         double nInside{1.0};
         double nOutside{1.0};
 
+        /**
+         * @brief Read one boundary optical model from the transport graph.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the surface-optics node.
+         * @return Reflectivity and inside/outside refractive indices.
+         */
         static SurfaceOptics fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

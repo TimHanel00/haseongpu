@@ -34,6 +34,12 @@ namespace hase::data
         std::vector<std::shared_ptr<Domain>> exitDomains;
         std::vector<std::shared_ptr<Domain>> entryDomains;
 
+        /**
+         * @brief Read one finite planar pump-return transform.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the relay node.
+         * @return Relay parameters and identity-preserving boundary-domain references.
+         */
         static PlanarPumpRelay fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

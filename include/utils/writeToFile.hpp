@@ -44,6 +44,7 @@ namespace hase::utils
      * @param index1 the value of the first index
      * @param indexName2 identifier of the second index
      * @param index2 the value of the second index
+     * @return Zero after the write attempt.
      */
     int writeValueToFile(
         float value,
@@ -59,6 +60,8 @@ namespace hase::utils
      *
      * @param v the vector to write
      * @param pFilename the name of the output file
+     *
+     * A timestamp and `.dat` suffix are appended to `filename`.
      *
      */
     void writeVectorToFile(std::vector<double> v, std::filesystem::path filename);

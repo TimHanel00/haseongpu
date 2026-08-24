@@ -24,6 +24,12 @@ namespace hase::data
         std::shared_ptr<SurfacePumpInjector> injectionMethod;
         std::vector<std::shared_ptr<PlanarPumpRelay>> relays;
 
+        /**
+         * @brief Read the placement and relay configuration for one pump.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the pump-registration node.
+         * @return Registration retaining shared pump, injector, and relay references.
+         */
         static PumpRegistration fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

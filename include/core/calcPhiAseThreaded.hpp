@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <any>
 #include <barrier>
+#include <concepts>
 #include <memory>
 #include <ranges>
 #include <stdexcept>
@@ -90,8 +91,11 @@ namespace hase::core
                 return result;
             }
 
-            template<typename T_Value, typename T_Reduction>
-            [[nodiscard]] T_Value reduce(unsigned const workerIndex, T_Value value, T_Reduction reduction)
+            template<typename T_Value>
+            [[nodiscard]] T_Value reduce(
+                unsigned const workerIndex,
+                T_Value value,
+                std::invocable<T_Value, T_Value const&> auto reduction)
             {
                 auto values = gather(workerIndex, std::move(value));
                 T_Value result{};
@@ -121,7 +125,7 @@ namespace hase::core
      * @tparam T_Device Alpaka device type.
      * @tparam T_Exec Alpaka executor type.
      */
-    template<alpaka::onHost::concepts::Device T_Device, typename T_Exec>
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     class ThreadOwnedDevices
     {
     public:
@@ -195,8 +199,11 @@ namespace hase::core
             return policy.m_group.gather(policy.m_workerIndex, T(std::forward<T_Value>(value)));
         }
 
-        template<typename T_Value, typename T_Reduction>
-        [[nodiscard]] static auto reduce(T_Policy& policy, T_Value&& value, T_Reduction reduction)
+        template<typename T_Value>
+        [[nodiscard]] static auto reduce(
+            T_Policy& policy,
+            T_Value&& value,
+            std::invocable<std::remove_cvref_t<T_Value>, std::remove_cvref_t<T_Value> const&> auto reduction)
         {
             using T = std::remove_cvref_t<T_Value>;
             return policy.m_group.reduce(policy.m_workerIndex, T(std::forward<T_Value>(value)), std::move(reduction));

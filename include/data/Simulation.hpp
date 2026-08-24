@@ -66,6 +66,12 @@ namespace hase::data
         std::shared_ptr<TimeIntegrationSolver> timeIntegrationSolver;
         std::vector<std::shared_ptr<PumpRegistration>> pumpRegistrations;
 
+        /**
+         * @brief Reconstruct the root primitive graph for one transport iteration.
+         * @param reader Typed reader whose object cache preserves shared identity.
+         * @param prefix Path of the simulation root.
+         * @return Host-authoritative simulation graph.
+         */
         static Simulation fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);
@@ -75,6 +81,9 @@ namespace hase::data
          *
          * Cross-section updates replace complete material tables. Topology and
          * component-to-material assignment remain immutable during a run.
+         *
+         * @param reader Typed reader for the dynamic update iteration.
+         * @param prefix Path of the simulation root in that iteration.
          */
         void updateFromTransport(transport::TransportReader const& reader, transport::TransportPath const& prefix);
     };

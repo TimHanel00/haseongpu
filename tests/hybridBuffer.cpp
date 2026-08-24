@@ -7,6 +7,7 @@
 
 #include <array>
 #include <concepts>
+#include <cstdint>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -14,11 +15,13 @@
 namespace hase::tests
 {
     using TestBackends = std::decay_t<
-        decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors))>;
+        decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors))>;
 
     struct Increment
     {
-        ALPAKA_FN_ACC void operator()(auto const& acc, auto values) const
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            alpaka::concepts::IView<std::int32_t> auto values) const
         {
             for(auto const index : alpaka::onAcc::makeIdxMap(
                     acc,
@@ -30,7 +33,7 @@ namespace hase::tests
 
     struct WrappedHostStorage
     {
-        std::array<int, 2u> values;
+        std::array<std::int32_t, 2u> values;
     };
 } // namespace hase::tests
 
@@ -39,7 +42,7 @@ namespace hase::alpakaUtils
     template<alpaka::onHost::concepts::Device T_Device>
     struct GetHybridBuffer<T_Device, hase::tests::WrappedHostStorage>
     {
-        using type = GetHybridBuffer_t<T_Device, std::array<int, 2u>>;
+        using type = GetHybridBuffer_t<T_Device, std::array<std::int32_t, 2u>>;
 
         [[nodiscard]] auto operator()(T_Device& device, hase::tests::WrappedHostStorage& hostStorage) const -> type
         {
@@ -54,19 +57,20 @@ TEMPLATE_LIST_TEST_CASE(
     hase::tests::TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
         return;
     }
     auto device = deviceSelector.makeDevice(0);
-    auto const executor = backend[alpaka::object::exec];
+    auto const executor = alpaka::getExecutor(backend);
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
 
     SECTION("owns moved host storage")
     {
-        auto buffer = hase::alpakaUtils::getHybridBuffer(device, std::vector<int>{1, 2, 3, 4});
+        auto buffer = hase::alpakaUtils::getHybridBuffer(device, std::vector<std::int32_t>{1, 2, 3, 4});
+        STATIC_REQUIRE(hase::concepts::HybridBuffer<decltype(buffer), std::int32_t>);
         STATIC_REQUIRE_FALSE(std::copy_constructible<decltype(buffer)>);
         REQUIRE(buffer.getExtents()[0u] == 4u);
 
@@ -107,7 +111,7 @@ TEMPLATE_LIST_TEST_CASE(
 
         auto hostView = buffer.getHostView();
         for(auto const index : alpaka::IdxRange{hostView.getExtents()})
-            hostView[index] = static_cast<int>(index.y() * 3u + index.x());
+            hostView[index] = static_cast<std::int32_t>(index.y() * 3u + index.x());
         buffer.toDevice(queue);
 
         auto const frameSpec = hase::alpakaUtils::getFrameSpec<unsigned>(device, executor, buffer.getExtents());
@@ -134,7 +138,7 @@ TEMPLATE_LIST_TEST_CASE(
     SECTION("rejects mismatched existing storage")
     {
         std::array<int, 2u> hostStorage{};
-        auto deviceStorage = alpaka::onHost::alloc<int>(device, 3u);
+        auto deviceStorage = alpaka::onHost::alloc<std::int32_t>(device, 3u);
         CHECK_THROWS_AS(hase::alpakaUtils::getHybridBuffer(hostStorage, deviceStorage), std::invalid_argument);
     }
 

@@ -9,10 +9,14 @@
 
 #include <alpaka/alpaka.hpp>
 
-#include <data/TraceData.hpp>
+#include <concepts>
+#include <cstdint>
+#include <span>
+#include <type_traits>
 
 namespace hase::kernels
 {
+    /** @brief Element-wise `base + scale * slope` update. */
     struct AddScaled
     {
         double scale = 1.0;
@@ -25,6 +29,7 @@ namespace hase::kernels
         }
     };
 
+    /** @brief Element-wise second-order Heun stage combination. */
     struct CombineHeun
     {
         double timeStep = 0.0;
@@ -38,6 +43,7 @@ namespace hase::kernels
         }
     };
 
+    /** @brief Element-wise classical fourth-order Runge-Kutta combination. */
     struct CombineRungeKutta4
     {
         double timeStep = 0.0;
@@ -53,36 +59,56 @@ namespace hase::kernels
         }
     };
 
+    /**
+     * @brief Exact fluorescence-decay update with frozen pump and ASE sources.
+     *
+     * Material activity and lifetime are gathered for each SIMD lane through
+     * its cell material id. Inactive lanes are masked to exactly zero.
+     */
     struct ExponentialEulerUpdate
     {
         double timeStep = 0.0;
+        std::span<std::uint8_t const> materialActive;
+        std::span<double const> materialFluorescenceLifetimes;
 
-        ALPAKA_FN_ACC void operator()(
-            auto const& acc,
-            data::TraceView const mesh,
-            auto betaVolume,
-            auto dndtPump,
-            auto dndtAse,
-            auto betaNext) const
+        /**
+         * @param betaVolume Cell excitation fractions.
+         * @param dndtPump Frozen pump source rates.
+         * @param dndtAse Frozen ASE depletion rates.
+         * @param materialIds Cell material ids used for property gathering.
+         * @return Updated excitation fractions, with inactive lanes set to zero.
+         */
+        ALPAKA_FN_ACC auto operator()(
+            alpaka::concepts::Simd auto const& betaVolume,
+            alpaka::concepts::Simd auto const& dndtPump,
+            alpaka::concepts::Simd auto const& dndtAse,
+            alpaka::concepts::Simd auto const& materialIds) const
         {
-            for(auto [cell] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{mesh.numberOfCells}))
-            {
-                if(!mesh.isActive(cell))
+            using T_Result = std::remove_cvref_t<decltype(betaVolume)>;
+            static_assert(std::same_as<typename T_Result::type, double>);
+            static_assert(std::same_as<typename std::remove_cvref_t<decltype(materialIds)>::type, unsigned>);
+            auto const active = alpaka::SimdMask<double, T_Result::width()>{
+                [&](auto const lane)
                 {
-                    betaNext[cell] = 0.0;
-                    continue;
-                }
-                double const tau = mesh.fluorescenceLifetime(cell);
-                double const decay = alpaka::math::exp(-timeStep / tau);
-                double const source = dndtPump[cell] - dndtAse[cell];
-                betaNext[cell] = tau * source * (1.0 - decay) + betaVolume[cell] * decay;
-            }
+                    auto const material = materialIds[decltype(lane)::value];
+                    return materialActive[material] != 0u;
+                }};
+            auto const tau
+                = T_Result{[&](auto const lane)
+                           {
+                               auto const material = materialIds[decltype(lane)::value];
+                               return active[decltype(lane)::value] ? materialFluorescenceLifetimes[material] : 1.0;
+                           }};
+            auto const decay = alpaka::math::exp(-timeStep / tau);
+            auto const source = dndtPump - dndtAse;
+            auto const updated = tau * source * (1.0 - decay) + betaVolume * decay;
+            auto result = T_Result{[](auto) { return 0.0; }};
+            alpaka::where(active, result) = updated;
+            return result;
         }
     };
 
+    /** @brief Clamp excitation fractions and map NaN values into `[0, 1]`. */
     struct ClipBeta
     {
         ALPAKA_FN_ACC constexpr auto operator()(alpaka::concepts::Simd auto const& betaVolume) const

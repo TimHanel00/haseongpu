@@ -14,6 +14,12 @@
 
 namespace hase::kernels
 {
+    /**
+     * @param mesh Prepared host trace containing material and point connectivity.
+     * @param cell Cell index in prepared order.
+     * @param localVertex Local vertex index within the cell.
+     * @return Flat index into material-separated vertex storage.
+     */
     [[nodiscard]] inline unsigned materialVertexIndex(
         data::TraceData const& mesh,
         unsigned const cell,
@@ -23,6 +29,11 @@ namespace hase::kernels
         return point + mesh.cellMaterialIds.at(cell) * mesh.numberOfMeshPoints;
     }
 
+    /**
+     * @param mesh Prepared host trace containing cell volumes and connectivity.
+     * @return Lumped volume for every material-vertex pair. Shared geometric
+     * vertices remain separated at material interfaces.
+     */
     [[nodiscard]] inline std::vector<double> makeLumpedMaterialVertexVolumes(data::TraceData const& mesh)
     {
         // Materials use separate values at a shared geometric vertex so
@@ -38,6 +49,13 @@ namespace hase::kernels
         return result;
     }
 
+    /**
+     * @brief Convert material-vertex integrals into volume-averaged cell densities.
+     * @param mesh Prepared host trace defining volumes and connectivity.
+     * @param vertexIntegrals Integral for every material-vertex pair.
+     * @return One density per cell in prepared order.
+     * @throws std::runtime_error If the input size does not match the mesh layout.
+     */
     [[nodiscard]] inline std::vector<double> accumulateMaterialVertexIntegralsToCellDensities(
         data::TraceData const& mesh,
         std::vector<double> const& vertexIntegrals)

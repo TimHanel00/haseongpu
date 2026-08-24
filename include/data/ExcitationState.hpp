@@ -20,6 +20,12 @@ namespace hase::data
         transport::RaggedArray<double> values;
         std::vector<std::shared_ptr<Domain>> domains;
 
+        /**
+         * @brief Read domain-indexed excitation values from one graph node.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the excitation-state node.
+         * @return Excitation values with identity-preserving domain references.
+         */
         static ExcitationState fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

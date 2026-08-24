@@ -18,6 +18,12 @@ namespace hase::data
 
         std::vector<std::shared_ptr<Domain>> surfaceDomains;
 
+        /**
+         * @brief Read the boundary domains used to inject one pump.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the injector node.
+         * @return Injector retaining identity-preserving surface-domain references.
+         */
         static SurfacePumpInjector fromTransport(
             transport::TransportReader const& reader,
             transport::TransportPath const& prefix);

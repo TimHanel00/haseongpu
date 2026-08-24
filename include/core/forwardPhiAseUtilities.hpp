@@ -13,6 +13,15 @@
 
 namespace hase::core
 {
+    /**
+     * @brief Evaluate ASE-induced population change for one cell.
+     * @param mesh Prepared host trace containing the cell excitation.
+     * @param sigmaA Absorption cross section at the evaluated wavelength.
+     * @param sigmaE Emission cross section at the evaluated wavelength.
+     * @param phiAse Cell ASE photon flux.
+     * @param volume Cell index in prepared order.
+     * @return Signed ASE population-rate contribution for the cell.
+     */
     inline double calcVolumeDndtAse(
         hase::data::TraceData const& mesh,
         double const sigmaA,
@@ -24,6 +33,10 @@ namespace hase::core
         return gainPerDensity * phiAse;
     }
 
+    /**
+     * @param compute Execution policy containing an optional fixed seed.
+     * @return Configured seed, or the process seed when it is unspecified.
+     */
     inline unsigned baseRngSeed(ExecutionPolicy const& compute)
     {
         if(compute.rngSeed == ExecutionPolicy::unspecifiedRngSeed)

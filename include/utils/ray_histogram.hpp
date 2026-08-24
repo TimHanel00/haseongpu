@@ -26,7 +26,11 @@
 
 namespace hase::utils
 {
-
+    /**
+     * @brief Print a histogram of the ray count at which cells converged.
+     * @param convergenceRayCounts Per-cell cumulative ray count at convergence.
+     * @param exhaustedRayCount Ray budget assigned to cells that did not converge.
+     */
     void ray_histogram(std::vector<unsigned> const& convergenceRayCounts, unsigned exhaustedRayCount);
 
 } // namespace hase::utils

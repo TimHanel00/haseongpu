@@ -36,6 +36,12 @@ namespace hase::data
         std::shared_ptr<PumpProfile> profile;
         std::shared_ptr<PumpAngularDistribution> angularDistribution;
 
+        /**
+         * @brief Read one pump source and its owned sampling distributions.
+         * @param reader Typed reader for the active transport iteration.
+         * @param prefix Path of the pump node.
+         * @return Pump source in transport units.
+         */
         static Pump fromTransport(transport::TransportReader const& reader, transport::TransportPath const& prefix);
     };
 } // namespace hase::data
