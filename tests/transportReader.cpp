@@ -64,12 +64,15 @@ TEST_CASE("transport reader delegates a subtree to its primitive", "[transport]"
         iteration.setAttribute("haseTransportVersion", std::string{"1.2"});
         iteration.setAttribute("haseUpdateMode", std::string{"full"});
         iteration.setAttribute("haseRoot", std::string{"timeIntegrationSolver"});
-        iteration.setAttribute("haseNodePaths", std::vector<std::string>{"timeIntegrationSolver"});
-        iteration.setAttribute("haseNodeTypes", std::vector<std::string>{"timeIntegrationSolver"});
+        iteration.setAttribute("haseNodePaths", std::string{"[\"timeIntegrationSolver\"]"});
+        iteration.setAttribute("haseNodeTypes", std::string{"[\"timeIntegrationSolver\"]"});
         iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Fname", std::string{"implicit-éuler\n🚀"});
-        iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Flabels", std::vector<std::string>{"α", "β"});
+        iteration.setAttribute("hase__attribute__timeIntegrationSolver%2Flabels", std::string{"[\"α\",\"β\"]"});
         iteration.setAttribute("hase__attribute__timeIntegrationSolver%2FemptyLabels", std::string{"[]"});
         iteration.setAttribute("hase__reference__timeIntegrationSolver%2FemptyReferences", std::string{"[]"});
+        iteration.setAttribute(
+            "hase__reference__timeIntegrationSolver%2FsingleReference",
+            std::string{"[\"referencedNode\"]"});
         writeScalar<std::uint64_t>(series, iteration, "iterations", 7u);
         writeScalar<double>(series, iteration, "tolerance", 1.0e-8);
         iteration.close();
@@ -93,6 +96,9 @@ TEST_CASE("transport reader delegates a subtree to its primitive", "[transport]"
         reader.assign(emptyLabels, reader.root(), "emptyLabels");
         CHECK(emptyLabels.empty());
         CHECK(reader.referencePaths(reader.root().child("emptyReferences").string()).empty());
+        CHECK(
+            reader.referencePaths(reader.root().child("singleReference").string())
+            == std::vector<std::string>{"referencedNode"});
         series.close();
     }
 

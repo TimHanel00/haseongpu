@@ -7,9 +7,9 @@
  */
 #pragma once
 
-#include <data/TraceData.hpp>
-#include <core/SimulationControls.hpp>
 #include <core/Runtime.hpp>
+#include <core/SimulationControls.hpp>
+#include <data/TraceData.hpp>
 
 namespace hase::data
 {

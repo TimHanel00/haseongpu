@@ -413,9 +413,8 @@ namespace hase::internal::simulationPreparation
         for(std::size_t sample = 0u; sample < wavelengths.size(); ++sample)
         {
             if(!std::isfinite(wavelengths[sample]) || wavelengths[sample] <= 0.0
-               || !std::isfinite(table.absorption.values[sample])
-               || !std::isfinite(table.emission.values[sample]) || table.absorption.values[sample] < 0.0
-               || table.emission.values[sample] < 0.0)
+               || !std::isfinite(table.absorption.values[sample]) || !std::isfinite(table.emission.values[sample])
+               || table.absorption.values[sample] < 0.0 || table.emission.values[sample] < 0.0)
                 invalid("material '" + materialName + "' has invalid cross-section samples");
         }
         bool const monochromatic
@@ -451,8 +450,7 @@ namespace hase::internal::simulationPreparation
         for(auto const& component : simulation.opticalComponents)
         {
             auto const& material = component->material;
-            auto [position, inserted]
-                = materialIds.emplace(material.get(), static_cast<unsigned>(materialIds.size()));
+            auto [position, inserted] = materialIds.emplace(material.get(), static_cast<unsigned>(materialIds.size()));
             unsigned const materialId = position->second;
             if(inserted)
             {
@@ -487,11 +485,17 @@ namespace hase::internal::simulationPreparation
                     peakAbsorption = table.absorption.values[peakIndex];
                     peakEmission = table.emission.values[peakIndex];
                     result.wavelengths.insert(
-                        result.wavelengths.end(), table.wavelengths.values.begin(), table.wavelengths.values.end());
+                        result.wavelengths.end(),
+                        table.wavelengths.values.begin(),
+                        table.wavelengths.values.end());
                     result.absorption.insert(
-                        result.absorption.end(), table.absorption.values.begin(), table.absorption.values.end());
+                        result.absorption.end(),
+                        table.absorption.values.begin(),
+                        table.absorption.values.end());
                     result.emission.insert(
-                        result.emission.end(), table.emission.values.begin(), table.emission.values.end());
+                        result.emission.end(),
+                        table.emission.values.begin(),
+                        table.emission.values.end());
                 }
                 result.peakAbsorption.push_back(peakAbsorption);
                 result.peakEmission.push_back(peakEmission);
@@ -805,8 +809,7 @@ namespace hase::data
             std::vector<double>(trace.numberOfCells, 0.0),
             std::vector<unsigned>(trace.numberOfCells, 0u),
             std::vector<double>(trace.numberOfCells, 0.0));
-        SimulationState state{
-            std::move(ase), std::move(compute), std::move(trace), std::move(result), std::move(run)};
+        SimulationState state{std::move(ase), std::move(compute), std::move(trace), std::move(result), std::move(run)};
         return {std::move(state), std::move(excitationPlan)};
     }
 } // namespace hase::data

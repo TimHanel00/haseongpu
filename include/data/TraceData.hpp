@@ -52,10 +52,10 @@
 
 namespace hase::data
 {
-    using core::Point;
-    using core::TwoDimPoint;
     using core::cross;
     using core::dot;
+    using core::Point;
+    using core::TwoDimPoint;
     constexpr unsigned tet4VertexCount = 4u;
     constexpr unsigned tet4FaceCount = 4u;
     constexpr unsigned tet4FaceWidth = 3u;
@@ -482,15 +482,13 @@ namespace hase::data
             , cellMaterialIds(hase::alpakaUtils::getHybridBuffer(m_device, cellMaterialIds))
             , materialActive(hase::alpakaUtils::getHybridBuffer(m_device, materialActive))
             , materialRefractiveIndices(hase::alpakaUtils::getHybridBuffer(m_device, materialRefractiveIndices))
-            , materialActiveIonDensities(
-                  hase::alpakaUtils::getHybridBuffer(m_device, materialActiveIonDensities))
+            , materialActiveIonDensities(hase::alpakaUtils::getHybridBuffer(m_device, materialActiveIonDensities))
             , materialFluorescenceLifetimes(
                   hase::alpakaUtils::getHybridBuffer(m_device, materialFluorescenceLifetimes))
             , materialBulkAttenuations(hase::alpakaUtils::getHybridBuffer(m_device, materialBulkAttenuations))
             , materialPeakAbsorption(hase::alpakaUtils::getHybridBuffer(m_device, materialPeakAbsorption))
             , materialPeakEmission(hase::alpakaUtils::getHybridBuffer(m_device, materialPeakEmission))
-            , materialCrossSectionOffsets(
-                  hase::alpakaUtils::getHybridBuffer(m_device, materialCrossSectionOffsets))
+            , materialCrossSectionOffsets(hase::alpakaUtils::getHybridBuffer(m_device, materialCrossSectionOffsets))
             , crossSectionWavelengths(hase::alpakaUtils::getHybridBuffer(m_device, crossSectionWavelengths))
             , crossSectionAbsorption(hase::alpakaUtils::getHybridBuffer(m_device, crossSectionAbsorption))
             , crossSectionEmission(hase::alpakaUtils::getHybridBuffer(m_device, crossSectionEmission))
@@ -567,20 +565,17 @@ namespace hase::data
             if(numberOfMaterials != trace.numberOfMaterials || numberOfCells != trace.numberOfCells)
                 throw std::runtime_error("material refresh changed the tracing-domain layout");
             materialActive = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialActive);
-            materialRefractiveIndices
-                = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialRefractiveIndices);
+            materialRefractiveIndices = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialRefractiveIndices);
             materialActiveIonDensities
                 = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialActiveIonDensities);
             materialFluorescenceLifetimes
                 = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialFluorescenceLifetimes);
-            materialBulkAttenuations
-                = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialBulkAttenuations);
+            materialBulkAttenuations = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialBulkAttenuations);
             materialPeakAbsorption = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialPeakAbsorption);
             materialPeakEmission = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialPeakEmission);
             materialCrossSectionOffsets
                 = hase::alpakaUtils::getHybridBuffer(m_device, trace.materialCrossSectionOffsets);
-            crossSectionWavelengths
-                = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionWavelengths);
+            crossSectionWavelengths = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionWavelengths);
             crossSectionAbsorption = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionAbsorption);
             crossSectionEmission = hase::alpakaUtils::getHybridBuffer(m_device, trace.crossSectionEmission);
             materialActive.toDevice(queue);
@@ -616,17 +611,23 @@ namespace hase::data
                     materialBulkAttenuations.toDeviceView().data(),
                     materialBulkAttenuations.getExtents().x()),
                 std::span<double const>(
-                    materialPeakAbsorption.toDeviceView().data(), materialPeakAbsorption.getExtents().x()),
-                std::span<double const>(materialPeakEmission.toDeviceView().data(), materialPeakEmission.getExtents().x()),
+                    materialPeakAbsorption.toDeviceView().data(),
+                    materialPeakAbsorption.getExtents().x()),
+                std::span<double const>(
+                    materialPeakEmission.toDeviceView().data(),
+                    materialPeakEmission.getExtents().x()),
                 std::span<unsigned const>(
                     materialCrossSectionOffsets.toDeviceView().data(),
                     materialCrossSectionOffsets.getExtents().x()),
                 std::span<double const>(
-                    crossSectionWavelengths.toDeviceView().data(), crossSectionWavelengths.getExtents().x()),
+                    crossSectionWavelengths.toDeviceView().data(),
+                    crossSectionWavelengths.getExtents().x()),
                 std::span<double const>(
-                    crossSectionAbsorption.toDeviceView().data(), crossSectionAbsorption.getExtents().x()),
+                    crossSectionAbsorption.toDeviceView().data(),
+                    crossSectionAbsorption.getExtents().x()),
                 std::span<double const>(
-                    crossSectionEmission.toDeviceView().data(), crossSectionEmission.getExtents().x()),
+                    crossSectionEmission.toDeviceView().data(),
+                    crossSectionEmission.getExtents().x()),
                 std::span<float const>(
                     surfaceReflectivities.toDeviceView().data(),
                     surfaceReflectivities.getExtents().x()),
@@ -650,7 +651,8 @@ namespace hase::data
                 std::span<double const>(cellVolumes.toDeviceView().data(), cellVolumes.getExtents().x()),
                 std::span<double const>(cellVolumePrefix.toDeviceView().data(), cellVolumePrefix.getExtents().x()),
                 std::span<double const>(
-                    sourceStrengthPrefix.toDeviceView().data(), sourceStrengthPrefix.getExtents().x()),
+                    sourceStrengthPrefix.toDeviceView().data(),
+                    sourceStrengthPrefix.getExtents().x()),
                 std::span<double const>(cellCenters.toDeviceView().data(), cellCenters.getExtents().x()),
                 std::span<double const>(samplePoints.toDeviceView().data(), samplePoints.getExtents().x()),
                 numberOfMaterials,

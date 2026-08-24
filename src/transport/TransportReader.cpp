@@ -1,5 +1,5 @@
-#include <transport/TransportReader.hpp>
 #include <openPMD/openPMD.hpp>
+#include <transport/TransportReader.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -30,11 +30,84 @@ namespace hase::internal::transport
         return value;
     }
 
+    std::vector<std::string> parseStringArray(std::string const& value);
+
     std::vector<std::string> stringValues(io::Attribute const& attribute)
     {
-        if(auto values = attribute.getOptional<std::vector<std::string>>())
-            return std::move(*values);
-        return {attribute.get<std::string>()};
+        if(attribute.dtype == io::Datatype::VEC_STRING)
+            return attribute.get<std::vector<std::string>>();
+        auto const value = attribute.get<std::string>();
+        return value.starts_with('[') ? parseStringArray(value) : std::vector<std::string>{value};
+    }
+
+    std::string unquote(std::string const& value)
+    {
+        if(value.size() < 2u || value.front() != '"' || value.back() != '"')
+            return value;
+        std::string result;
+        result.reserve(value.size() - 2u);
+        bool escaped = false;
+        for(std::size_t index = 1u; index + 1u < value.size(); ++index)
+        {
+            char const current = value[index];
+            if(escaped)
+            {
+                switch(current)
+                {
+                case 'b':
+                    result.push_back('\b');
+                    break;
+                case 'f':
+                    result.push_back('\f');
+                    break;
+                case 'n':
+                    result.push_back('\n');
+                    break;
+                case 'r':
+                    result.push_back('\r');
+                    break;
+                case 't':
+                    result.push_back('\t');
+                    break;
+                default:
+                    result.push_back(current);
+                    break;
+                }
+                escaped = false;
+            }
+            else if(current == '\\')
+                escaped = true;
+            else
+                result.push_back(current);
+        }
+        return result;
+    }
+
+    std::vector<std::string> parseStringArray(std::string const& value)
+    {
+        std::vector<std::string> result;
+        std::size_t position = 0u;
+        while(position < value.size())
+        {
+            position = value.find('"', position);
+            if(position == std::string::npos)
+                break;
+            std::size_t end = position + 1u;
+            bool escaped = false;
+            for(; end < value.size(); ++end)
+            {
+                if(!escaped && value[end] == '"')
+                    break;
+                escaped = !escaped && value[end] == '\\';
+                if(value[end] != '\\')
+                    escaped = false;
+            }
+            if(end >= value.size())
+                throw std::runtime_error("invalid transport string array: " + value);
+            result.push_back(unquote(value.substr(position, end - position + 1u)));
+            position = end + 1u;
+        }
+        return result;
     }
 
     std::vector<std::uint64_t> extents(io::Attribute const& attribute)
@@ -125,10 +198,7 @@ namespace hase::transport
             {
                 auto path = decodePath(name.substr(std::char_traits<char>::length(referencePrefix)));
                 auto const attribute = iteration.getAttribute(name);
-                if(attribute.dtype == io::Datatype::STRING && attribute.get<std::string>() == "[]")
-                    m_references.emplace(path, std::vector<std::string>{});
-                else
-                    m_references.emplace(path, stringValues(attribute));
+                m_references.emplace(path, stringValues(attribute));
             }
         }
 
@@ -289,17 +359,8 @@ namespace hase::transport
         }
         if(auto const found = m_text.find(path); found != m_text.end())
         {
-            // The Python writer represents an empty string-list attribute by
-            // a scalar marker because ADIOS2 cannot read empty vector<string>
-            // attributes. A non-empty list is stored as a vector and reaches
-            // the branch above, so a literal one-element list ["[]"] remains
-            // unambiguous.
-            if(found->second == "[]")
-            {
-                destination.clear();
-                return;
-            }
-            destination = {found->second};
+            destination = found->second.starts_with('[') ? parseStringArray(found->second)
+                                                         : std::vector<std::string>{found->second};
             return;
         }
         throw std::runtime_error("missing string-list transport field '" + path + "'");

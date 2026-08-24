@@ -13,16 +13,14 @@ namespace hase::data
             std::vector<double> const& absorption,
             std::vector<double> const& emission)
         {
-            if(wavelengths.empty() || wavelengths.size() != absorption.size()
-               || wavelengths.size() != emission.size())
+            if(wavelengths.empty() || wavelengths.size() != absorption.size() || wavelengths.size() != emission.size())
                 throw std::invalid_argument("cross-section sample arrays must have one shared non-empty extent");
             if(std::ranges::any_of(wavelengths, [](double value) { return !std::isfinite(value) || value <= 0.0; })
                || std::ranges::any_of(absorption, [](double value) { return !std::isfinite(value) || value < 0.0; })
                || std::ranges::any_of(emission, [](double value) { return !std::isfinite(value) || value < 0.0; }))
                 throw std::invalid_argument("cross-section samples must be finite and physical");
-            bool const monochromatic = std::ranges::all_of(
-                wavelengths,
-                [&](double value) { return value == wavelengths.front(); });
+            bool const monochromatic
+                = std::ranges::all_of(wavelengths, [&](double value) { return value == wavelengths.front(); });
             if(!monochromatic)
                 for(std::size_t index = 1u; index < wavelengths.size(); ++index)
                     if(wavelengths[index] <= wavelengths[index - 1u])

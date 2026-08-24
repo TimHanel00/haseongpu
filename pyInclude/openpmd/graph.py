@@ -201,9 +201,17 @@ def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> No
     iteration.set_attribute("haseTransportVersion", TRANSPORT_VERSION)
     iteration.set_attribute("haseUpdateMode", "dynamic" if dynamicOnly else "full")
     iteration.set_attribute("haseRoot", graph.root)
-    iteration.set_attribute("haseNodePaths", list(selectedNodes))
     iteration.set_attribute(
-        "haseNodeTypes", [node.typeName for node in selectedNodes.values()]
+        "haseNodePaths",
+        json.dumps(list(selectedNodes), ensure_ascii=False, separators=(",", ":")),
+    )
+    iteration.set_attribute(
+        "haseNodeTypes",
+        json.dumps(
+            [node.typeName for node in selectedNodes.values()],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
     )
 
     pending = []
@@ -220,7 +228,7 @@ def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> No
                 continue
             iteration.set_attribute(
                 referenceName(f"{node.path}/{name}"),
-                selectedPaths,
+                json.dumps(selectedPaths, ensure_ascii=False, separators=(",", ":")),
             )
     for node, name, spec, value in selectedFields:
         if value is None:
@@ -240,13 +248,13 @@ def writeGraph(iteration, graph: TransportGraph, io, *, dynamicOnly=False) -> No
         if isinstance(value, str) or (
             isinstance(value, (tuple, list)) and all(isinstance(item, str) for item in value)
         ):
-            # ADIOS2 cannot round-trip an empty string-vector attribute. A
-            # scalar marker remains distinguishable from the non-empty vector
-            # representation, including a real one-element list containing
-            # the literal string "[]".
-            encodedValue = value
-            if not isinstance(value, str):
-                encodedValue = "[]" if not value else list(value)
+            encodedValue = (
+                value
+                if isinstance(value, str)
+                else json.dumps(
+                    list(value), ensure_ascii=False, separators=(",", ":")
+                )
+            )
             iteration.set_attribute(
                 attributeName(path),
                 encodedValue,

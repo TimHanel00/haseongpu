@@ -21,7 +21,7 @@ namespace hase::internal::openpmd::output
     std::string seriesConfig(std::string const& stream)
     {
         if(hasSuffix(stream, ".sst"))
-            return R"({"backend":"adios2","adios2":{"engine":{"type":"sst","parameters":{"DataTransport":"WAN","OpenTimeoutSecs":"600"}}}})";
+            return R"({"backend":"adios2","adios2":{"engine":{"type":"sst","parameters":{"DataTransport":"WAN","OpenTimeoutSecs":"600","QueueLimit":"0"}}}})";
         if(hasSuffix(stream, ".h5"))
             return R"({"backend":"hdf5"})";
         return "{}";
