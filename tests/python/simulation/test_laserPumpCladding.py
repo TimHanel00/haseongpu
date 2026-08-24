@@ -14,10 +14,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from HASEonGPU import AlpakaBackends
+from HASEonGPU import AlpakaBackends, CrossSectionTable
 from hase_units import units
 
 repoRoot = Path(__file__).resolve().parents[3]
+LEGACY_LENGTH_UNIT_SI = 1.0e-2
 
 
 from pyInclude.geometry.vtk import _parseVtk
@@ -97,6 +98,42 @@ def testLaserPumpCladdingDefaultConfigEnablesReflections():
     assert simulation.opticalComponents[1].material.isPassive
 
 
+def testLaserPumpCladdingWritesLocalGainPerMetre(monkeypatch, tmp_path):
+    state = SimpleNamespace(
+        step=1,
+        topology=SimpleNamespace(
+            numberOfCells=1,
+            cellPointIndices=np.asarray([[0, 1, 2, 3]], dtype=np.uint32),
+        ),
+        betaVolume=np.asarray([0.5]),
+        phiAse=np.asarray([1.0]),
+        dndtAse=np.asarray([0.0]),
+        dndtPump=np.asarray([0.0]),
+    )
+    crossSections = CrossSectionTable.monochromatic(
+        wavelength=1030.0 * units.nm,
+        absorption=1.0 * units.cm**2,
+        emission=2.0 * units.cm**2,
+    )
+    capturedFields = None
+
+    def captureFields(_path, _state, fields):
+        nonlocal capturedFields
+        capturedFields = fields
+        return _path
+
+    monkeypatch.setattr(laserPumpCladding, "_writeTet4StateVtk", captureFields)
+
+    laserPumpCladding.writeVtkFields(
+        state,
+        vtkOutputDir=tmp_path,
+        crossSections=crossSections,
+        nTot=1.0,
+    )
+
+    np.testing.assert_allclose(capturedFields["localGain"], [50.0])
+
+
 def testLaserPumpCladdingPhiAseOverridesReplaceInlineDefaults():
     phi_ase = laserPumpCladding.buildSimulation(
         useReflections=False,
@@ -108,7 +145,6 @@ def testLaserPumpCladdingPhiAseOverridesReplaceInlineDefaults():
         rngSeed=99,
         reflectionMaxIterations=17,
         reflectionTolerance=0.0,
-        surfaceReservoirSize=16,
     ).phiASE
 
     assert phi_ase.useReflections is False
@@ -120,7 +156,6 @@ def testLaserPumpCladdingPhiAseOverridesReplaceInlineDefaults():
     assert phi_ase.rngSeed == 99
     assert phi_ase.reflectionMaxIterations == 17
     assert phi_ase.reflectionTolerance == 0.0
-    assert phi_ase.surfaceReservoirSize == 16
 
 
 def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
@@ -137,7 +172,7 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
         "propagationMode", "minRays", "maxRays", "forwardRayCount",
         "relativeStandardErrorThreshold", "repetitions", "adaptiveSteps",
         "useReflections", "reflectionMaxIterations", "reflectionTolerance",
-        "surfaceReservoirSize", "monochromatic", "backend", "openpmdBackend",
+        "monochromatic", "backend", "openpmdBackend",
         "parallelMode", "numDevices", "nPerNode", "ase_steps",
     )
     for name in phi_fields:
@@ -147,20 +182,25 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
     assert [component.name for component in api.opticalComponents] == [
         component.name for component in yaml.opticalComponents
     ] == ["crystal", "cladding"]
+    api_cladding = api.opticalComponents[1]
+    yaml_cladding = yaml.opticalComponents[1]
     np.testing.assert_array_equal(
-        api._simulationState.get("claddingCellTypes").value,
-        yaml._simulationState.get("claddingCellTypes").value,
+        api.cellMask(api_cladding.domain),
+        yaml.cellMask(yaml_cladding.domain),
     )
-    assert api._simulationState.get("claddingAbsorption").value == pytest.approx(5.5)
+    assert api_cladding.material.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
+    assert yaml_cladding.material.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
 
     api_pump = api.pumps[0]
     yaml_pump = yaml.pumps[0]
     for name in ("total_power", "ray_count", "pump_steps", "rng_seed"):
         assert getattr(api_pump, name) == pytest.approx(getattr(yaml_pump, name)), name
     np.testing.assert_allclose(api_pump.spectrum.wavelengths, yaml_pump.spectrum.wavelengths)
+    api_material = api.gainMedium.components[0].material
+    yaml_material = yaml.gainMedium.components[0].material
     np.testing.assert_allclose(
-        api.crossSections.crossSectionAbsorption,
-        yaml.crossSections.crossSectionAbsorption,
+        api_material.crossSections.absorption.toValue(units.cm**2),
+        yaml_material.crossSections.absorption.toValue(units.cm**2),
     )
     assert api_pump.profile == yaml_pump.profile
 
@@ -183,16 +223,27 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
         )
     assert api_relays[0].transmission == 1.0
 
-    for property_name in ("nTot", "crystalTFluo"):
-        np.testing.assert_allclose(
-            api._simulationState.get(property_name).value,
-            yaml._simulationState.get(property_name).value,
-        )
-    assert api._simulationState.surface_optics == yaml._simulationState.surface_optics
-    np.testing.assert_array_equal(
-        api._simulationState.topology.faceBoundaries,
-        yaml._simulationState.topology.faceBoundaries,
+    assert api_material.activeIonDensity.toValue(units.cm**-3) == pytest.approx(
+        yaml_material.activeIonDensity.toValue(units.cm**-3)
     )
+    assert api_material.fluorescenceLifetime.toValue(units.s) == pytest.approx(
+        yaml_material.fluorescenceLifetime.toValue(units.s)
+    )
+    api_topology = api.gainMedium.components[0].domain.topologies[0]
+    yaml_topology = yaml.gainMedium.components[0].domain.topologies[0]
+    assert len(api.gainMedium.components[0].surfaceOptics) == len(
+        yaml.gainMedium.components[0].surfaceOptics
+    )
+    for api_assignment, yaml_assignment in zip(
+        api.gainMedium.components[0].surfaceOptics,
+        yaml.gainMedium.components[0].surfaceOptics,
+        strict=True,
+    ):
+        assert api_assignment.optics == yaml_assignment.optics
+        np.testing.assert_array_equal(
+            api_assignment.domain.maskFor(api_topology),
+            yaml_assignment.domain.maskFor(yaml_topology),
+        )
 
 
 @pytest.mark.parametrize("option", ("--backend", "--simulation-steps", "--pump-steps", "--ase-steps"))
@@ -302,7 +353,12 @@ def testPtTet4GeometryConvertsBackToLegacyWedgeOrder(
     )
     points, cells, cell_types, _point_data, cell_data, _fields = _parseVtk(wedge_path)
 
-    np.testing.assert_allclose(points, laserPumpCladdingReference["points"], rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        points,
+        laserPumpCladdingReference["points"] * LEGACY_LENGTH_UNIT_SI,
+        rtol=0.0,
+        atol=0.0,
+    )
     np.testing.assert_array_equal(
         np.sort(np.asarray(cells, dtype=np.uint32), axis=1),
         np.sort(laserPumpCladdingReference["cells"], axis=1),
@@ -364,8 +420,8 @@ def testLaserPumpCladdingTet4MediumAssignsCylinderSurfaceOptics():
     assignments = component.surfaceOptics
     assert [np.count_nonzero(domain.maskFor(topology)) for domain, _optics in assignments] == [432, 812, 812]
     assert np.count_nonzero(topology.neighborCells < 0) == 2056
-    np.testing.assert_allclose(face_z[assignments[1][0].maskFor(topology)], np.min(points[:, 2]), rtol=0.0, atol=1.0e-12)
-    np.testing.assert_allclose(face_z[assignments[2][0].maskFor(topology)], np.max(points[:, 2]), rtol=0.0, atol=1.0e-12)
+    np.testing.assert_allclose(face_z[assignments[1].domain.maskFor(topology)], np.min(points[:, 2]), rtol=0.0, atol=1.0e-12)
+    np.testing.assert_allclose(face_z[assignments[2].domain.maskFor(topology)], np.max(points[:, 2]), rtol=0.0, atol=1.0e-12)
 
     optics = [value for _domain, value in assignments]
     assert [value.reflectivity for value in optics] == [0.0, 0.0, 0.0]
@@ -387,7 +443,7 @@ def testLaserPumpCladdingTet4MediumPreservesLegacyTenLayerPumpLayout():
     assert z_planes.size == 10
     np.testing.assert_allclose(
         z_planes,
-        np.linspace(0.0, 0.7, 10),
+        np.linspace(0.0, 0.007, 10),
         rtol=0.0,
         atol=1.0e-12,
     )
@@ -437,7 +493,6 @@ def testLaserPumpCladdingRunExampleReflectionToggleChangesPhiAse(
             relativeStandardErrorThreshold=0.1,
             reflectionMaxIterations=17,
             reflectionTolerance=0.0,
-            surfaceReservoirSize=32,
             outputSteps=(2,),
             useCladding=True,
         )
@@ -485,6 +540,7 @@ def laserPumpCladdingBackendResults(
         relative_standard_error = np.asarray(state.relativeStandardError, dtype=np.float64)
         defined_relative_standard_error = relative_standard_error[np.isfinite(relative_standard_error)]
         observed_integrals = []
+        observed_phi_ase = []
         for step in metadata["observable"]["stepNumbers"]:
             tet4_path = tet4_dir / f"laserPumpCladding_{step:03d}.vtk"
             tet4_points, tet4_cells, _tet4_cell_types, _tet4_point_data, tet4_cell_data, _tet4_fields = _parseVtk(
@@ -493,8 +549,10 @@ def laserPumpCladdingBackendResults(
             observed_integrals.append(
                 _tet_cell_integral(tet4_points, tet4_cells, tet4_cell_data["phiASE"])
             )
+            observed_phi_ase.append(np.asarray(tet4_cell_data["phiASE"], dtype=np.float64))
         results[alpakaBackend] = {
             "integrals": np.asarray(observed_integrals, dtype=np.float64),
+            "phiAse": np.stack(observed_phi_ase),
             "relativeStandardError": defined_relative_standard_error,
         }
     return results
@@ -514,7 +572,7 @@ def testCurrentTet4ForwardPhiAseMatchesLegacyWedgeReferenceIntegral(
         laserPumpCladdingReference["points"],
         laserPumpCladdingReference["cells"],
         laserPumpCladdingReference["phiASE"],
-    )
+    ) * LEGACY_LENGTH_UNIT_SI
     for alpakaBackend, result in laserPumpCladdingBackendResults.items():
         np.testing.assert_allclose(
             result["integrals"],
@@ -526,7 +584,7 @@ def testCurrentTet4ForwardPhiAseMatchesLegacyWedgeReferenceIntegral(
 
 
 @pytest.mark.integration
-def testLaserPumpCladdingPhiAseIntegralsAgreeAcrossAlpakaBackends(laserPumpCladdingBackendResults):
+def testLaserPumpCladdingPhiAseResultsAgreeAcrossAlpakaBackends(laserPumpCladdingBackendResults):
     for (left_backend, left_result), (right_backend, right_result) in itertools.combinations(
         laserPumpCladdingBackendResults.items(),
         2,
@@ -543,6 +601,11 @@ def testLaserPumpCladdingPhiAseIntegralsAgreeAcrossAlpakaBackends(laserPumpCladd
         np.testing.assert_array_less(
             relative_difference,
             INTEGRAL_RTOL,
+            err_msg=f"{left_backend} versus {right_backend}",
+        )
+        np.testing.assert_array_equal(
+            left_result["phiAse"],
+            right_result["phiAse"],
             err_msg=f"{left_backend} versus {right_backend}",
         )
 
@@ -646,11 +709,15 @@ def testLaserPumpCladdingExampleWritesVtkFromCompiledSnapshots(
     scalars = _vtkScalarNames(second)
     assert {"betaVolume", "phiASE", "dndtAse", "dndtPump", "cladAbs"}.issubset(scalars)
     _points, _cells, _types, _pointData, cellData, _fields = _parseVtk(second)
-    claddingTypes = fakeCompiledSnapshots[-1]["simulation"]._simulationState.get(
-        "claddingCellTypes"
-    ).value
-    np.testing.assert_array_equal(cellData["cladAbs"][claddingTypes == 0], 0.0)
-    np.testing.assert_array_equal(cellData["cladAbs"][claddingTypes == 1], 5.5)
+    simulation = fakeCompiledSnapshots[-1]["simulation"]
+    cladding = next(
+        component
+        for component in simulation.opticalComponents
+        if component not in simulation.gainMedium.components
+    )
+    claddingMask = simulation.cellMask(cladding.domain)
+    np.testing.assert_array_equal(cellData["cladAbs"][~claddingMask], 0.0)
+    np.testing.assert_array_equal(cellData["cladAbs"][claddingMask], 5.5)
     assert fakeCompiledSnapshots[-1]["phiASE"].relativeStandardErrorThreshold == 0.1
     assert fakeCompiledSnapshots[-1]["simulation"].pumps[0].pump_steps == 1
 

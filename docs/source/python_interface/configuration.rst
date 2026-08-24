@@ -20,7 +20,7 @@ references are errors.
          path: materials.h5
          key: YbYAG
        temperature: 293.15
-       active_ion_density: 2.776e20
+       active_ion_density: 2.776e26
        interpolation: exact
        spectral_resolution: 1000
      absorbing_cladding:
@@ -28,7 +28,7 @@ references are errors.
          path: materials.h5
          key: CladdingGlass
        temperature: 293.15
-       absorption_coefficient: 5.5
+       absorption_coefficient: 550.0
 
    topologies:
      assembly:
@@ -87,8 +87,8 @@ references are errors.
      simulation_steps: 150
 
 ``yb_yag`` is only a local reference name. ``path`` and ``key`` choose the
-database record. YAML uses canonical bare units: kelvin, ``cm^-3``, seconds,
-metres (or documented nanometres), ``cm^2``, and ``cm^-1``.
+database record. YAML bare dimensional values use SI: kelvin, ``m^-3``,
+seconds, metres, ``m^2``, and ``m^-1``.
 
 Material resolution
 -------------------
@@ -105,7 +105,7 @@ appropriate for measured corrections, but do not update the source library.
 Use the material-library API when the corrected data should become a durable,
 provenance-bearing material state. See :doc:`materials`.
 
-``bulk_attenuation`` uses ``cm^-1``. A passive material that omits it contributes
+``bulk_attenuation`` uses ``m^-1``. A passive material that omits it contributes
 no volumetric attenuation. ``absorption_coefficient`` is its exact YAML alias
 and the preferred physical spelling in configuration examples;
 a material entry cannot provide both names. This coefficient describes

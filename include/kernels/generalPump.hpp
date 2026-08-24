@@ -12,8 +12,13 @@
 #include <alpakaUtils/DevBundle.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
+#include <concepts/concepts.hpp>
 #include <core/SimulationControls.hpp>
+#include <core/compileTimeConfig.hpp>
+#include <core/geometry.hpp>
 #include <core/hostRoutineTiming.hpp>
+#include <core/physicalConstants.hpp>
+#include <core/surfaceReservoir.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/barycentric.hpp>
 #include <kernels/forward/policyRay.hpp>
@@ -21,6 +26,7 @@
 #include <kernels/forward/rayWalk.hpp>
 #include <kernels/vertexAccumulation.hpp>
 #include <random/random.hpp>
+#include <random/randomEngine.hpp>
 
 #include <algorithm>
 #include <array>
@@ -29,6 +35,8 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <type_traits>
@@ -37,6 +45,7 @@
 
 namespace hase::kernels
 {
+    /** @brief Host representation of one oriented exterior pump face or subregion. */
     struct PumpBoundaryFace
     {
         unsigned cell = 0u;
@@ -48,6 +57,7 @@ namespace hase::kernels
         double area = 0.0;
     };
 
+    /** @brief Mutable physical and relay state for one pump-ray history. */
     struct GeneralPumpRayState
         : hase::kernels::forward::ray::TraversalState
         , hase::kernels::forward::ray::SrmPositionStorage<
@@ -60,11 +70,21 @@ namespace hase::kernels
 
     static_assert(std::derived_from<GeneralPumpRayState, hase::kernels::forward::ray::BarycentricSrmPositionStorage>);
 
+    /**
+     * @param domains Accepted boundary-domain identifiers.
+     * @param domain Identifier to find.
+     * @return Whether `domain` occurs in `domains`.
+     */
     [[nodiscard]] inline bool containsDomain(std::vector<int> const& domains, int const domain)
     {
         return std::find(domains.begin(), domains.end(), domain) != domains.end();
     }
 
+    /**
+     * @param mesh Host trace storing point components in structure-of-arrays order.
+     * @param point Geometric point index.
+     * @return Cartesian point assembled from the host arrays.
+     */
     [[nodiscard]] inline hase::core::Point hostPoint(hase::data::TraceData const& mesh, unsigned const point)
     {
         return {
@@ -73,6 +93,11 @@ namespace hase::kernels
             mesh.points[point + 2u * mesh.numberOfMeshPoints]};
     }
 
+    /**
+     * @param mesh Host trace containing exterior-face geometry and boundary ids.
+     * @param domains Boundary-domain identifiers selected by the injector.
+     * @return Matching exterior faces with inward launch geometry.
+     */
     [[nodiscard]] inline std::vector<PumpBoundaryFace> pumpBoundaryFaces(
         hase::data::TraceData const& mesh,
         std::vector<int> const& domains)
@@ -117,6 +142,7 @@ namespace hase::kernels
         return result;
     }
 
+    /** @return Unit vector parallel to `value`, or zero for negligible length. */
     [[nodiscard]] inline hase::core::Point hostNormalize(hase::core::Point const value)
     {
         double const length = value.euclidLength();
@@ -125,6 +151,7 @@ namespace hase::kernels
         return value * (1.0 / length);
     }
 
+    /** @return Deterministic unit vector perpendicular to `normal`. */
     [[nodiscard]] inline hase::core::Point perpendicular(hase::core::Point const normal)
     {
         core::Point reference
@@ -132,6 +159,11 @@ namespace hase::kernels
         return hostNormalize(hase::core::cross(normal, reference));
     }
 
+    /**
+     * @param position Cartesian position on the injector aperture.
+     * @param profile Prepared uniform or super-Gaussian profile parameters.
+     * @return Non-negative relative spatial source weight.
+     */
     [[nodiscard]] inline double pumpProfileWeight(
         hase::core::PumpProfileParameters const& profile,
         hase::core::Point const point)
@@ -149,6 +181,11 @@ namespace hase::kernels
         return std::exp(-std::pow(std::sqrt(u * u + v * v), profile.exponent));
     }
 
+    /**
+     * @param face Triangular injector region.
+     * @param profile Prepared spatial profile.
+     * @return Quadrature estimate of the profile integral over the region.
+     */
     [[nodiscard]] inline double pumpEntryWeight(
         PumpBoundaryFace const& face,
         hase::core::PumpProfileParameters const& profile)
@@ -186,6 +223,12 @@ namespace hase::kernels
         return face.area * integral;
     }
 
+    /**
+     * @brief Recursively subdivide one triangular injector face into four-way regions.
+     * @param face Region to subdivide while preserving boundary metadata.
+     * @param remainingSubdivisions Number of recursive subdivision levels.
+     * @param regions Output vector receiving leaf regions in deterministic order.
+     */
     inline void appendPumpEntryRegions(
         PumpBoundaryFace const& face,
         unsigned const remainingSubdivisions,
@@ -217,6 +260,10 @@ namespace hase::kernels
         }
     }
 
+    /**
+     * @param faces Exterior injector faces.
+     * @return Deterministically subdivided spatial regions used by systematic sampling.
+     */
     [[nodiscard]] inline std::vector<PumpBoundaryFace> pumpEntryRegions(std::vector<PumpBoundaryFace> const& faces)
     {
         // Spatial regions make the systematic CDF cover the continuous entry
@@ -231,6 +278,11 @@ namespace hase::kernels
         return regions;
     }
 
+    /**
+     * @param entryCdf Cumulative non-negative entry-region weights.
+     * @param target Target in the CDF's weight domain.
+     * @return Selected region index, clamped to the last region.
+     */
     [[nodiscard]] inline std::size_t pumpEntryRegionForTarget(std::vector<double> const& entryCdf, double const target)
     {
         if(entryCdf.empty())
@@ -240,8 +292,16 @@ namespace hase::kernels
                                          : static_cast<std::size_t>(std::distance(entryCdf.cbegin(), region));
     }
 
-    template<typename T_Rng>
-    [[nodiscard]] inline hase::core::Point sampleTriangle(PumpBoundaryFace const& face, T_Rng& rng)
+    /**
+     * @param a First triangle vertex.
+     * @param b Second triangle vertex.
+     * @param c Third triangle vertex.
+     * @param rng Random engine advanced by area-uniform sampling.
+     * @return Uniformly distributed point on the triangle.
+     */
+    [[nodiscard]] inline hase::core::Point sampleTriangle(
+        PumpBoundaryFace const& face,
+        std::uniform_random_bit_generator auto& rng)
     {
         std::uniform_real_distribution<double> uniform(0.0, 1.0);
         double u = uniform(rng);
@@ -255,6 +315,16 @@ namespace hase::kernels
                + (face.vertices[2] - face.vertices[0]) * v;
     }
 
+    /**
+     * @brief Generate a deterministic partition of one pump's global ray set.
+     * @param mesh Host trace containing injector geometry.
+     * @param source Prepared pump source and sampling distributions.
+     * @param globalRayCount Total histories in the unpartitioned source.
+     * @param seed Source RNG seed.
+     * @param firstRay First global history assigned to this partition.
+     * @param localRayCount Maximum histories returned for this partition.
+     * @return Host ray states retaining global stratification and equal-power weights.
+     */
     [[nodiscard]] inline std::vector<GeneralPumpRayState> samplePumpSource(
         hase::data::TraceData const& mesh,
         hase::core::PumpSourceParameters const& source,
@@ -332,19 +402,20 @@ namespace hase::kernels
             rayState.power = source.totalPower / static_cast<double>(globalRayCount);
             rayState.wavelength = source.wavelengths[spectrum];
             rayState.cell = face->cell;
-            rayState.forbiddenFace = static_cast<int>(face->localFace);
+            rayState.forbiddenFace = static_cast<std::int32_t>(face->localFace);
             rays.push_back(rayState);
         }
         return rays;
     }
 
+    /** @brief Pump boundary policy capturing barycentric exit positions. */
     struct StorePumpSrmBoundary
         : hase::kernels::forward::ray::BoundaryPolicySrm<hase::kernels::forward::ray::srmPosition::Barycentric>
     {
         ALPAKA_FN_ACC hase::kernels::forward::ray::BoundaryResult operator()(
-            auto const&,
+            alpaka::onAcc::concepts::Acc auto const&,
             hase::data::TraceView const& mesh,
-            auto& ray,
+            GeneralPumpRayState& ray,
             unsigned const cell,
             unsigned const localFace)
         {
@@ -362,35 +433,29 @@ namespace hase::kernels
         }
     };
 
+    /** @brief Kernel tracing prepared pump rays and accumulating material-vertex exchange. */
     struct TraceGeneralPump
     {
-        double planckConstant = 6.62607015e-34;
-        double speedOfLight = 299792458.0;
-
-        template<typename T_BetaVolumeView, typename T_VertexPumpIntegralView>
+        template<
+            alpaka::concepts::IView<double> T_BetaVolumeView,
+            alpaka::concepts::IView<double> T_VertexPumpIntegralView>
         struct CellPolicy : hase::kernels::forward::ray::behaviourDimension::Cell
         {
-            double planckConstant;
-            double speedOfLight;
             T_BetaVolumeView betaVolume;
             T_VertexPumpIntegralView vertexPumpIntegral;
 
             ALPAKA_FN_HOST_ACC constexpr CellPolicy(
-                double const planckConstantValue,
-                double const speedOfLightValue,
                 T_BetaVolumeView betaVolumeValue,
                 T_VertexPumpIntegralView vertexPumpIntegralValue)
-                : planckConstant{planckConstantValue}
-                , speedOfLight{speedOfLightValue}
-                , betaVolume{betaVolumeValue}
+                : betaVolume{betaVolumeValue}
                 , vertexPumpIntegral{vertexPumpIntegralValue}
             {
             }
 
             ALPAKA_FN_ACC bool operator()(
-                auto const& acc,
+                alpaka::onAcc::concepts::Acc auto const& acc,
                 hase::data::TraceView const& mesh,
-                auto& ray,
+                GeneralPumpRayState& ray,
                 unsigned const tet,
                 hase::kernels::forward::Tet4FaceIntersection const intersection)
             {
@@ -411,8 +476,10 @@ namespace hase::kernels
                 double const nextPower = ray.power * alpaka::math::exp(exponent);
                 if(active && mesh.activeIonDensity(tet) > 0.0)
                 {
-                    double const integral = (ray.power - nextPower) * ray.wavelength
-                                            / (planckConstant * speedOfLight * mesh.activeIonDensity(tet));
+                    double const integral
+                        = (ray.power - nextPower) * ray.wavelength
+                          / (hase::core::physicalConstants::planckConstant
+                             * hase::core::physicalConstants::speedOfLight * mesh.activeIonDensity(tet));
                     // Clamping and renormalizing protects positivity and exact integral
                     // conservation against round-off at faces.
                     auto const weights = hase::kernels::forward::segmentMidpointBarycentricVertexWeights(
@@ -433,37 +500,18 @@ namespace hase::kernels
             }
         };
 
-        template<
-            typename T_Acc,
-            typename T_BetaVolumeView,
-            typename T_OriginXView,
-            typename T_OriginYView,
-            typename T_OriginZView,
-            typename T_DirectionXView,
-            typename T_DirectionYView,
-            typename T_DirectionZView,
-            typename T_PowerView,
-            typename T_WavelengthView,
-            typename T_CellView,
-            typename T_ForbiddenFaceView,
-            typename T_BoundaryPolicyFactory,
-            typename T_VertexPumpIntegralView>
+        template<alpaka::concepts::IView<double> T_GeometryView>
         ALPAKA_FN_ACC void operator()(
-            T_Acc const& acc,
+            alpaka::onAcc::concepts::Acc auto const& acc,
             hase::data::TraceView const mesh,
-            T_BetaVolumeView betaVolume,
-            T_OriginXView originX,
-            T_OriginYView originY,
-            T_OriginZView originZ,
-            T_DirectionXView directionX,
-            T_DirectionYView directionY,
-            T_DirectionZView directionZ,
-            T_PowerView power,
-            T_WavelengthView wavelength,
-            T_CellView cell,
-            T_ForbiddenFaceView forbiddenFace,
-            T_BoundaryPolicyFactory boundaryPolicyFactory,
-            T_VertexPumpIntegralView vertexPumpIntegral,
+            alpaka::concepts::IView<double> auto betaVolume,
+            hase::core::RayGeometryViewSoA<T_GeometryView> geometry,
+            alpaka::concepts::IView<double> auto power,
+            alpaka::concepts::IView<double> auto wavelength,
+            alpaka::concepts::IView<std::uint32_t> auto cell,
+            alpaka::concepts::IView<std::int32_t> auto forbiddenFace,
+            std::invocable<unsigned> auto boundaryPolicyFactory,
+            alpaka::concepts::IView<double> auto vertexPumpIntegral,
             unsigned const rayCount) const
         {
             for(auto [rayIndex] :
@@ -471,8 +519,8 @@ namespace hase::kernels
             {
                 namespace ray = hase::kernels::forward::ray;
                 GeneralPumpRayState rayState;
-                rayState.position = {originX[rayIndex], originY[rayIndex], originZ[rayIndex]};
-                rayState.direction = {directionX[rayIndex], directionY[rayIndex], directionZ[rayIndex]};
+                rayState.position = geometry.positions.at(rayIndex);
+                rayState.direction = geometry.directions.at(rayIndex);
                 rayState.cell = cell[rayIndex];
                 rayState.forbiddenFace = forbiddenFace[rayIndex];
                 rayState.power = power[rayIndex];
@@ -482,23 +530,19 @@ namespace hase::kernels
                     acc,
                     mesh,
                     rayState,
-                    ray::RayWalkBehaviour{
-                        CellPolicy<T_BetaVolumeView, T_VertexPumpIntegralView>{
-                            planckConstant,
-                            speedOfLight,
-                            betaVolume,
-                            vertexPumpIntegral},
-                        boundaryPolicy}));
+                    ray::RayWalkBehaviour{CellPolicy{betaVolume, vertexPumpIntegral}, boundaryPolicy}));
             }
         }
     };
 
+    /** @brief Area-weighted coordinate frame for a planar relay aperture. */
     struct RelayFrame
     {
         hase::core::Point origin, u, v, normal;
         std::vector<PumpBoundaryFace> faces;
     };
 
+    /** @brief Trivially-copyable device transform for one planar pump relay. */
     struct PumpRelayDeviceDescriptor
     {
         hase::core::Point exitOrigin, exitU, exitV, exitNormal;
@@ -531,19 +575,24 @@ namespace hase::kernels
 
     inline constexpr pumpBoundaryPolicy::Relay pumpRelayPolicy{};
     inline constexpr pumpBoundaryPolicy::SrmBarycentric pumpSrmBarycentricPolicy{};
+    inline constexpr alpaka::concepts::CVector auto pumpReservoirSlots
+        = hase::core::compileTimeConfig::pumpReservoirSlots;
 
-    template<typename T_DescriptorView, typename T_UnsignedView, typename T_DoubleView>
+    template<
+        alpaka::concepts::IView<PumpRelayDeviceDescriptor> T_DescriptorView,
+        alpaka::concepts::IView<std::uint32_t> T_IndexView,
+        alpaka::concepts::IView<double> T_BarycentricView>
     struct DevicePumpRelayBoundary
         : hase::kernels::forward::ray::BoundaryPolicySrm<hase::kernels::forward::ray::srmPosition::Barycentric>
     {
         T_DescriptorView descriptors;
-        T_UnsignedView exitMask;
-        T_UnsignedView entryFaceIds;
-        T_UnsignedView cacheState;
-        T_UnsignedView cacheTargetFace;
-        T_DoubleView cacheBarycentric0;
-        T_DoubleView cacheBarycentric1;
-        T_DoubleView cacheBarycentric2;
+        T_IndexView exitMask;
+        T_IndexView entryFaceIds;
+        T_IndexView cacheState;
+        T_IndexView cacheTargetFace;
+        T_BarycentricView cacheBarycentric0;
+        T_BarycentricView cacheBarycentric1;
+        T_BarycentricView cacheBarycentric2;
         unsigned faceCount;
         unsigned relayCount;
         unsigned rayCount;
@@ -551,13 +600,13 @@ namespace hase::kernels
 
         ALPAKA_FN_HOST_ACC constexpr DevicePumpRelayBoundary(
             T_DescriptorView descriptorsValue,
-            T_UnsignedView exitMaskValue,
-            T_UnsignedView entryFaceIdsValue,
-            T_UnsignedView cacheStateValue,
-            T_UnsignedView cacheTargetFaceValue,
-            T_DoubleView cacheBarycentric0Value,
-            T_DoubleView cacheBarycentric1Value,
-            T_DoubleView cacheBarycentric2Value,
+            T_IndexView exitMaskValue,
+            T_IndexView entryFaceIdsValue,
+            T_IndexView cacheStateValue,
+            T_IndexView cacheTargetFaceValue,
+            T_BarycentricView cacheBarycentric0Value,
+            T_BarycentricView cacheBarycentric1Value,
+            T_BarycentricView cacheBarycentric2Value,
             unsigned const faceCountValue,
             unsigned const relayCountValue,
             unsigned const rayCountValue,
@@ -578,9 +627,9 @@ namespace hase::kernels
         }
 
         ALPAKA_FN_ACC hase::kernels::forward::ray::BoundaryResult operator()(
-            auto const&,
+            alpaka::onAcc::concepts::Acc auto const&,
             hase::data::TraceView const& mesh,
-            auto& ray,
+            GeneralPumpRayState& ray,
             unsigned const cell,
             unsigned const localFace)
         {
@@ -674,7 +723,7 @@ namespace hase::kernels
                 - descriptor.entryNormal * normalMagnitude);
             ray.position = mappedPosition;
             ray.cell = targetCell;
-            ray.forbiddenFace = static_cast<int>(targetLocalFace);
+            ray.forbiddenFace = static_cast<std::int32_t>(targetLocalFace);
             ray.boundaryBarycentric = targetCoordinates;
             ray.power *= descriptor.transmission;
             ++ray.relayIndex;
@@ -682,17 +731,20 @@ namespace hase::kernels
         }
     };
 
-    template<typename T_DescriptorView, typename T_UnsignedView, typename T_DoubleView>
+    template<
+        alpaka::concepts::IView<PumpRelayDeviceDescriptor> T_DescriptorView,
+        alpaka::concepts::IView<std::uint32_t> T_IndexView,
+        alpaka::concepts::IView<double> T_BarycentricView>
     struct DevicePumpRelayBoundaryFactory
     {
         T_DescriptorView descriptors;
-        T_UnsignedView exitMask;
-        T_UnsignedView entryFaceIds;
-        T_UnsignedView cacheState;
-        T_UnsignedView cacheTargetFace;
-        T_DoubleView cacheBarycentric0;
-        T_DoubleView cacheBarycentric1;
-        T_DoubleView cacheBarycentric2;
+        T_IndexView exitMask;
+        T_IndexView entryFaceIds;
+        T_IndexView cacheState;
+        T_IndexView cacheTargetFace;
+        T_BarycentricView cacheBarycentric0;
+        T_BarycentricView cacheBarycentric1;
+        T_BarycentricView cacheBarycentric2;
         unsigned faceCount;
         unsigned relayCount;
         unsigned rayCount;
@@ -715,132 +767,170 @@ namespace hase::kernels
         }
     };
 
-    template<typename T_DescriptorView, typename T_UnsignedView, typename T_DoubleView>
-    struct PumpBarycentricSrmBoundary
+    template<
+        alpaka::concepts::IView<PumpRelayDeviceDescriptor> T_DescriptorView,
+        alpaka::concepts::IView<std::uint32_t> T_SurfaceMaskView,
+        alpaka::concepts::SpecializationOf<hase::kernels::forward::SurfaceReservoirSpans> T_Reservoir,
+        alpaka::rand::concepts::UniformRandomEngine T_Rng>
+    struct PumpSurfaceReservoirBoundary
         : hase::kernels::forward::ray::BoundaryPolicySrm<hase::kernels::forward::ray::srmPosition::Barycentric>
     {
         T_DescriptorView descriptors;
-        T_UnsignedView surfaceMask;
-        T_UnsignedView cacheState;
-        T_UnsignedView cacheTargetFace;
-        T_DoubleView cacheBarycentric0;
-        T_DoubleView cacheBarycentric1;
-        T_DoubleView cacheBarycentric2;
-        unsigned faceCount;
-        unsigned reflectionCount;
-        unsigned rayCount;
-        unsigned rayIndex;
+        T_SurfaceMaskView surfaceMask;
+        T_Reservoir reservoir;
+        T_Rng rng;
+        std::uint32_t faceCount;
+        std::uint32_t reflectionIndex;
+        std::uint32_t candidateIndex;
+        bool captureOutput;
 
-        ALPAKA_FN_HOST_ACC constexpr PumpBarycentricSrmBoundary(
+        ALPAKA_FN_HOST_ACC constexpr PumpSurfaceReservoirBoundary(
             T_DescriptorView descriptorsValue,
-            T_UnsignedView surfaceMaskValue,
-            T_UnsignedView cacheStateValue,
-            T_UnsignedView cacheTargetFaceValue,
-            T_DoubleView cacheBarycentric0Value,
-            T_DoubleView cacheBarycentric1Value,
-            T_DoubleView cacheBarycentric2Value,
-            unsigned const faceCountValue,
-            unsigned const reflectionCountValue,
-            unsigned const rayCountValue,
-            unsigned const rayIndexValue)
+            T_SurfaceMaskView surfaceMaskValue,
+            T_Reservoir reservoirValue,
+            T_Rng rngValue,
+            std::uint32_t const faceCountValue,
+            std::uint32_t const reflectionIndexValue,
+            std::uint32_t const candidateIndexValue,
+            bool const captureOutputValue)
             : descriptors{descriptorsValue}
             , surfaceMask{surfaceMaskValue}
-            , cacheState{cacheStateValue}
-            , cacheTargetFace{cacheTargetFaceValue}
-            , cacheBarycentric0{cacheBarycentric0Value}
-            , cacheBarycentric1{cacheBarycentric1Value}
-            , cacheBarycentric2{cacheBarycentric2Value}
+            , reservoir{reservoirValue}
+            , rng{rngValue}
             , faceCount{faceCountValue}
-            , reflectionCount{reflectionCountValue}
-            , rayCount{rayCountValue}
-            , rayIndex{rayIndexValue}
+            , reflectionIndex{reflectionIndexValue}
+            , candidateIndex{candidateIndexValue}
+            , captureOutput{captureOutputValue}
         {
         }
 
         ALPAKA_FN_ACC hase::kernels::forward::ray::BoundaryResult operator()(
-            auto const&,
+            alpaka::onAcc::concepts::Acc auto const& acc,
             hase::data::TraceView const& mesh,
-            auto& ray,
+            GeneralPumpRayState& ray,
             unsigned const cell,
             unsigned const localFace)
         {
             namespace policyRay = hase::kernels::forward::ray;
-            if(ray.relayIndex >= reflectionCount)
+            if(!captureOutput)
                 return policyRay::BoundaryResult::stop;
 
-            unsigned const reflectionIndex = ray.relayIndex;
-            unsigned const faceId = cell * mesh.numberOfFacesPerCell + localFace;
+            std::uint32_t const faceId = cell * mesh.numberOfFacesPerCell + localFace;
             if(surfaceMask[reflectionIndex * faceCount + faceId] == 0u)
-            {
-                ray.power = 0.0;
                 return policyRay::BoundaryResult::stop;
-            }
 
-            unsigned const cacheIndex = reflectionIndex * rayCount + rayIndex;
-            if(cacheState[cacheIndex] == 0u)
-            {
-                policyRay::captureSrmPosition(this->positionPolicy, mesh, cell, localFace, ray.position, ray);
-                cacheTargetFace[cacheIndex] = faceId;
-                cacheBarycentric0[cacheIndex] = ray.boundaryBarycentric[0u];
-                cacheBarycentric1[cacheIndex] = ray.boundaryBarycentric[1u];
-                cacheBarycentric2[cacheIndex] = ray.boundaryBarycentric[2u];
-                cacheState[cacheIndex] = 1u;
-            }
-            else
-            {
-                unsigned const cachedFace = cacheTargetFace[cacheIndex];
-                if(cachedFace != faceId)
-                {
-                    ray.power = 0.0;
-                    return policyRay::BoundaryResult::stop;
-                }
-                ray.boundaryBarycentric
-                    = {cacheBarycentric0[cacheIndex], cacheBarycentric1[cacheIndex], cacheBarycentric2[cacheIndex]};
-                ray.position = policyRay::restoreSrmPosition(this->positionPolicy, mesh, cell, localFace, ray);
-            }
-
-            ray.direction = hase::kernels::forward::reflectedDirection(
+            hase::core::Direction const direction = hase::kernels::forward::reflectedDirection(
                 ray.direction,
                 hase::kernels::forward::outwardFaceNormal(mesh, cell, localFace));
-            ray.cell = cell;
-            ray.forbiddenFace = static_cast<int>(localFace);
-            ray.power *= descriptors[reflectionIndex].transmission;
-            ++ray.relayIndex;
-            return ray.power == 0.0 ? policyRay::BoundaryResult::stop : policyRay::BoundaryResult::continueTraversal;
+            return hase::kernels::forward::storeSurfaceReservoirBoundarySample(
+                acc,
+                mesh,
+                ray,
+                cell,
+                localFace,
+                hase::kernels::forward::SurfaceReservoirBoundarySample{
+                    direction,
+                    ray.power * descriptors[reflectionIndex].transmission,
+                    ray.wavelength},
+                reservoir,
+                candidateIndex,
+                rng);
         }
     };
 
-    template<typename T_DescriptorView, typename T_UnsignedView, typename T_DoubleView>
-    struct PumpBarycentricSrmBoundaryFactory
+    template<
+        alpaka::concepts::IView<PumpRelayDeviceDescriptor> T_DescriptorView,
+        alpaka::concepts::IView<std::uint32_t> T_SurfaceMaskView,
+        alpaka::concepts::SpecializationOf<hase::kernels::forward::SurfaceReservoirSpans> T_Reservoir>
+    struct PumpSurfaceReservoirBoundaryFactory
     {
         T_DescriptorView descriptors;
-        T_UnsignedView surfaceMask;
-        T_UnsignedView cacheState;
-        T_UnsignedView cacheTargetFace;
-        T_DoubleView cacheBarycentric0;
-        T_DoubleView cacheBarycentric1;
-        T_DoubleView cacheBarycentric2;
-        unsigned faceCount;
-        unsigned reflectionCount;
-        unsigned rayCount;
+        T_SurfaceMaskView surfaceMask;
+        T_Reservoir reservoir;
+        std::uint32_t faceCount;
+        std::uint32_t reflectionIndex;
+        std::uint32_t rngSeed;
+        std::uint32_t pass;
+        bool captureOutput;
 
         ALPAKA_FN_ACC auto operator()(unsigned const rayIndex) const
         {
-            return PumpBarycentricSrmBoundary{
+            return PumpSurfaceReservoirBoundary{
                 descriptors,
                 surfaceMask,
-                cacheState,
-                cacheTargetFace,
-                cacheBarycentric0,
-                cacheBarycentric1,
-                cacheBarycentric2,
+                reservoir,
+                hase::random::makeRandomEngine(rngSeed, (static_cast<std::uint64_t>(pass) << 32u) | rayIndex),
                 faceCount,
-                reflectionCount,
-                rayCount,
-                rayIndex};
+                reflectionIndex,
+                rayIndex,
+                captureOutput};
         }
     };
 
+    struct TracePumpSurfaceReservoir
+    {
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            hase::data::TraceView const mesh,
+            alpaka::concepts::IView<double> auto betaVolume,
+            alpaka::concepts::SpecializationOf<hase::kernels::forward::SurfaceReservoirSpans> auto input,
+            alpaka::concepts::SpecializationOf<hase::kernels::forward::SurfaceReservoirSamplingCdfSpans> auto sampling,
+            alpaka::concepts::SpecializationOf<hase::kernels::forward::SurfaceReservoirSpans> auto output,
+            alpaka::concepts::IView<PumpRelayDeviceDescriptor> auto descriptors,
+            alpaka::concepts::IView<std::uint32_t> auto surfaceMask,
+            alpaka::concepts::IView<double> auto vertexPumpIntegral,
+            std::uint32_t const faceCount,
+            std::uint32_t const rayCount,
+            std::uint32_t const reflectionIndex,
+            double const sourcePower,
+            std::uint32_t const rngSeed,
+            std::uint32_t const pass,
+            bool const captureOutput) const
+        {
+            for(auto [rayIndex] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{rayCount}))
+            {
+                auto rng
+                    = hase::random::makeRandomEngine(rngSeed, (static_cast<std::uint64_t>(pass) << 32u) | rayIndex);
+                hase::kernels::forward::SurfaceReservoirSample const sample
+                    = hase::kernels::forward::sampleSurfaceReservoir(input, sampling, faceCount, rayIndex, rng);
+                if(!sample.valid)
+                    continue;
+
+                std::uint32_t const cell = sample.faceId / mesh.numberOfFacesPerCell;
+                std::uint32_t const localFace = sample.faceId % mesh.numberOfFacesPerCell;
+                GeneralPumpRayState ray;
+                ray.position = input.positions.at(sample.slotIndex);
+                ray.direction = hase::kernels::forward::normalize(input.directions.at(sample.slotIndex));
+                ray.power = sourcePower;
+                ray.wavelength = input.wavelengths[sample.slotIndex];
+                ray.cell = cell;
+                ray.forbiddenFace = static_cast<std::int32_t>(localFace);
+                static_cast<void>(hase::kernels::forward::ray::walk(
+                    acc,
+                    mesh,
+                    ray,
+                    hase::kernels::forward::ray::RayWalkBehaviour{
+                        TraceGeneralPump::CellPolicy{betaVolume, vertexPumpIntegral},
+                        PumpSurfaceReservoirBoundary{
+                            descriptors,
+                            surfaceMask,
+                            output,
+                            rng,
+                            faceCount,
+                            reflectionIndex,
+                            rayIndex,
+                            captureOutput}}));
+            }
+        }
+    };
+
+    /**
+     * @param mesh Host trace containing selected boundary faces.
+     * @param domains Boundary-domain identifiers forming one relay aperture.
+     * @return Area-weighted origin and orthonormal aperture frame.
+     * @throws std::runtime_error If the selection is empty or geometrically invalid.
+     */
     [[nodiscard]] inline RelayFrame makeRelayFrame(hase::data::TraceData const& mesh, std::vector<int> const& domains)
     {
         RelayFrame frame{};
@@ -869,12 +959,15 @@ namespace hase::kernels
                 scale = std::max(scale, (vertex - frame.origin).euclidLength());
         for(auto const& face : frame.faces)
         {
-            if(std::abs(hase::core::dot(face.centroid - frame.origin, frame.normal)) > 1.0e-8 * std::max(1.0, scale))
+            constexpr double minimumGeometryScale = 1.0e-2;
+            if(std::abs(hase::core::dot(face.centroid - frame.origin, frame.normal))
+               > 1.0e-8 * std::max(minimumGeometryScale, scale))
                 throw std::runtime_error("pump relay surfaces must be coplanar");
         }
         return frame;
     }
 
+    /** @brief Device-ready relay descriptors, masks, and entry-face indices. */
     struct PumpRelayGeometry
     {
         std::vector<PumpRelayDeviceDescriptor> descriptors;
@@ -883,6 +976,11 @@ namespace hase::kernels
         unsigned faceCount = 0u;
     };
 
+    /**
+     * @param mesh Host trace containing boundary geometry.
+     * @param relays Prepared planar relay controls.
+     * @return Flattened relay geometry for device upload.
+     */
     [[nodiscard]] inline PumpRelayGeometry preparePumpRelayGeometry(
         hase::data::TraceData const& mesh,
         std::vector<hase::core::PumpRelayParameters> const& relays)
@@ -929,10 +1027,15 @@ namespace hase::kernels
         return result;
     }
 
-    template<typename T_Value, typename T_Getter>
+    /**
+     * @param rays Host ray states to project into one component array.
+     * @param getter Callable returning the requested component from one ray.
+     * @return Component values in ray order; empty input produces one padding element.
+     */
+    template<typename T_Value>
     [[nodiscard]] inline std::vector<T_Value> pumpRayValues(
         std::vector<GeneralPumpRayState> const& rays,
-        T_Getter getter)
+        std::invocable<GeneralPumpRayState const&> auto getter)
     {
         std::vector<T_Value> result;
         result.reserve(rays.size());
@@ -943,6 +1046,10 @@ namespace hase::kernels
         return result;
     }
 
+    /**
+     * @param values Host values destined for device storage.
+     * @return `values`, padded with one default element when empty.
+     */
     template<typename T_Value>
     [[nodiscard]] inline std::vector<T_Value> pumpDeviceStorage(std::vector<T_Value> values)
     {
@@ -951,120 +1058,159 @@ namespace hase::kernels
         return values;
     }
 
-    template<typename T_Device>
+    /** @brief Device-owned ray state, relay geometry, and cache for one pump source. */
+    template<alpaka::onHost::concepts::Device T_Device>
     class GeneralPumpDeviceSource
     {
         using T_DoubleBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1u}));
         using T_UnsignedBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), std::size_t{1u}));
-        using T_IntBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<int>(std::declval<T_Device&>(), std::size_t{1u}));
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::size_t{1u}));
+        using T_SignedIndexBuffer
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::int32_t>(std::declval<T_Device&>(), std::size_t{1u}));
         using T_DescriptorBuffer = ALPAKA_TYPEOF(
             alpaka::onHost::alloc<PumpRelayDeviceDescriptor>(std::declval<T_Device&>(), std::size_t{1u}));
 
+        template<typename T_Value>
+        [[nodiscard]] static auto makeExactCacheBuffer(concepts::Queue auto const& queue, std::size_t const extent)
+        {
+            using T_Buffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<T_Value>(queue.getDevice(), std::size_t{1u}));
+            if constexpr(hase::core::compileTimeConfig::exactPumpCache)
+                return std::optional<T_Buffer>{alpaka::onHost::alloc<T_Value>(queue.getDevice(), extent)};
+            else
+                return std::optional<T_Buffer>{};
+        }
+
     public:
+        /**
+         * @brief Upload one sampled source and allocate its relay state.
+         * @param queue Queue selecting the destination device.
+         * @param rays Physical host ray states in partition order.
+         * @param geometry Flattened relay geometry consumed by boundary policies.
+         * @param pumpSteps Number of simulation steps during which the source is active.
+         * @param rngSeed Source seed reused for deterministic reservoir passes.
+         */
         GeneralPumpDeviceSource(
-            auto const& queue,
+            concepts::Queue auto const& queue,
             std::vector<GeneralPumpRayState> const& rays,
             PumpRelayGeometry geometry,
-            unsigned const pumpSteps)
-            : m_originX(
-                  hase::alpakaUtils::toDevice(
+            std::uint32_t const pumpSteps,
+            std::uint32_t const rngSeed)
+            : m_geometry(
+                  hase::core::PositionBufferSoA<T_Device>{
                       queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.position.x; })))
-            , m_originY(
-                  hase::alpakaUtils::toDevice(
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.position.x; }),
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.position.y; }),
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.position.z; })},
+                  hase::core::DirectionBufferSoA<T_Device>{
                       queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.position.y; })))
-            , m_originZ(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.position.z; })))
-            , m_directionX(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.direction.x; })))
-            , m_directionY(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.direction.y; })))
-            , m_directionZ(
-                  hase::alpakaUtils::toDevice(
-                      queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.direction.z; })))
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.direction.x; }),
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.direction.y; }),
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.direction.z; })})
             , m_power(
                   hase::alpakaUtils::toDevice(
                       queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.power; })))
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.power; })))
             , m_wavelength(
                   hase::alpakaUtils::toDevice(
                       queue,
-                      pumpRayValues<double>(rays, [](auto const& ray) { return ray.wavelength; })))
+                      pumpRayValues<double>(rays, [](GeneralPumpRayState const& ray) { return ray.wavelength; })))
             , m_cell(
                   hase::alpakaUtils::toDevice(
                       queue,
-                      pumpRayValues<unsigned>(rays, [](auto const& ray) { return ray.cell; })))
+                      pumpRayValues<std::uint32_t>(rays, [](GeneralPumpRayState const& ray) { return ray.cell; })))
             , m_forbiddenFace(
                   hase::alpakaUtils::toDevice(
                       queue,
-                      pumpRayValues<int>(rays, [](auto const& ray) { return ray.forbiddenFace; })))
+                      pumpRayValues<std::int32_t>(
+                          rays,
+                          [](GeneralPumpRayState const& ray) { return ray.forbiddenFace; })))
             , m_descriptors(hase::alpakaUtils::toDevice(queue, pumpDeviceStorage(geometry.descriptors)))
             , m_exitMask(hase::alpakaUtils::toDevice(queue, pumpDeviceStorage(geometry.exitMask)))
             , m_entryFaceIds(hase::alpakaUtils::toDevice(queue, pumpDeviceStorage(geometry.entryFaceIds)))
             , m_cacheState(
-                  alpaka::onHost::alloc<unsigned>(
-                      queue.getDevice(),
+                  makeExactCacheBuffer<std::uint32_t>(
+                      queue,
                       std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheTargetFace(
-                  alpaka::onHost::alloc<unsigned>(
-                      queue.getDevice(),
+                  makeExactCacheBuffer<std::uint32_t>(
+                      queue,
                       std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric0(
-                  alpaka::onHost::alloc<double>(
-                      queue.getDevice(),
+                  makeExactCacheBuffer<double>(
+                      queue,
                       std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric1(
-                  alpaka::onHost::alloc<double>(
-                      queue.getDevice(),
+                  makeExactCacheBuffer<double>(
+                      queue,
                       std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
             , m_cacheBarycentric2(
-                  alpaka::onHost::alloc<double>(
-                      queue.getDevice(),
+                  makeExactCacheBuffer<double>(
+                      queue,
                       std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())))
+            , m_surfaceReservoirScratch(
+                  hase::core::compileTimeConfig::exactPumpCache || geometry.descriptors.empty() || rays.empty()
+                      ? nullptr
+                      : std::make_unique<hase::core::SurfaceReservoirScratch<T_Device>>(
+                            queue.getDevice(),
+                            geometry.faceCount,
+                            pumpReservoirSlots,
+                            static_cast<std::uint32_t>(rays.size())))
             , m_faceCount{geometry.faceCount}
-            , m_relayCount{static_cast<unsigned>(geometry.descriptors.size())}
-            , m_rayCount{static_cast<unsigned>(rays.size())}
+            , m_relayCount{static_cast<std::uint32_t>(geometry.descriptors.size())}
+            , m_rayCount{static_cast<std::uint32_t>(rays.size())}
             , m_pumpSteps{pumpSteps}
+            , m_rngSeed{rngSeed}
         {
-            auto const cacheExtent = alpaka::Vec{std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())};
-            alpaka::onHost::fill(queue, m_cacheState, 0u, cacheExtent);
-            alpaka::onHost::fill(queue, m_cacheTargetFace, 0u, cacheExtent);
-            alpaka::onHost::fill(queue, m_cacheBarycentric0, 0.0, cacheExtent);
-            alpaka::onHost::fill(queue, m_cacheBarycentric1, 0.0, cacheExtent);
-            alpaka::onHost::fill(queue, m_cacheBarycentric2, 0.0, cacheExtent);
+            if constexpr(hase::core::compileTimeConfig::exactPumpCache)
+            {
+                auto const cacheExtent
+                    = alpaka::Vec{std::max<std::size_t>(1u, geometry.descriptors.size() * rays.size())};
+                alpaka::onHost::fill(queue, *m_cacheState, 0u, cacheExtent);
+                alpaka::onHost::fill(queue, *m_cacheTargetFace, 0u, cacheExtent);
+                alpaka::onHost::fill(queue, *m_cacheBarycentric0, 0.0, cacheExtent);
+                alpaka::onHost::fill(queue, *m_cacheBarycentric1, 0.0, cacheExtent);
+                alpaka::onHost::fill(queue, *m_cacheBarycentric2, 0.0, cacheExtent);
+            }
         }
 
+        /** @return Number of physical rays represented by the padded device storage. */
         [[nodiscard]] unsigned rayCount() const
         {
             return m_rayCount;
         }
 
+        /**
+         * @param simulationStep Zero-based physical simulation step.
+         * @return Whether this source pumps during that step.
+         */
         [[nodiscard]] bool active(unsigned const simulationStep) const
         {
             return simulationStep < m_pumpSteps;
         }
 
+        /** @return Device buffer recording per-relay cached face mappings. */
         [[nodiscard]] auto const& cacheState() const
         {
-            return m_cacheState;
+            return *m_cacheState;
         }
 
+        /**
+         * @brief Enqueue this source with finite planar relay mappings.
+         * @param devBundle Device and executor used for the ray launch.
+         * @param queue Queue receiving fill and trace operations.
+         * @param mesh Device-resident trace view.
+         * @param betaVolume Current cell excitation fractions.
+         * @param vertexPumpIntegral Material-vertex photon-exchange accumulator.
+         */
+        template<alpaka::concepts::Executor T_Executor>
+        requires(hase::core::compileTimeConfig::exactPumpCache)
         void enqueue(
-            auto& devBundle,
-            auto const& queue,
+            hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
+            concepts::Queue auto const& queue,
             hase::data::TraceView const mesh,
-            auto& betaVolume,
-            auto& vertexPumpIntegral,
+            alpaka::concepts::IBuffer<double> auto& betaVolume,
+            alpaka::concepts::IBuffer<double> auto& vertexPumpIntegral,
             pumpBoundaryPolicy::Relay)
         {
             enqueueWithFactory(
@@ -1077,51 +1223,137 @@ namespace hase::kernels
                     m_descriptors.getView(),
                     m_exitMask.getView(),
                     m_entryFaceIds.getView(),
-                    m_cacheState.getView(),
-                    m_cacheTargetFace.getView(),
-                    m_cacheBarycentric0.getView(),
-                    m_cacheBarycentric1.getView(),
-                    m_cacheBarycentric2.getView(),
+                    m_cacheState->getView(),
+                    m_cacheTargetFace->getView(),
+                    m_cacheBarycentric0->getView(),
+                    m_cacheBarycentric1->getView(),
+                    m_cacheBarycentric2->getView(),
                     m_faceCount,
                     m_relayCount,
                     m_rayCount});
         }
 
+        /**
+         * @brief Enqueue this source with barycentric surface-reservoir recirculation.
+         * @param devBundle Device and executor used for traces and scans.
+         * @param queue Queue receiving all reservoir passes.
+         * @param mesh Device-resident trace view.
+         * @param betaVolume Current cell excitation fractions.
+         * @param vertexPumpIntegral Material-vertex photon-exchange accumulator.
+         */
+        template<alpaka::concepts::Executor T_Executor>
+        requires(!hase::core::compileTimeConfig::exactPumpCache)
         void enqueue(
-            auto& devBundle,
-            auto const& queue,
+            hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
+            concepts::Queue auto const& queue,
             hase::data::TraceView const mesh,
-            auto& betaVolume,
-            auto& vertexPumpIntegral,
+            alpaka::concepts::IBuffer<double> auto& betaVolume,
+            alpaka::concepts::IBuffer<double> auto& vertexPumpIntegral,
             pumpBoundaryPolicy::SrmBarycentric)
         {
+            if(m_rayCount == 0u)
+                return;
+            if(m_surfaceReservoirScratch == nullptr)
+            {
+                enqueueWithFactory(
+                    devBundle,
+                    queue,
+                    mesh,
+                    betaVolume,
+                    vertexPumpIntegral,
+                    StorePumpSrmBoundaryFactory{});
+                return;
+            }
+
+            auto& scratch = *m_surfaceReservoirScratch;
+            scratch.validate(m_faceCount, m_rayCount);
+            scratch.clear(queue, scratch.reservoir.first);
+            scratch.clear(queue, scratch.reservoir.second);
+            alpaka::onHost::wait(queue);
             enqueueWithFactory(
                 devBundle,
                 queue,
                 mesh,
                 betaVolume,
                 vertexPumpIntegral,
-                PumpBarycentricSrmBoundaryFactory{
+                PumpSurfaceReservoirBoundaryFactory{
                     m_descriptors.getView(),
                     m_exitMask.getView(),
-                    m_cacheState.getView(),
-                    m_cacheTargetFace.getView(),
-                    m_cacheBarycentric0.getView(),
-                    m_cacheBarycentric1.getView(),
-                    m_cacheBarycentric2.getView(),
+                    scratch.reservoir.first.view(pumpReservoirSlots),
                     m_faceCount,
-                    m_relayCount,
-                    m_rayCount});
+                    0u,
+                    m_rngSeed,
+                    0u,
+                    true});
+            alpaka::onHost::wait(queue);
+
+            bool inputFirst = true;
+            double previousWeight = scratch.updateSampling(
+                devBundle,
+                queue,
+                scratch.reservoir.first,
+                pumpReservoirSlots,
+                m_rayCount,
+                m_rngSeed,
+                0u);
+            auto const frameSpec = hase::alpakaUtils::getFrameSpec<std::uint32_t>(
+                devBundle.device,
+                devBundle.executor,
+                alpaka::Vec{m_rayCount});
+            for(std::uint32_t pass = 1u; pass <= m_relayCount && previousWeight > 0.0; ++pass)
+            {
+                bool const captureOutput = pass < m_relayCount;
+                auto& input = inputFirst ? scratch.reservoir.first : scratch.reservoir.second;
+                auto& output = inputFirst ? scratch.reservoir.second : scratch.reservoir.first;
+                if(captureOutput)
+                {
+                    scratch.clear(queue, output);
+                    alpaka::onHost::wait(queue);
+                }
+                queue.enqueue(
+                    frameSpec,
+                    alpaka::KernelBundle{
+                        TracePumpSurfaceReservoir{},
+                        mesh,
+                        betaVolume,
+                        input.view(pumpReservoirSlots),
+                        scratch.samplingView(m_faceCount <= m_rayCount),
+                        output.view(pumpReservoirSlots),
+                        m_descriptors.getView(),
+                        m_exitMask.getView(),
+                        vertexPumpIntegral,
+                        m_faceCount,
+                        m_rayCount,
+                        pass,
+                        previousWeight / static_cast<double>(m_rayCount),
+                        m_rngSeed,
+                        pass,
+                        captureOutput});
+                alpaka::onHost::wait(queue);
+                if(captureOutput)
+                {
+                    inputFirst = !inputFirst;
+                    previousWeight = scratch.updateSampling(
+                        devBundle,
+                        queue,
+                        output,
+                        pumpReservoirSlots,
+                        m_rayCount,
+                        m_rngSeed,
+                        pass);
+                }
+            }
         }
 
     private:
+        template<alpaka::concepts::Executor T_Executor>
         void enqueueWithFactory(
-            auto& devBundle,
-            auto const& queue,
+            hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
+            concepts::Queue auto const& queue,
             hase::data::TraceView const mesh,
-            auto& betaVolume,
-            auto& vertexPumpIntegral,
-            auto boundaryPolicyFactory)
+            alpaka::concepts::IBuffer<double> auto& betaVolume,
+            alpaka::concepts::IBuffer<double> auto& vertexPumpIntegral,
+            std::invocable<unsigned> auto boundaryPolicyFactory)
         {
             if(m_rayCount == 0u)
                 return;
@@ -1135,12 +1367,7 @@ namespace hase::kernels
                     TraceGeneralPump{},
                     mesh,
                     betaVolume,
-                    m_originX,
-                    m_originY,
-                    m_originZ,
-                    m_directionX,
-                    m_directionY,
-                    m_directionZ,
+                    m_geometry.view(),
                     m_power,
                     m_wavelength,
                     m_cell,
@@ -1150,23 +1377,34 @@ namespace hase::kernels
                     m_rayCount});
         }
 
-        T_DoubleBuffer m_originX, m_originY, m_originZ;
-        T_DoubleBuffer m_directionX, m_directionY, m_directionZ;
+        hase::core::RayGeometryBufferSoA<T_Device> m_geometry;
         T_DoubleBuffer m_power, m_wavelength;
         T_UnsignedBuffer m_cell;
-        T_IntBuffer m_forbiddenFace;
+        T_SignedIndexBuffer m_forbiddenFace;
         T_DescriptorBuffer m_descriptors;
-        T_UnsignedBuffer m_exitMask, m_entryFaceIds, m_cacheState, m_cacheTargetFace;
-        T_DoubleBuffer m_cacheBarycentric0, m_cacheBarycentric1, m_cacheBarycentric2;
-        unsigned m_faceCount = 0u;
-        unsigned m_relayCount = 0u;
-        unsigned m_rayCount = 0u;
-        unsigned m_pumpSteps = 0u;
+        T_UnsignedBuffer m_exitMask, m_entryFaceIds;
+        std::optional<T_UnsignedBuffer> m_cacheState, m_cacheTargetFace;
+        std::optional<T_DoubleBuffer> m_cacheBarycentric0, m_cacheBarycentric1, m_cacheBarycentric2;
+        std::unique_ptr<hase::core::SurfaceReservoirScratch<T_Device>> m_surfaceReservoirScratch;
+        std::uint32_t m_faceCount = 0u;
+        std::uint32_t m_relayCount = 0u;
+        std::uint32_t m_rayCount = 0u;
+        std::uint32_t m_pumpSteps = 0u;
+        std::uint32_t m_rngSeed = 0u;
     };
 
-    template<typename T_Device>
+    /**
+     * @brief Sample and upload every registered pump source for one worker partition.
+     * @param queue Queue selecting the destination device.
+     * @param mesh Prepared host trace.
+     * @param pump Collection of prepared pump sources.
+     * @param firstRay First global ray assigned to this worker for every source.
+     * @param localRayCount Maximum source rays assigned to this worker.
+     * @return Device-owned sources in registration order.
+     */
+    template<alpaka::onHost::concepts::Device T_Device>
     [[nodiscard]] inline std::vector<GeneralPumpDeviceSource<T_Device>> prepareGeneralPumpDeviceSources(
-        auto const& queue,
+        concepts::Queue auto const& queue,
         hase::data::TraceData const& mesh,
         hase::core::PumpParameters const& pump,
         unsigned const firstRay = 0u,
@@ -1178,23 +1416,29 @@ namespace hase::kernels
         {
             if(source.pumpSteps == 0u)
             {
-                result.emplace_back(queue, std::vector<GeneralPumpRayState>{}, PumpRelayGeometry{}, 0u);
+                result
+                    .emplace_back(queue, std::vector<GeneralPumpRayState>{}, PumpRelayGeometry{}, 0u, source.rngSeed);
                 continue;
             }
             auto rays = samplePumpSource(mesh, source, source.rayCount, source.rngSeed, firstRay, localRayCount);
-            result.emplace_back(queue, rays, preparePumpRelayGeometry(mesh, source.relays), source.pumpSteps);
+            result.emplace_back(
+                queue,
+                rays,
+                preparePumpRelayGeometry(mesh, source.relays),
+                source.pumpSteps,
+                source.rngSeed);
         }
         return result;
     }
 
+    /** @brief Kernel converting material-vertex pump integrals into cell rates. */
     struct ProjectVertexPumpRateToCells
     {
         ALPAKA_FN_ACC void operator()(
-            auto const& acc,
+            alpaka::onAcc::concepts::Acc auto const& acc,
             hase::data::TraceView const mesh,
-            auto vertexIntegral,
-            auto lumpedVertexVolume,
-            auto cellRate) const
+            alpaka::concepts::IView<double> auto vertexIntegral,
+            alpaka::concepts::IView<double> auto cellRate) const
         {
             for(auto [cell] : alpaka::onAcc::makeIdxMap(
                     acc,
@@ -1213,7 +1457,7 @@ namespace hase::kernels
                     unsigned const materialVertex
                         = mesh.getMaterialId(cell) * mesh.numberOfMeshPoints
                           + mesh.cellPointIndices[cell * mesh.numberOfCellVertices + localVertex];
-                    double const volume = lumpedVertexVolume[materialVertex];
+                    double const volume = mesh.lumpedMaterialVertexVolumes[materialVertex];
                     rateSum += volume > 0.0 ? vertexIntegral[materialVertex] / volume : 0.0;
                 }
                 // Volume averaging the four lumped vertex rates preserves the deposited
@@ -1223,19 +1467,31 @@ namespace hase::kernels
         }
     };
 
+    /**
+     * @brief Clear and accumulate pump photon exchange at material vertices.
+     * @param devBundle Device and executor used for source launches.
+     * @param queue Queue receiving all source operations.
+     * @param mesh Device-resident trace view.
+     * @param sources Prepared device sources in registration order.
+     * @param betaVolume Current cell excitation fractions.
+     * @param vertexPumpIntegral Output material-vertex integrals, cleared first.
+     * @param simulationStep Zero-based physical simulation step.
+     * @param boundaryPolicy Relay or surface-reservoir boundary selector.
+     */
     template<
-        typename T_Device,
-        typename T_Executor,
-        typename T_BetaBuffer,
-        typename T_VertexBuffer,
-        typename T_BoundaryPolicy = pumpBoundaryPolicy::Relay>
+        alpaka::onHost::concepts::Device T_Device,
+        alpaka::concepts::Executor T_Executor,
+        typename T_BoundaryPolicy = std::conditional_t<
+            hase::core::compileTimeConfig::exactPumpCache,
+            pumpBoundaryPolicy::Relay,
+            pumpBoundaryPolicy::SrmBarycentric>>
     void enqueueGeneralPumpIntegrals(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
-        auto const& queue,
+        concepts::Queue auto const& queue,
         hase::data::TraceView const mesh,
         std::vector<GeneralPumpDeviceSource<T_Device>>& sources,
-        T_BetaBuffer& betaVolume,
-        T_VertexBuffer& vertexPumpIntegral,
+        alpaka::concepts::IBuffer<double> auto& betaVolume,
+        alpaka::concepts::IBuffer<double> auto& vertexPumpIntegral,
         unsigned const simulationStep,
         T_BoundaryPolicy boundaryPolicy = {})
     {
@@ -1252,19 +1508,21 @@ namespace hase::kernels
         }
     }
 
-    template<
-        typename T_Device,
-        typename T_Executor,
-        typename T_VertexBuffer,
-        typename T_LumpedVolumeBuffer,
-        typename T_RateBuffer>
+    /**
+     * @brief Enqueue conservative projection from vertex integrals to cell rates.
+     * @param devBundle Device and executor used for the cell launch.
+     * @param queue Queue receiving the projection kernel.
+     * @param mesh Device trace containing lumped material-vertex volumes.
+     * @param vertexPumpIntegral Material-vertex photon-exchange integrals.
+     * @param cellRate Output pump population rate per cell.
+     */
+    template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Executor>
     void enqueueProjectVertexPumpRateToCells(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
-        auto const& queue,
+        concepts::Queue auto const& queue,
         hase::data::TraceView const mesh,
-        T_VertexBuffer& vertexPumpIntegral,
-        T_LumpedVolumeBuffer& lumpedVertexVolume,
-        T_RateBuffer& cellRate)
+        alpaka::concepts::IBuffer<double> auto& vertexPumpIntegral,
+        alpaka::concepts::IBuffer<double> auto& cellRate)
     {
         HASE_HOST_ROUTINE_SCOPE("pump.enqueue_project_vertices");
         auto cellFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
@@ -1273,31 +1531,36 @@ namespace hase::kernels
             alpaka::Vec{mesh.numberOfCells});
         queue.enqueue(
             cellFrameSpec,
-            alpaka::KernelBundle{
-                ProjectVertexPumpRateToCells{},
-                mesh,
-                vertexPumpIntegral,
-                lumpedVertexVolume,
-                cellRate});
+            alpaka::KernelBundle{ProjectVertexPumpRateToCells{}, mesh, vertexPumpIntegral, cellRate});
     }
 
+    /**
+     * @brief Enqueue complete pump transport and conservative cell-rate projection.
+     * @param devBundle Device and executor used for all launches.
+     * @param queue Queue receiving transport and projection work.
+     * @param mesh Device-resident trace view.
+     * @param sources Prepared device sources.
+     * @param betaVolume Current cell excitation fractions.
+     * @param vertexPumpIntegral Temporary material-vertex integral storage.
+     * @param cellRate Output pump population rate per cell.
+     * @param simulationStep Zero-based physical simulation step.
+     * @param boundaryPolicy Relay or surface-reservoir boundary selector.
+     */
     template<
-        typename T_Device,
-        typename T_Executor,
-        typename T_BetaBuffer,
-        typename T_VertexBuffer,
-        typename T_LumpedVolumeBuffer,
-        typename T_RateBuffer,
-        typename T_BoundaryPolicy = pumpBoundaryPolicy::Relay>
+        alpaka::onHost::concepts::Device T_Device,
+        alpaka::concepts::Executor T_Executor,
+        typename T_BoundaryPolicy = std::conditional_t<
+            hase::core::compileTimeConfig::exactPumpCache,
+            pumpBoundaryPolicy::Relay,
+            pumpBoundaryPolicy::SrmBarycentric>>
     void enqueueGeneralPump(
         hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
-        auto const& queue,
+        concepts::Queue auto const& queue,
         hase::data::TraceView const mesh,
         std::vector<GeneralPumpDeviceSource<T_Device>>& sources,
-        T_BetaBuffer& betaVolume,
-        T_VertexBuffer& vertexPumpIntegral,
-        T_LumpedVolumeBuffer& lumpedVertexVolume,
-        T_RateBuffer& cellRate,
+        alpaka::concepts::IBuffer<double> auto& betaVolume,
+        alpaka::concepts::IBuffer<double> auto& vertexPumpIntegral,
+        alpaka::concepts::IBuffer<double> auto& cellRate,
         unsigned const simulationStep,
         T_BoundaryPolicy boundaryPolicy = {})
     {
@@ -1310,6 +1573,6 @@ namespace hase::kernels
             vertexPumpIntegral,
             simulationStep,
             boundaryPolicy);
-        enqueueProjectVertexPumpRateToCells(devBundle, queue, mesh, vertexPumpIntegral, lumpedVertexVolume, cellRate);
+        enqueueProjectVertexPumpRateToCells(devBundle, queue, mesh, vertexPumpIntegral, cellRate);
     }
 } // namespace hase::kernels

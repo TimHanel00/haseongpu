@@ -84,6 +84,7 @@ default interpolation resolution of 1000 to the backend; transport-specific
 resampling is backend-owned. The SSG regression explicitly requests 191.
 
 The fixed legacy implementation reflects at the physical top plane,
-`(numberOfLevels - 1) * thickness` (0.7 m for the ten sampled planes), the
-same boundary used by the Tet4 walker. The Tet4 conversion orders each
+`(numberOfLevels - 1) * thickness` (0.7 cm for the ten sampled planes), the
+same boundary used by the Tet4 walker. Current SI comparisons convert the
+legacy integrated ``cm/s`` result to ``m/s``. The Tet4 conversion orders each
 wedge's base vertices globally so all shared prism faces are conforming.

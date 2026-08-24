@@ -7,6 +7,10 @@ time-dependent state are cell-centered. It does not store excitation, material
 constants, spectra, or boundary optics. Only VTK cell type ``10`` (Tet4) is
 supported by this implementation.
 
+All coordinates are metres. Because VTK, Gmsh, and STL files do not encode a
+length unit, imported point coordinates are interpreted as metres. Derived
+face areas and cell volumes are therefore square metres and cubic metres.
+
 The public ``Domain`` contract is broader. It represents typed mesh regions
 through generic cell, face, and neighbor information and does not require a
 ``VolumeTopology`` instance. This permits frontend composition over other cell
@@ -24,7 +28,7 @@ Load gmsh, VTK, or a closed STL surface:
 
    topology = VolumeTopology.fromFile("crystal.msh")
    topology = VolumeTopology.fromFile("crystal.vtk")
-   topology = VolumeTopology.fromFile("crystal.stl", meshSize=0.05)
+   topology = VolumeTopology.fromFile("crystal.stl", meshSize=0.0005)
 
 Use ``format=`` when a filename has a non-standard extension. ``fromVtk``
 expects an ASCII VTK unstructured grid. ``fromStl`` uses gmsh to tetrahedralize

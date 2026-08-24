@@ -40,7 +40,7 @@ create a second transport copy:
 
 ``getResults`` raises ``RuntimeError`` before a successful run.
 The result includes ``phiAse``, ``standardError``,
-``relativeStandardError``, ``totalRays``, and ``dndtAse`` plus surface-reservoir
+``relativeStandardError``, ``totalRays``, and ``dndtAse`` plus reflected-pass
 termination information when reflections are enabled. A time-stepped
 ``Simulation`` exposes the same raw object as ``TimeStepState.aseResult``.
 
@@ -90,15 +90,12 @@ Reflections
 there is no configurable forward ray-length cutoff.
 
 ``reflectionMaxIterations``
-   Maximum surface-reservoir passes after the direct pass. The positive integer
+   Maximum surface-resampling passes after the direct pass. The positive integer
    environment override is ``HASE_SRM_MAX_ITERATIONS``.
 
 ``reflectionTolerance``
    Stop when remaining reflected source weight, relative to the direct pass,
    falls below this fraction.
-
-``surfaceReservoirSize``
-   Maximum weighted source records retained per physical boundary face.
 
 The runtime reports ``srmStatus``, ``srmPasses``, ``srmRemainingFraction``,
 ``srmMaxIterations``, and ``srmDivergenceStreak``. Terminal status can be

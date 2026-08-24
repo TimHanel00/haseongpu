@@ -132,7 +132,7 @@ the same aperture.
 
 ``PhiASE`` performs source-driven forward Monte Carlo transport. The default
 run uses adaptive global ray batches, an RSE target of 0.1, and the
-surface-reservoir reflection model. ``FrozenPhiAseRungeKutta4`` reuses the
+surface-resampling reflection model. ``FrozenPhiAseRungeKutta4`` reuses the
 first ASE evaluation within each RK4 outer step while reevaluating pump
 transport at every stage.
 
@@ -172,7 +172,7 @@ the HDF5 record before the component refers to it:
          path: ../material_library/data/materials.h5
          key: YbYAG
        temperature: 293.15
-       active_ion_density: 2.776e20
+       active_ion_density: 2.776e26
        interpolation: exact
        spectral_resolution: 1000
      cladding_glass:
@@ -197,7 +197,7 @@ the HDF5 record before the component refers to it:
 The local names do not define material behavior. The HDF5 keys select records
 whose active/passive classification is already stored; the remaining values
 resolve run-specific conditions. Canonical YAML units for this section are
-kelvin and ``cm^-3``.
+kelvin and ``m^-3``.
 
 ``Simulation.fromYaml`` resolves the complete file:
 

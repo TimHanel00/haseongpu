@@ -12,6 +12,9 @@ import pytest
 import laserPumpCladdingApi as example
 
 
+LEGACY_VOLUME_UNIT_SI = 1.0e-6
+
+
 def _normalized_wasserstein_distance(first_coordinates, first_weights, second_coordinates, second_weights):
     first_coordinates = np.asarray(first_coordinates, dtype=np.float64).reshape(-1)
     second_coordinates = np.asarray(second_coordinates, dtype=np.float64).reshape(-1)
@@ -92,15 +95,15 @@ def test_general_pump_reproduces_legacy_crystal_inversion(openPmdFileBackend, al
     )
 
     cell_volumes = np.asarray(topology.cellVolumes)
-    legacy_lumped_volume = np.bincount(
+    legacy_lumped_volume_cm3 = np.bincount(
         np.asarray(topology.cellPointIndices).reshape(-1),
-        weights=np.repeat(cell_volumes / 4.0, 4),
+        weights=np.repeat(cell_volumes / LEGACY_VOLUME_UNIT_SI / 4.0, 4),
         minlength=topology.numberOfPoints,
     ).reshape(reference["dndtPump"].shape[1:], order="F")
     new_total = np.asarray([np.sum(np.asarray(state.dndtPump) * cell_volumes) for state in states])
-    old_total = np.asarray(
-        [np.sum(values * legacy_lumped_volume) for values in reference["dndtPump"]]
+    legacy_total_m3 = LEGACY_VOLUME_UNIT_SI * np.asarray(
+        [np.sum(values * legacy_lumped_volume_cm3) for values in reference["dndtPump"]]
     )
-    np.testing.assert_allclose(new_total, old_total, rtol=0.01, atol=1e-12)
-    diagnostics = _deposition_diagnostics(topology, states, reference, legacy_lumped_volume)
+    np.testing.assert_allclose(new_total, legacy_total_m3, rtol=0.01, atol=1e-12)
+    diagnostics = _deposition_diagnostics(topology, states, reference, legacy_lumped_volume_cm3)
     assert relative_field_error < 0.05, f"deposition diagnostics: {diagnostics}"

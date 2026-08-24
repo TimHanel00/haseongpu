@@ -123,9 +123,13 @@ def test_physical_graph_serializes_shared_material_data_once():
     assert [node.typeName for node in graph.nodes].count("crossSectionTable") == 1
     for topology in (node for node in graph.nodes if node.typeName == "volumeTopology"):
         point_spec, points = topology.fields["points"]
+        _face_area_spec, face_areas = topology.fields["faceAreas"]
+        _cell_volume_spec, cell_volumes = topology.fields["cellVolumes"]
         connectivity_spec, connectivity = topology.fields["cellPointIndices"]
         assert point_spec.axes == ("coordinate", "point")
-        assert np.asarray(points).shape == (3, 4)
+        assert points.toValue(units.m).shape == (3, 4)
+        assert face_areas.toValue(units.m**2).shape == (4, 1)
+        assert cell_volumes.toValue(units.m**3).shape == (1,)
         assert connectivity_spec.axes == ("localVertex", "cell")
         assert np.asarray(connectivity).shape == (4, 1)
     phi_ase = next(node for node in graph.nodes if node.typeName == "phiAse")

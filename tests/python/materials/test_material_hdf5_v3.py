@@ -147,7 +147,7 @@ def test_material_from_yaml_resolves_relative_hdf5_path(tmp_path):
             "yb_yag": {
                 "from_hdf5": {"path": "materials.h5", "key": "YbYAG"},
                 "temperature": 293.15,
-                "active_ion_density": 2.776e20,
+                "active_ion_density": 2.776e26,
                 "interpolation": "exact",
                 "spectral_resolution": 1,
             }
@@ -178,7 +178,7 @@ def test_material_yaml_accepts_absorption_coefficient_alias(tmp_path):
             "cladding": {
                 "from_hdf5": {"path": "materials.h5", "key": "Cladding"},
                 "temperature": 293.15,
-                "absorption_coefficient": 5.5,
+                "absorption_coefficient": 550.0,
             }
         },
     }
@@ -189,7 +189,7 @@ def test_material_yaml_accepts_absorption_coefficient_alias(tmp_path):
 
     assert resolved.bulkAttenuation.toValue(units.cm**-1) == pytest.approx(5.5)
 
-    config["materials"]["cladding"]["bulk_attenuation"] = 5.5
+    config["materials"]["cladding"]["bulk_attenuation"] = 550.0
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     with pytest.raises(ValueError, match="both bulk_attenuation and absorption_coefficient"):
         Material.fromYaml(path, "cladding")

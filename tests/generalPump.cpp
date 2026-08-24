@@ -2,6 +2,7 @@
 
 #include <alpakaUtils/DevBundle.hpp>
 #include <alpakaUtils/HybridBuffer.hpp>
+#include <alpakaUtils/backendNames.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_template_test_macros.hpp>
@@ -17,13 +18,14 @@
 #include <cstdint>
 #include <iterator>
 #include <numeric>
+#include <string>
 #include <type_traits>
 #include <vector>
 
 namespace
 {
     using TestBackends = std::decay_t<
-        decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledApis, alpaka::exec::enabledExecutors))>;
+        decltype(alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors))>;
 
     hase::data::TraceData makeSingleTetMesh()
     {
@@ -118,8 +120,9 @@ namespace
         return source;
     }
 
-    template<typename T_Buffer>
-    std::vector<double> copyDoubleBuffer(auto const& queue, T_Buffer const& deviceBuffer)
+    std::vector<double> copyDoubleBuffer(
+        hase::concepts::Queue auto const& queue,
+        alpaka::concepts::IView<double> auto const& deviceBuffer)
     {
         std::vector<double> result(static_cast<std::size_t>(deviceBuffer.getExtents().x()));
         auto transfer = hase::alpakaUtils::getHybridBuffer(result, deviceBuffer);
@@ -127,8 +130,9 @@ namespace
         return result;
     }
 
-    template<typename T_Buffer>
-    std::vector<unsigned> copyUnsignedBuffer(auto const& queue, T_Buffer const& deviceBuffer)
+    std::vector<unsigned> copyUnsignedBuffer(
+        hase::concepts::Queue auto const& queue,
+        alpaka::concepts::IView<std::uint32_t> auto const& deviceBuffer)
     {
         std::vector<unsigned> result(static_cast<std::size_t>(deviceBuffer.getExtents().x()));
         auto transfer = hase::alpakaUtils::getHybridBuffer(result, deviceBuffer);
@@ -160,14 +164,14 @@ TEMPLATE_LIST_TEST_CASE(
     TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
         return;
     }
     auto device = deviceSelector.makeDevice(0);
-    auto const executor = backend[alpaka::object::exec];
+    auto const executor = alpaka::getExecutor(backend);
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
@@ -178,15 +182,12 @@ TEMPLATE_LIST_TEST_CASE(
         std::vector<double> vertexValues(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0);
         vertexValues[0] = 1.0;
         auto vertexIntegral = hase::alpakaUtils::toDevice(queue, vertexValues);
-        auto lumpedVertexVolume
-            = hase::alpakaUtils::toDevice(queue, hase::kernels::makeLumpedMaterialVertexVolumes(mesh));
         auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>(mesh.numberOfCells, 0.0));
         hase::kernels::enqueueProjectVertexPumpRateToCells(
             devBundle,
             queue,
             deviceMesh.view(),
             vertexIntegral,
-            lumpedVertexVolume,
             cellRate);
         return copyDoubleBuffer(queue, cellRate);
     };
@@ -309,7 +310,10 @@ TEST_CASE("general pump stratifies faces by the spatial entry distribution", "[p
         auto const face = std::ranges::find_if(
             faces,
             [&](auto const& candidate)
-            { return candidate.cell == ray.cell && static_cast<int>(candidate.localFace) == ray.forbiddenFace; });
+            {
+                return candidate.cell == ray.cell
+                       && static_cast<std::int32_t>(candidate.localFace) == ray.forbiddenFace;
+            });
         REQUIRE(face != faces.cend());
         ++visits[static_cast<std::size_t>(std::distance(faces.cbegin(), face))];
     }
@@ -389,10 +393,10 @@ TEMPLATE_LIST_TEST_CASE(
     TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
         return;
     }
     auto device = deviceSelector.makeDevice(0);
@@ -431,15 +435,18 @@ TEMPLATE_LIST_TEST_CASE(
     "[pump][backend][integration]",
     TestBackends)
 {
+#if !HASE_EXACT_PUMP_CACHE
+    SKIP("exact relay cache is disabled in this build");
+#else
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
         return;
     }
     auto device = deviceSelector.makeDevice(0);
-    auto const executor = backend[alpaka::object::exec];
+    auto const executor = alpaka::getExecutor(backend);
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
@@ -494,6 +501,7 @@ TEMPLATE_LIST_TEST_CASE(
     REQUIRE(repeatedVertexValues.size() == firstVertexValues.size());
     for(std::size_t point = 0u; point < firstVertexValues.size(); ++point)
         CHECK(repeatedVertexValues[point] == Catch::Approx(firstVertexValues[point]).epsilon(2.0e-6));
+#endif
 }
 
 TEST_CASE("general pump super-Gaussian profile and angular sampling use physical coordinates", "[pump][source]")
@@ -527,14 +535,14 @@ TEMPLATE_LIST_TEST_CASE(
     TestBackends)
 {
     auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
     if(!deviceSelector.isAvailable())
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
         return;
     }
     auto device = deviceSelector.makeDevice(0);
-    auto const executor = backend[alpaka::object::exec];
+    auto const executor = alpaka::getExecutor(backend);
     auto queue = device.makeQueue(alpaka::queueKind::blocking);
     hase::alpakaUtils::DevBundle devBundle(device, executor);
 
@@ -545,8 +553,6 @@ TEMPLATE_LIST_TEST_CASE(
     auto vertexIntegral = hase::alpakaUtils::toDevice(
         queue,
         std::vector<double>(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0));
-    auto const lumpedVolumes = hase::kernels::makeLumpedMaterialVertexVolumes(mesh);
-    auto lumpedVertexVolume = hase::alpakaUtils::toDevice(queue, lumpedVolumes);
     auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
 
     auto source = uniformSource(10u);
@@ -565,7 +571,6 @@ TEMPLATE_LIST_TEST_CASE(
         prepared,
         betaVolume,
         vertexIntegral,
-        lumpedVertexVolume,
         cellRate,
         0u);
 
@@ -580,89 +585,92 @@ TEMPLATE_LIST_TEST_CASE(
     CHECK(rates[0] * static_cast<double>(mesh.cellVolumes[0]) == Catch::Approx(depositedIntegral).epsilon(2.0e-6));
 }
 
-TEMPLATE_LIST_TEST_CASE(
-    "device relay and barycentric SRM produce beta fields within five percent",
-    "[pump][backend][integration][policy]",
-    TestBackends)
+TEST_CASE(
+    "configured pump relay policy is physically consistent across available backends",
+    "[pump][backend][integration][policy]")
 {
-    auto const backend = TestType::makeDict();
-    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend[alpaka::object::deviceSpec]);
-    if(!deviceSelector.isAvailable())
+    std::vector<std::pair<std::string, std::vector<double>>> backendResults;
+    auto const backends
+        = alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors);
+    alpaka::onHost::executeForEachIfHasDevice(
+        [&](alpaka::concepts::BackendSpec auto const& backend) -> int
+        {
+            auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
+            auto device = deviceSelector.makeDevice(0);
+            auto const executor = alpaka::getExecutor(backend);
+            auto queue = device.makeQueue(alpaka::queueKind::blocking);
+            hase::alpakaUtils::DevBundle devBundle(device, executor);
+            auto mesh = makeSingleTetMesh();
+            auto deviceMesh = mesh.makeResident(device);
+            deviceMesh.toDevice(queue);
+
+            auto source = uniformSource(10u);
+            source.wavelengths = {940e-9};
+            source.spectralWeights = {1.0};
+            hase::core::PumpRelayParameters returnPass;
+            returnPass.exitSurfaces = {7};
+            returnPass.entrySurfaces = {7};
+            returnPass.transmission = 0.8;
+            source.relays = {returnPass};
+            source.rayCount = 4096u;
+            source.rngSeed = 71u;
+            hase::core::PumpParameters pump;
+            pump.sources = {source};
+
+            auto prepared = hase::kernels::prepareGeneralPumpDeviceSources<decltype(device)>(queue, mesh, pump);
+            auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.1});
+            auto vertexIntegral = hase::alpakaUtils::toDevice(
+                queue,
+                std::vector<double>(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0));
+            auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
+            hase::kernels::enqueueGeneralPump(
+                devBundle,
+                queue,
+                deviceMesh.view(),
+                prepared,
+                betaVolume,
+                vertexIntegral,
+                cellRate,
+                0u);
+
+            auto beta = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.1});
+            auto betaNext = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
+            alpaka::onHost::transform(
+                queue,
+                devBundle.executor,
+                betaNext,
+                hase::kernels::AddScaled{1.0e-3},
+                beta,
+                cellRate);
+            alpaka::onHost::transform(queue, devBundle.executor, betaNext, hase::kernels::ClipBeta{}, betaNext);
+            backendResults.emplace_back(
+                hase::alpakaUtils::getNameForBackend(backend, device),
+                copyDoubleBuffer(queue, betaNext));
+            return 0;
+        },
+        backends);
+
+    if(backendResults.size() < 2u)
+        SKIP("physical backend comparison requires at least two available backends");
+
+    for(auto const& [name, beta] : backendResults)
     {
-        SUCCEED("No device available for " << backend[alpaka::object::deviceSpec].getName());
-        return;
+        INFO("backend=" << name);
+        REQUIRE(beta.size() == 1u);
+        CHECK(std::isfinite(beta[0u]));
+        CHECK(beta[0u] > 0.1);
     }
-    auto device = deviceSelector.makeDevice(0);
-    auto const executor = backend[alpaka::object::exec];
-    auto queue = device.makeQueue(alpaka::queueKind::blocking);
-    hase::alpakaUtils::DevBundle devBundle(device, executor);
-    auto mesh = makeSingleTetMesh();
-    auto deviceMesh = mesh.makeResident(device);
-    deviceMesh.toDevice(queue);
 
-    auto source = uniformSource(10u);
-    source.wavelengths = {940e-9};
-    source.spectralWeights = {1.0};
-    hase::core::PumpRelayParameters returnPass;
-    returnPass.exitSurfaces = {7};
-    returnPass.entrySurfaces = {7};
-    returnPass.transmission = 0.8;
-    source.relays = {returnPass};
-    hase::core::PumpParameters pump;
-    source.rayCount = 4096u;
-    source.rngSeed = 71u;
-    pump.sources = {source};
-
-    auto runOneStep = [&](auto boundaryPolicy)
+    for(std::size_t lhs = 0u; lhs < backendResults.size(); ++lhs)
     {
-        auto prepared = hase::kernels::prepareGeneralPumpDeviceSources<decltype(device)>(queue, mesh, pump);
-        auto betaVolume = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.1});
-        auto vertexIntegral = hase::alpakaUtils::toDevice(
-            queue,
-            std::vector<double>(mesh.numberOfMaterials * mesh.numberOfMeshPoints, 0.0));
-        auto lumpedVertexVolume
-            = hase::alpakaUtils::toDevice(queue, hase::kernels::makeLumpedMaterialVertexVolumes(mesh));
-        auto cellRate = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
-        hase::kernels::enqueueGeneralPump(
-            devBundle,
-            queue,
-            deviceMesh.view(),
-            prepared,
-            betaVolume,
-            vertexIntegral,
-            lumpedVertexVolume,
-            cellRate,
-            0u,
-            boundaryPolicy);
-
-        auto beta = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.1});
-        auto betaNext = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.0});
-        alpaka::onHost::transform(
-            queue,
-            devBundle.executor,
-            betaNext,
-            hase::kernels::AddScaled{1.0e-3},
-            beta,
-            cellRate);
-        alpaka::onHost::transform(queue, devBundle.executor, betaNext, hase::kernels::ClipBeta{}, betaNext);
-        return copyDoubleBuffer(queue, betaNext);
-    };
-
-    auto const relayBeta = runOneStep(hase::kernels::pumpRelayPolicy);
-    auto const srmBeta = runOneStep(hase::kernels::pumpSrmBarycentricPolicy);
-    REQUIRE(relayBeta.size() == srmBeta.size());
-    REQUIRE_FALSE(relayBeta.empty());
-    double absoluteDifference = 0.0;
-    double relayMagnitude = 0.0;
-    for(std::size_t sample = 0u; sample < relayBeta.size(); ++sample)
-    {
-        CHECK(std::isfinite(relayBeta[sample]));
-        CHECK(std::isfinite(srmBeta[sample]));
-        CHECK(relayBeta[sample] >= 0.1);
-        CHECK(srmBeta[sample] >= 0.1);
-        absoluteDifference += std::abs(relayBeta[sample] - srmBeta[sample]);
-        relayMagnitude += std::abs(relayBeta[sample] - 0.1);
+        for(std::size_t rhs = lhs + 1u; rhs < backendResults.size(); ++rhs)
+        {
+            INFO("lhs=" << backendResults[lhs].first << ", rhs=" << backendResults[rhs].first);
+            double const lhsDeposition = backendResults[lhs].second[0u] - 0.1;
+            double const rhsDeposition = backendResults[rhs].second[0u] - 0.1;
+            double const referenceMagnitude = std::max(std::abs(lhsDeposition), std::abs(rhsDeposition));
+            REQUIRE(referenceMagnitude > 0.0);
+            CHECK(std::abs(lhsDeposition - rhsDeposition) / referenceMagnitude < 0.05);
+        }
     }
-    REQUIRE(relayMagnitude > 0.0);
-    CHECK(absoluteDifference / relayMagnitude < 0.05);
 }

@@ -11,11 +11,12 @@
 #include <alpakaUtils/HybridBuffer.hpp>
 #include <concepts/concepts.hpp>
 #include <core/Runtime.hpp>
+#include <core/reflectionResampling.hpp>
 #include <core/srm.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
 
-#include <array>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -23,6 +24,7 @@
 
 namespace hase::core
 {
+    /** @brief Unnormalized forward accumulators and reflected-pass convergence metadata. */
     struct ForwardPhiAseRawResult
     {
         std::vector<double> vertexBatchScoreSum;
@@ -37,77 +39,25 @@ namespace hase::core
         unsigned srmDivergenceStreak = 0u;
     };
 
-    template<alpaka::onHost::concepts::Device T_Device>
-    class ForwardSrmWorkspace
-    {
-        using T_DoubleBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), unsigned{1}));
-        using T_UnsignedBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<unsigned>(std::declval<T_Device&>(), unsigned{1}));
-        using T_CharBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), unsigned{1}));
-
-    public:
-        ForwardSrmWorkspace(T_Device& device, unsigned faceCount, unsigned reservoirSize, unsigned maxRayCount)
-            : countsA(alpaka::onHost::alloc<unsigned>(device, faceCount))
-            , countsB(alpaka::onHost::alloc<unsigned>(device, faceCount))
-            , dirXA(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , dirXB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , dirYA(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , dirYB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , dirZA(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , dirZB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , weightsA(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , weightsB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , wavelengthsA(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , wavelengthsB(alpaka::onHost::alloc<double>(device, faceCount * reservoirSize))
-            , faceWeightsA(alpaka::onHost::alloc<double>(device, faceCount))
-            , faceWeightsB(alpaka::onHost::alloc<double>(device, faceCount))
-            , samplingCdf(alpaka::onHost::alloc<double>(device, faceCount))
-            , samplingTotalWeight(alpaka::onHost::alloc<double>(device, 1u))
-            , systematicOffset(alpaka::onHost::alloc<double>(device, 1u))
-            , stratifiedRayCounts(alpaka::onHost::alloc<unsigned>(device, faceCount))
-            , stratifiedRayOffsets(alpaka::onHost::alloc<unsigned>(device, faceCount))
-            , stratifiedRayFaces(alpaka::onHost::alloc<unsigned>(device, maxRayCount))
-            , samplingCdfScanBuffer(
-                  alpaka::onHost::alloc<char>(
-                      device,
-                      alpaka::onHost::getScanBufferSize<double>(alpaka::Vec{faceCount})))
-            , stratifiedCountScanBuffer(
-                  alpaka::onHost::alloc<char>(
-                      device,
-                      alpaka::onHost::getScanBufferSize<unsigned>(alpaka::Vec{faceCount})))
-            , faceCount(faceCount)
-            , reservoirSize(reservoirSize)
-            , maxRayCount(maxRayCount)
-        {
-        }
-
-        T_UnsignedBuffer countsA;
-        T_UnsignedBuffer countsB;
-        T_DoubleBuffer dirXA;
-        T_DoubleBuffer dirXB;
-        T_DoubleBuffer dirYA;
-        T_DoubleBuffer dirYB;
-        T_DoubleBuffer dirZA;
-        T_DoubleBuffer dirZB;
-        T_DoubleBuffer weightsA;
-        T_DoubleBuffer weightsB;
-        T_DoubleBuffer wavelengthsA;
-        T_DoubleBuffer wavelengthsB;
-        T_DoubleBuffer faceWeightsA;
-        T_DoubleBuffer faceWeightsB;
-        T_DoubleBuffer samplingCdf;
-        T_DoubleBuffer samplingTotalWeight;
-        T_DoubleBuffer systematicOffset;
-        T_UnsignedBuffer stratifiedRayCounts;
-        T_UnsignedBuffer stratifiedRayOffsets;
-        T_UnsignedBuffer stratifiedRayFaces;
-        T_CharBuffer samplingCdfScanBuffer;
-        T_CharBuffer stratifiedCountScanBuffer;
-        unsigned faceCount;
-        unsigned reservoirSize;
-        unsigned maxRayCount;
-    };
-
+    /**
+     * @brief Trace direct and recursively reflected forward histories with weighted resampling.
+     * @tparam T_Device Device type owned by `devBundle` and `scratch`.
+     * @tparam T_Exec Executor used for all kernel launches.
+     * @param devBundle Device and executor pair used to construct frame specifications.
+     * @param queue Queue on the same device; this function waits at pass boundaries.
+     * @param mesh Non-owning device view of geometry, materials, and excitation.
+     * @param experiment Trace and reflection configuration.
+     * @param result Raw result whose SRM status fields are updated.
+     * @param rayCount Number of primary histories.
+     * @param rseBatch Statistical batch receiving the accumulated scores.
+     * @param sourceStrengthTotal Total source strength used to normalize primary histories.
+     * @param vertexBatchScoreSum Per-batch material-vertex score accumulator.
+     * @param volumeRayVisits Per-cell visit counter.
+     * @param droppedRays Per-cell counter for histories dropped after traversal failures.
+     * @param threadLocalStridingRNG Seed for primary and reflected sampling.
+     * @param srmControls Reflection pass convergence and divergence limits.
+     * @param scratch Persistent reflected-candidate and sampling storage.
+     */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     void runForwardSrm(
         alpakaUtils::DevBundle<T_Device, T_Exec>& devBundle,
@@ -118,75 +68,20 @@ namespace hase::core
         unsigned const rayCount,
         unsigned const rseBatch,
         double const sourceStrengthTotal,
-        alpaka::concepts::IBuffer auto& vertexBatchScoreSum,
-        alpaka::concepts::IBuffer auto& volumeRayVisits,
-        alpaka::concepts::IBuffer auto& droppedRays,
+        alpaka::concepts::IBuffer<double> auto& vertexBatchScoreSum,
+        alpaka::concepts::IBuffer<std::uint32_t> auto& volumeRayVisits,
+        alpaka::concepts::IBuffer<std::uint32_t> auto& droppedRays,
         unsigned const threadLocalStridingRNG,
         SrmControls const srmControls,
-        ForwardSrmWorkspace<T_Device>& workspace)
+        ReflectionResamplingScratch<T_Device>& scratch)
     {
         auto accumulationSpans = hase::kernels::forward::ForwardAccumulationSpans{
             vertexBatchScoreSum.getMdSpan(),
             volumeRayVisits.getMdSpan(),
             droppedRays.getMdSpan()};
-        unsigned const faceCount = mesh.numberOfCells * mesh.numberOfFacesPerCell;
-        if(workspace.faceCount != faceCount || workspace.reservoirSize != experiment.surfaceReservoirSize
-           || rayCount > workspace.maxRayCount)
-            throw std::runtime_error("persistent forward SRM workspace does not match this launch");
-        auto& countsA = workspace.countsA;
-        auto& countsB = workspace.countsB;
-        auto& dirXA = workspace.dirXA;
-        auto& dirXB = workspace.dirXB;
-        auto& dirYA = workspace.dirYA;
-        auto& dirYB = workspace.dirYB;
-        auto& dirZA = workspace.dirZA;
-        auto& dirZB = workspace.dirZB;
-        auto& weightsA = workspace.weightsA;
-        auto& weightsB = workspace.weightsB;
-        auto& wavelengthsA = workspace.wavelengthsA;
-        auto& wavelengthsB = workspace.wavelengthsB;
-        auto& faceWeightsA = workspace.faceWeightsA;
-        auto& faceWeightsB = workspace.faceWeightsB;
-        auto& samplingCdf = workspace.samplingCdf;
-        auto& samplingTotalWeight = workspace.samplingTotalWeight;
-        auto& systematicOffset = workspace.systematicOffset;
-        auto& stratifiedRayCounts = workspace.stratifiedRayCounts;
-        auto& stratifiedRayOffsets = workspace.stratifiedRayOffsets;
-        auto& stratifiedRayFaces = workspace.stratifiedRayFaces;
-        auto& samplingCdfScanBuffer = workspace.samplingCdfScanBuffer;
-        auto& stratifiedCountScanBuffer = workspace.stratifiedCountScanBuffer;
-        auto reservoirSpansA = hase::kernels::forward::SurfaceReservoirSpans{
-            countsA,
-            dirXA,
-            dirYA,
-            dirZA,
-            weightsA,
-            wavelengthsA,
-            faceWeightsA,
-            experiment.surfaceReservoirSize};
-        auto samplingCdfSpans = hase::kernels::forward::SurfaceReservoirSamplingCdfSpans{
-            samplingCdf,
-            samplingTotalWeight,
-            stratifiedRayFaces,
-            faceCount <= rayCount};
-        auto reservoirSpansB = hase::kernels::forward::SurfaceReservoirSpans{
-            countsB,
-            dirXB,
-            dirYB,
-            dirZB,
-            weightsB,
-            wavelengthsB,
-            faceWeightsB,
-            experiment.surfaceReservoirSize};
-
-        auto clearReservoir = [&](auto& counts, auto& faceWeights)
-        {
-            alpaka::onHost::fill(queue, counts, 0u, alpaka::Vec{faceCount});
-            alpaka::onHost::fill(queue, faceWeights, 0.0, alpaka::Vec{faceCount});
-        };
-
-        clearReservoir(countsA, faceWeightsA);
-        clearReservoir(countsB, faceWeightsB);
+        scratch.validate(rayCount);
+        scratch.clear(queue, scratch.first);
+        scratch.clear(queue, scratch.second);
         alpaka::onHost::wait(queue);
 
         constexpr unsigned rayFrameExtent = 128u;
@@ -197,81 +92,18 @@ namespace hase::core
         queue.enqueue(
             rayFrameSpec,
             alpaka::KernelBundle{
-                hase::kernels::forward::AccumulateForwardPhiAseReservoir{},
+                hase::kernels::forward::AccumulateForwardPhiAseReflections{},
                 mesh,
                 rayCount,
                 rseBatch,
                 sourceStrengthTotal,
                 accumulationSpans,
-                reservoirSpansA,
+                scratch.first.view(),
                 threadLocalStridingRNG});
         alpaka::onHost::wait(queue);
 
         bool inputA = true;
-        auto const faceFrameSpec
-            = hase::alpakaUtils::getFrameSpec<uint32_t>(devBundle.device, devBundle.executor, alpaka::Vec{faceCount});
-        auto const scalarFrameSpec
-            = hase::alpakaUtils::getFrameSpec<uint32_t>(devBundle.device, devBundle.executor, alpaka::Vec{1u});
-        std::array<double, 1u> samplingTotalWeightHost{};
-        auto samplingTotalWeightBuffer
-            = hase::alpakaUtils::getHybridBuffer(samplingTotalWeightHost, samplingTotalWeight);
-        auto updateSamplingCdf = [&](auto const& reservoir, unsigned const pass)
-        {
-            alpaka::onHost::inclusiveScan(
-                queue,
-                devBundle.executor,
-                samplingCdfScanBuffer,
-                samplingCdf,
-                reservoir.faceWeights);
-            queue.enqueue(
-                scalarFrameSpec,
-                alpaka::KernelBundle{
-                    hase::kernels::forward::CaptureSurfaceReservoirSamplingTotalWeight{},
-                    faceCount,
-                    samplingCdfSpans});
-            queue.enqueue(
-                faceFrameSpec,
-                alpaka::KernelBundle{
-                    hase::kernels::forward::NormalizeSurfaceReservoirSamplingCdf{},
-                    faceCount,
-                    samplingCdfSpans});
-            if(samplingCdfSpans.useFaceStratification)
-            {
-                queue.enqueue(
-                    scalarFrameSpec,
-                    alpaka::KernelBundle{
-                        hase::kernels::forward::GenerateSurfaceReservoirSystematicOffset{},
-                        systematicOffset,
-                        threadLocalStridingRNG,
-                        pass});
-                queue.enqueue(
-                    faceFrameSpec,
-                    alpaka::KernelBundle{
-                        hase::kernels::forward::AssignSurfaceReservoirStratifiedRayCounts{},
-                        faceCount,
-                        rayCount,
-                        samplingCdfSpans,
-                        systematicOffset,
-                        stratifiedRayCounts});
-                alpaka::onHost::exclusiveScan(
-                    queue,
-                    devBundle.executor,
-                    stratifiedCountScanBuffer,
-                    stratifiedRayOffsets,
-                    stratifiedRayCounts);
-                queue.enqueue(
-                    faceFrameSpec,
-                    alpaka::KernelBundle{
-                        hase::kernels::forward::ScatterSurfaceReservoirStratifiedRayFaces{},
-                        faceCount,
-                        stratifiedRayCounts,
-                        stratifiedRayOffsets,
-                        stratifiedRayFaces});
-            }
-            samplingTotalWeightBuffer.toHost(queue);
-            return samplingTotalWeightBuffer.getHostView()[0u];
-        };
-        double const initialWeight = updateSamplingCdf(reservoirSpansA, 0u);
+        double const initialWeight = scratch.updateSampling(devBundle, queue, scratch.first, rayCount);
         if(initialWeight == 0.0)
         {
             result.srmStatus = data::SrmStatus::converged;
@@ -285,10 +117,10 @@ namespace hase::core
         for(unsigned pass = 1u; pass <= srmControls.maxIterations; ++pass)
         {
             double const sourceWeight = previousWeight / static_cast<double>(rayCount);
-            // Buffer switch for reservoir weights.
+            // Alternate exact candidate banks between reflected passes.
             if(inputA)
             {
-                clearReservoir(countsB, faceWeightsB);
+                scratch.clear(queue, scratch.second);
                 alpaka::onHost::wait(queue);
                 queue.enqueue(
                     rayFrameSpec,
@@ -299,15 +131,15 @@ namespace hase::core
                         rseBatch,
                         sourceWeight,
                         accumulationSpans,
-                        reservoirSpansA,
-                        samplingCdfSpans,
-                        reservoirSpansB,
+                        scratch.first.view(),
+                        scratch.samplingView(),
+                        scratch.second.view(),
                         threadLocalStridingRNG,
                         pass});
             }
             else
             {
-                clearReservoir(countsA, faceWeightsA);
+                scratch.clear(queue, scratch.first);
                 alpaka::onHost::wait(queue);
                 queue.enqueue(
                     rayFrameSpec,
@@ -318,16 +150,17 @@ namespace hase::core
                         rseBatch,
                         sourceWeight,
                         accumulationSpans,
-                        reservoirSpansB,
-                        samplingCdfSpans,
-                        reservoirSpansA,
+                        scratch.second.view(),
+                        scratch.samplingView(),
+                        scratch.first.view(),
                         threadLocalStridingRNG,
                         pass});
             }
             alpaka::onHost::wait(queue);
             inputA = !inputA;
 
-            double const currentWeight = updateSamplingCdf(inputA ? reservoirSpansA : reservoirSpansB, pass);
+            double const currentWeight
+                = scratch.updateSampling(devBundle, queue, inputA ? scratch.first : scratch.second, rayCount);
             result.srmPasses = pass;
             result.srmRemainingFraction = currentWeight / initialWeight;
             if(currentWeight > previousWeight)

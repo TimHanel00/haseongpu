@@ -19,6 +19,7 @@ import numpy as np
 
 from hase_transport import PrimitiveDescription, field as transportField, reference
 from .alpakaUtils import AlpakaBackends
+from .fields import backendFlat
 from .physical import Domain, GainMedium, OpticalComponent, validateComponentOverlap
 from .frontendState import projectCellMask, projectFrontendState, projectSurfaceDomain
 from .laser import (
@@ -28,7 +29,7 @@ from .laser import (
     _PumpProperties,
     _PumpSource,
 )
-from .openpmd import backendFlat, transport
+from .openpmd import transport
 from .timeIntegration import TimeIntegrationSolver
 
 
@@ -140,8 +141,6 @@ class PhiASE:
     """Maximum reflected-source passes after the direct volume-source pass."""
     reflectionTolerance: float = 1e-4
     """Stop reflected passes when their source-weight fraction is below this value."""
-    surfaceReservoirSize: int = 32
-    """Maximum reflected source records retained per physical boundary face."""
     monochromatic: bool = False
     """Use only the first spectral samples instead of wavelength integration."""
 
@@ -185,7 +184,6 @@ class PhiASE:
                 transportField("useReflections"),
                 transportField("reflectionMaxIterations"),
                 transportField("reflectionTolerance"),
-                transportField("surfaceReservoirSize"),
                 transportField("monochromatic"),
                 transportField(
                     "backend",
@@ -239,7 +237,6 @@ class PhiASE:
         parser.add_argument("--relative-standard-error-threshold", type=float, default=None)
         parser.add_argument("--reflection-max-iterations", type=int, default=None)
         parser.add_argument("--reflection-tolerance", type=float, default=None)
-        parser.add_argument("--surface-reservoir-size", type=int, default=None)
         parser.add_argument("--repetitions", type=int, default=None)
         parser.add_argument("--adaptive-steps", type=int, default=None)
         parser.add_argument("--backend", default=None)
@@ -265,7 +262,6 @@ class PhiASE:
             "relative_standard_error_threshold": "relativeStandardErrorThreshold",
             "reflection_max_iterations": "reflectionMaxIterations",
             "reflection_tolerance": "reflectionTolerance",
-            "surface_reservoir_size": "surfaceReservoirSize",
             "repetitions": "repetitions",
             "adaptive_steps": "adaptiveSteps",
             "backend": "backend",
@@ -308,7 +304,6 @@ class PhiASE:
             "relativeStandardErrorThreshold": self.relativeStandardErrorThreshold,
             "reflectionMaxIterations": self.reflectionMaxIterations,
             "reflectionTolerance": self.reflectionTolerance,
-            "surfaceReservoirSize": self.surfaceReservoirSize,
             "repetitions": self.repetitions,
             "adaptiveSteps": adaptive_steps,
             "useReflections": self.useReflections,

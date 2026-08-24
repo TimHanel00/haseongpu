@@ -11,8 +11,8 @@ The pump API separates a physical source from its placement:
 .. code-block:: python
 
    profile = SuperGaussianPumpProfile(
-       radius_u=1.5,
-       radius_v=1.5,
+       radius_u=0.015,
+       radius_v=0.015,
        exponent=40,
    )
    pump = Pump(
@@ -34,6 +34,9 @@ The pump's material interaction comes from the shared executable ``Material``;
 it does not carry a second physical cross-section registry. ``PumpSpectrum``
 only selects and weights pump wavelengths.
 
+Pump wavelengths, profile radii and centres, and relay offsets use metres.
+``Pump.total_power`` uses watts. Angles and profile axes are dimensionless.
+
 ``Pump.total_power`` is integrated aperture power. To convert a peak power
 density, integrate the profile over its typed surface domain:
 
@@ -46,6 +49,10 @@ density, integrate the profile over its typed surface domain:
        ray_count=50_000,
        profile=profile,
    )
+
+Here ``area`` is in square metres, so ``peakPowerDensity`` must be in watts per
+square metre. For example, :math:`16\,\mathrm{kW\,cm^{-2}}` is
+:math:`1.6\times10^8\,\mathrm{W\,m^{-2}}`.
 
 ``PlanarPumpRelay`` supports flips, in-plane rotation, offset, tilt,
 magnification, transmission, and aperture vignetting. ``transmission`` is the

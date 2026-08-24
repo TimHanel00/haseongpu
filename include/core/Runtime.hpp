@@ -51,10 +51,25 @@ namespace hase::core
     {
         static constexpr unsigned unspecifiedRngSeed = std::numeric_limits<unsigned>::max();
 
+        /** @brief Default-construct a policy; callers must initialize scheduling fields before use. */
         ExecutionPolicy()
         {
         }
 
+        /**
+         * @brief Construct an in-memory execution policy without filesystem paths.
+         * @param maxRepetitions Maximum repeated evaluations.
+         * @param adaptiveSteps Number of geometric ray-target increases.
+         * @param numDevices Requested local device count; zero selects all available devices.
+         * @param gpu_i Initially selected device index.
+         * @param backend Stable backend name to match at runtime.
+         * @param parallelMode Host worker strategy from `ParallelMode`.
+         * @param writeVtk Whether legacy VTK result files are requested.
+         * @param devices Explicit local device indices, populated by backend selection when empty.
+         * @param minSampleRange First sample included in legacy statistics.
+         * @param maxSampleRange Last sample included in legacy statistics.
+         * @param rngSeed Base random seed, or `unspecifiedRngSeed` for generated seeding.
+         */
         ExecutionPolicy(
             unsigned maxRepetitions,
             unsigned adaptiveSteps,
@@ -81,6 +96,22 @@ namespace hase::core
         {
         }
 
+        /**
+         * @brief Construct an execution policy including legacy input and output paths.
+         * @param maxRepetitions Maximum repeated evaluations.
+         * @param adaptiveSteps Number of geometric ray-target increases.
+         * @param gpu_i Initially selected device index.
+         * @param backend Stable backend name to match at runtime.
+         * @param parallelMode Host worker strategy from `ParallelMode`.
+         * @param writeVtk Whether legacy VTK result files are requested.
+         * @param inputPath Input dataset path retained for legacy entrypoints.
+         * @param outputPath Directory used for requested legacy outputs.
+         * @param devices Explicit local device indices.
+         * @param minSampleRange First sample included in legacy statistics.
+         * @param maxSampleRange Last sample included in legacy statistics.
+         * @param numDevices Requested local device count; zero selects all available devices.
+         * @param rngSeed Base random seed, or `unspecifiedRngSeed` for generated seeding.
+         */
         ExecutionPolicy(
             unsigned maxRepetitions,
             unsigned adaptiveSteps,
@@ -148,11 +179,13 @@ namespace hase::core
     {
         AseTraceControls() = default;
 
+        /** @return Whether the selected propagation mode is `forward`. */
         [[nodiscard]] bool isForwardPropagation() const
         {
             return propagationMode == "forward";
         }
 
+        /** @return Explicit forward count, or `minRays` when no override is set. */
         [[nodiscard]] unsigned resolvedForwardRayCount() const
         {
             return forwardRayCount == 0u ? minRays : forwardRayCount;
@@ -167,9 +200,15 @@ namespace hase::core
         bool monochromatic = false;
         unsigned reflectionMaxIterations = 40u;
         double reflectionTolerance = 1.0e-4;
-        unsigned surfaceReservoirSize = 32u;
     };
 
+    /**
+     * @brief Resolve the cumulative ray target for one adaptive launch.
+     * @param experiment Physical and statistical ASE controls.
+     * @param compute Host execution controls, including the adaptive-step count.
+     * @param completedIncreases Number of target increases already completed.
+     * @return Cumulative ray target clamped to the configured minimum and maximum.
+     */
     [[nodiscard]] inline unsigned adaptiveRayTarget(
         AseTraceControls const& experiment,
         ExecutionPolicy const& compute,
@@ -193,6 +232,11 @@ namespace hase::core
         return std::clamp(rounded, experiment.minRays, experiment.maxRays);
     }
 
+    /**
+     * @param result Cell-ordered forward result to assess.
+     * @param relativeStandardErrorThreshold Maximum accepted finite cell RSE.
+     * @return Whether every reported cell has finite RSE at or below the threshold.
+     */
     [[nodiscard]] inline bool forwardResultMeetsRelativeStandardError(
         data::PhiAseResult const& result,
         double const relativeStandardErrorThreshold)
@@ -208,6 +252,13 @@ namespace hase::core
                    });
     }
 
+    /**
+     * @brief Record the first cumulative ray target at which each cell converges.
+     * @param result Current cell-ordered forward result.
+     * @param targetRayCount Cumulative histories represented by `result`.
+     * @param relativeStandardErrorThreshold Maximum accepted finite cell RSE.
+     * @param convergenceRayCounts Per-cell first-convergence counts to update in place.
+     */
     inline void recordAdaptiveRayConvergence(
         data::PhiAseResult const& result,
         unsigned const targetRayCount,

@@ -23,6 +23,13 @@ namespace hase::kernels::forward::ray
 {
     using TriangleBarycentric = std::array<double, 3u>;
 
+    /**
+     * @param mesh Device trace containing triangular face connectivity.
+     * @param cell Cell owning the face.
+     * @param localFace Local face index.
+     * @param point Cartesian point on the face plane.
+     * @return Three affine face coordinates, or equal weights for a degenerate face.
+     */
     [[nodiscard]] ALPAKA_FN_ACC inline TriangleBarycentric triangleBarycentricCoordinates(
         hase::data::TraceView const& mesh,
         unsigned const cell,
@@ -48,6 +55,13 @@ namespace hase::kernels::forward::ray
         return {1.0 - second - third, second, third};
     }
 
+    /**
+     * @param mesh Device trace containing triangular face connectivity.
+     * @param cell Cell owning the face.
+     * @param localFace Local face index.
+     * @param coordinates Three face coordinates in local-vertex order.
+     * @return Reconstructed Cartesian face position.
+     */
     [[nodiscard]] ALPAKA_FN_ACC inline hase::core::Point positionFromTriangleBarycentric(
         hase::data::TraceView const& mesh,
         unsigned const cell,
@@ -146,14 +160,24 @@ namespace hase::kernels::forward::ray
     concept SrmBoundaryBehaviour
         = concepts::BoundaryBehaviour<T> && requires { typename std::remove_cvref_t<T>::PositionPolicy; };
 
+    /** @brief Whether a boundary policy stops or resumes the current walk. */
     enum class BoundaryResult : std::uint8_t
     {
         stop,
         continueTraversal
     };
 
+    /** @brief Mutable ray state required by the generic Tet4 walker. */
+    template<typename T_Ray>
+    concept State = requires(T_Ray rayState) {
+        rayState.position;
+        rayState.direction;
+        rayState.cell;
+        rayState.forbiddenFace;
+    };
+
     template<typename T_Term, typename T_Acc, typename T_RayState>
-    concept HasOnCell = concepts::CellBehaviour<T_Term>
+    concept HasOnCell = concepts::CellBehaviour<T_Term> && alpaka::onAcc::concepts::Acc<T_Acc> && State<T_RayState>
                         && requires(
                             T_Term& term,
                             T_Acc const& acc,
@@ -165,16 +189,17 @@ namespace hase::kernels::forward::ray
                            };
 
     template<typename T_Term, typename T_Acc, typename T_RayState>
-    concept HasOnBoundary = concepts::BoundaryBehaviour<T_Term>
-                            && requires(
-                                T_Term& term,
-                                T_Acc const& acc,
-                                hase::data::TraceView const& mesh,
-                                T_RayState& rayState,
-                                unsigned const cell,
-                                unsigned const localFace) {
-                                   { term(acc, mesh, rayState, cell, localFace) } -> std::same_as<BoundaryResult>;
-                               };
+    concept HasOnBoundary
+        = concepts::BoundaryBehaviour<T_Term> && alpaka::onAcc::concepts::Acc<T_Acc> && State<T_RayState>
+          && requires(
+              T_Term& term,
+              T_Acc const& acc,
+              hase::data::TraceView const& mesh,
+              T_RayState& rayState,
+              unsigned const cell,
+              unsigned const localFace) {
+                 { term(acc, mesh, rayState, cell, localFace) } -> std::same_as<BoundaryResult>;
+             };
 
     inline constexpr BoundaryPolicySrm aseSrmPolicy{};
     inline constexpr BoundaryPolicySrm<srmPosition::Barycentric> pumpSrmPolicy{};
@@ -238,20 +263,13 @@ namespace hase::kernels::forward::ray
         return positionFromTriangleBarycentric(mesh, cell, localFace, storage.boundaryBarycentric);
     }
 
+    /** @brief Minimal geometry state for a ray traversing a Tet4 mesh. */
     struct TraversalState
     {
         hase::core::Point position{};
         hase::core::Point direction{};
         unsigned cell = 0u;
-        int forbiddenFace = -1;
-    };
-
-    template<typename T_Ray>
-    concept State = requires(T_Ray rayState) {
-        rayState.position;
-        rayState.direction;
-        rayState.cell;
-        rayState.forbiddenFace;
+        std::int32_t forbiddenFace = -1;
     };
 
     /**
@@ -264,7 +282,12 @@ namespace hase::kernels::forward::ray
      */
     struct BoundaryPolicyEscape : behaviourDimension::Boundary
     {
-        ALPAKA_FN_ACC BoundaryResult operator()(auto const&, auto const&, auto&, unsigned, unsigned)
+        ALPAKA_FN_ACC BoundaryResult operator()(
+            alpaka::onAcc::concepts::Acc auto const&,
+            hase::data::TraceView const&,
+            State auto&,
+            unsigned,
+            unsigned)
         {
             return BoundaryResult::stop;
         }
@@ -290,9 +313,9 @@ namespace hase::kernels::forward::ray
         }
 
         ALPAKA_FN_ACC bool onCell(
-            auto const& acc,
+            alpaka::onAcc::concepts::Acc auto const& acc,
             hase::data::TraceView const& mesh,
-            auto& rayState,
+            State auto& rayState,
             unsigned const cell,
             Tet4FaceIntersection const intersection)
         {
@@ -300,9 +323,9 @@ namespace hase::kernels::forward::ray
         }
 
         ALPAKA_FN_ACC BoundaryResult onBoundary(
-            auto const& acc,
+            alpaka::onAcc::concepts::Acc auto const& acc,
             hase::data::TraceView const& mesh,
-            auto& rayState,
+            State auto& rayState,
             unsigned const cell,
             unsigned const localFace)
         {
@@ -314,7 +337,7 @@ namespace hase::kernels::forward::ray
         }
 
     private:
-        template<typename T_Term, typename T_Acc, typename T_RayState>
+        template<concepts::CellBehaviour T_Term, alpaka::onAcc::concepts::Acc T_Acc, State T_RayState>
         requires HasOnCell<T_Term, T_Acc, T_RayState>
         ALPAKA_FN_ACC static bool invokeCell(
             T_Term& term,
@@ -327,7 +350,7 @@ namespace hase::kernels::forward::ray
             return term(acc, mesh, rayState, cell, intersection);
         }
 
-        template<typename T_Term, typename T_Acc, typename T_RayState>
+        template<concepts::BehaviourTerm T_Term, alpaka::onAcc::concepts::Acc T_Acc, State T_RayState>
         requires(!HasOnCell<T_Term, T_Acc, T_RayState>)
         ALPAKA_FN_ACC static bool invokeCell(
             T_Term&,
@@ -340,7 +363,7 @@ namespace hase::kernels::forward::ray
             return true;
         }
 
-        template<typename T_Term, typename T_Acc, typename T_RayState>
+        template<concepts::BoundaryBehaviour T_Term, alpaka::onAcc::concepts::Acc T_Acc, State T_RayState>
         requires HasOnBoundary<T_Term, T_Acc, T_RayState>
         ALPAKA_FN_ACC static BoundaryResult invokeBoundary(
             T_Term& term,
@@ -353,7 +376,7 @@ namespace hase::kernels::forward::ray
             return term(acc, mesh, rayState, cell, localFace);
         }
 
-        template<typename T_Term, typename T_Acc, typename T_RayState>
+        template<concepts::BehaviourTerm T_Term, alpaka::onAcc::concepts::Acc T_Acc, State T_RayState>
         requires(!HasOnBoundary<T_Term, T_Acc, T_RayState>)
         ALPAKA_FN_ACC static BoundaryResult invokeBoundary(
             T_Term&,
@@ -376,6 +399,12 @@ namespace hase::kernels::forward::ray
      * Cell contribution and boundary handling are compile-time policies. The
      * only branches left here are geometric state transitions that every ray
      * tracer must perform.
+     *
+     * @param acc Accelerator context supplied to behavior terms.
+     * @param mesh Device-resident Tet4 trace.
+     * @param rayState Mutable position, direction, cell, and entry-face state.
+     * @param behaviour Compile-time cell and boundary policy composition.
+     * @return Reason the walk ended or failed.
      */
     enum class WalkResult : std::uint8_t
     {
@@ -384,9 +413,9 @@ namespace hase::kernels::forward::ray
         failed
     };
 
-    template<State T_Ray, typename T_Behaviour>
+    template<State T_Ray, alpaka::concepts::SpecializationOf<RayWalkBehaviour> T_Behaviour>
     [[nodiscard]] ALPAKA_FN_ACC WalkResult walk(
-        auto const& acc,
+        alpaka::onAcc::concepts::Acc auto const& acc,
         hase::data::TraceView const& mesh,
         T_Ray& rayState,
         T_Behaviour behaviour)

@@ -13,7 +13,7 @@
 
 namespace hase::core
 {
-    /** @brief Effective iteration and divergence limits for surface-reservoir tracing. */
+    /** @brief Effective iteration and divergence limits for reflected-pass tracing. */
     struct SrmControls
     {
         unsigned maxIterations;

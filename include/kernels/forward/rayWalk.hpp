@@ -16,6 +16,7 @@ namespace hase::kernels::forward
 {
     inline constexpr double barycentricTraversalTolerance = 64.0 * std::numeric_limits<double>::epsilon();
 
+    /** @brief Nearest positive Tet4 face intersection and tied-face mask. */
     struct Tet4FaceIntersection
     {
         int localFace = -1;
@@ -23,6 +24,12 @@ namespace hase::kernels::forward
         unsigned tiedFaceMask = 0u;
     };
 
+    /**
+     * @param point Segment origin.
+     * @param direction Segment direction.
+     * @param length Signed travel distance.
+     * @return `point + direction * length`.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point advance(
         hase::core::Point const point,
         hase::core::Point const direction,
@@ -31,6 +38,7 @@ namespace hase::kernels::forward
         return point + direction * length;
     }
 
+    /** @return Unit vector parallel to `value`, or zero for negligible length. */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point normalize(hase::core::Point const value)
     {
         double const length = value.euclidLength();
@@ -41,6 +49,12 @@ namespace hase::kernels::forward
         return value * (1.0 / length);
     }
 
+    /**
+     * @param mesh Device trace containing Tet4 face connectivity.
+     * @param tet Cell index.
+     * @param localFace Local face index.
+     * @return Arithmetic centroid of the three face vertices.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point faceCentroid(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -59,6 +73,12 @@ namespace hase::kernels::forward
         return sum * (1.0 / static_cast<double>(hase::data::tet4FaceWidth));
     }
 
+    /**
+     * @param mesh Device trace containing Tet4 geometry.
+     * @param tet Cell index.
+     * @param localFace Local face index.
+     * @return Unit face normal oriented away from the cell center.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point outwardFaceNormal(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -83,6 +103,11 @@ namespace hase::kernels::forward
         return normal;
     }
 
+    /**
+     * @param direction Incident direction.
+     * @param outwardNormal Unit outward surface normal.
+     * @return Normalized specular-reflection direction.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC hase::core::Point reflectedDirection(
         hase::core::Point const direction,
         hase::core::Point const outwardNormal)
@@ -90,6 +115,12 @@ namespace hase::kernels::forward
         return normalize(direction - outwardNormal * (2.0 * hase::core::dot(direction, outwardNormal)));
     }
 
+    /**
+     * @param coordinate Current affine face coordinate.
+     * @param directionalChange Coordinate change per unit ray length.
+     * @param maxLength Largest accepted positive length.
+     * @return Positive intersection length, or zero when the face is not crossed.
+     */
     [[nodiscard]] inline ALPAKA_FN_HOST_ACC double barycentricFaceIntersectionLength(
         double const coordinate,
         double const directionalChange,
@@ -103,6 +134,14 @@ namespace hase::kernels::forward
         return length > 0.0 && length <= maxLength ? length : 0.0;
     }
 
+    /**
+     * @param mesh Device trace containing affine face planes.
+     * @param tet Current cell.
+     * @param origin Current ray position.
+     * @param direction Ray direction.
+     * @param forbiddenFace Entry face excluded from selection.
+     * @return Nearest positive face intersection, including numerically tied faces.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceIntersection nextFaceIntersection(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -162,6 +201,7 @@ namespace hase::kernels::forward
         return result;
     }
 
+    /** @return Whether `tiedFaceMask` contains more than one face bit. */
     [[nodiscard]] inline ALPAKA_FN_ACC bool hasMultipleTiedFaces(unsigned const tiedFaceMask)
     {
         return tiedFaceMask != 0u && (tiedFaceMask & (tiedFaceMask - 1u)) != 0u;
@@ -173,6 +213,11 @@ namespace hase::kernels::forward
      * Cross sections are interpolated at the ray wavelength on the device.
      * This keeps propagation valid when a ray enters a cell owned by another
      * material without copying or rebinding a launch-global spectrum.
+     *
+     * @param mesh Device trace containing cell material and excitation fields.
+     * @param tet Current cell index.
+     * @param wavelength Ray wavelength in metres.
+     * @return Net local gain coefficient, including bulk attenuation, in inverse metres.
      */
     [[nodiscard]] inline ALPAKA_FN_ACC double localGainCoefficient(
         hase::data::TraceView const& mesh,
@@ -188,6 +233,13 @@ namespace hase::kernels::forward
         return stimulatedCoefficient - mesh.bulkAttenuation(tet);
     }
 
+    /**
+     * @param mesh Device trace containing local optical coefficients.
+     * @param tet Current cell index.
+     * @param length Traversed segment length in metres.
+     * @param wavelength Ray wavelength in metres.
+     * @return Multiplicative power gain `exp(g * length)`.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC double localSegmentGain(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -197,6 +249,13 @@ namespace hase::kernels::forward
         return alpaka::math::exp(localGainCoefficient(mesh, tet, wavelength) * length);
     }
 
+    /**
+     * @param mesh Device trace containing local optical coefficients.
+     * @param tet Current cell index.
+     * @param length Traversed segment length in metres.
+     * @param wavelength Ray wavelength in metres.
+     * @return Integral of exponential gain along the segment, in metres.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC double localSegmentTrackLengthIntegral(
         hase::data::TraceView const& mesh,
         unsigned const tet,
@@ -212,6 +271,12 @@ namespace hase::kernels::forward
         return (alpaka::math::exp(gainLength) - 1.0) / gainCoefficient;
     }
 
+    /**
+     * @param mesh Device trace containing Tet4 geometry.
+     * @param tet Current cell index.
+     * @param midpoint Segment midpoint.
+     * @return Center-proximity weight of the midpoint in `[0, 1]`.
+     */
     [[nodiscard]] inline ALPAKA_FN_ACC double segmentCenterWeight(
         hase::data::TraceView const& mesh,
         unsigned const tet,

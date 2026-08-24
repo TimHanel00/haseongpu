@@ -103,17 +103,20 @@ def test_gainMediumRejectsNonVolumeTopologyVtkWrite(tmp_path, smallGainMedium):
 
 def test_bundledExampleVtkFixturesExposeFrontendFields():
     fixtures = {
-        "ptTet4.vtk": (421, 21924, 10),
-        "cuboid.vtk": (321, 16200, 10),
-        "cylindrical.vtk": (421, 21924, 10),
+        "ptTet4.vtk": (421, 21924, 10, (-0.03, -0.03, 0.0), (0.03, 0.03, 0.007)),
+        "cuboid.vtk": (321, 16200, 10, (-0.02, -0.02, 0.0), (0.02, 0.02, 0.006)),
+        "cylindrical.vtk": (421, 21924, 10, (-0.03, -0.03, 0.0), (0.03, 0.03, 0.007)),
     }
 
-    for filename, (points, triangles, levels) in fixtures.items():
+    for filename, (points, triangles, levels, minimum, maximum) in fixtures.items():
         medium = GainMedium.fromVtk(repoRoot / "example" / "data" / filename)
+        coordinates = np.asarray(medium.topology.points)
 
         assert medium.numberOfPoints == points
         assert medium.numberOfTriangles == triangles
         assert medium.numberOfLevels == levels
+        np.testing.assert_allclose(coordinates.min(axis=0), minimum, rtol=0.0, atol=1.0e-12)
+        np.testing.assert_allclose(coordinates.max(axis=0), maximum, rtol=0.0, atol=1.0e-12)
         assert np.asarray(medium.get("betaVolume").value).size == triangles
         assert np.asarray(medium.get("claddingCellTypes").value).shape == (triangles,)
         with pytest.raises(KeyError, match="unknown gain medium property"):

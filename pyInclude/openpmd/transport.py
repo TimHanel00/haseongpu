@@ -21,7 +21,6 @@ from .._progress import _ProgressBar
 from .._runtime import runtime_config, runtime_executable_candidates, runtime_root
 from .backends import _clean_backend_names, _load_backend_names
 from .graph import TRANSPORT_VERSION, attributeName, recordName, writeGraph
-from . import resultAttributeSpecs
 from ..structures import Result
 
 
@@ -735,17 +734,17 @@ def _has_attribute(obj, name):
 
 
 def _result_status_values(iteration, root="phiAseResult"):
-    defaults = {
-        "srmStatus": "disabled",
-        "srmPasses": 0,
-        "srmRemainingFraction": 0.0,
-        "srmMaxIterations": 0,
-        "srmDivergenceStreak": 0,
+    fields = {
+        "srmStatus": ("disabled", str),
+        "srmPasses": (0, int),
+        "srmRemainingFraction": (0.0, float),
+        "srmMaxIterations": (0, int),
+        "srmDivergenceStreak": (0, int),
     }
     result = {}
-    for spec in resultAttributeSpecs:
-        name = attributeName(f"{root}/{spec.name}")
-        result[spec.name] = spec.cast(iteration.get_attribute(name)) if _has_attribute(iteration, name) else defaults[spec.name]
+    for field_name, (default, cast) in fields.items():
+        name = attributeName(f"{root}/{field_name}")
+        result[field_name] = cast(iteration.get_attribute(name)) if _has_attribute(iteration, name) else default
     return result
 
 

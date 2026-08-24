@@ -13,7 +13,7 @@
 
 namespace hase::data
 {
-    /** @brief Termination state of the forward surface-reservoir iteration. */
+    /** @brief Termination state of the forward reflection iteration. */
     enum class SrmStatus
     {
         disabled,
@@ -24,7 +24,7 @@ namespace hase::data
     };
 
     /**
-     * @param status Surface-reservoir termination state.
+     * @param status Reflection-iteration termination state.
      * @return Stable lowercase transport spelling of `status`.
      */
     [[nodiscard]] inline char const* toString(SrmStatus const status)

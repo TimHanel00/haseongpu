@@ -44,6 +44,8 @@ CLADDING_NUMBER = 1
 PHYSICAL_CLADDING_ABSORPTION = 5.5
 INSTRUMENTATION_CLADDING_ABSORPTION = 55.0
 CURRENT_FORWARD_RAYS = int(os.environ.get("HASE_TEST_TRUE_CLADDING_FORWARD_RAYS", "750000"))
+LEGACY_LENGTH_UNIT_SI = 1.0e-2
+LEGACY_VOLUME_UNIT_SI = LEGACY_LENGTH_UNIT_SI**3
 
 
 def _tet_volume(points, cell):
@@ -239,7 +241,7 @@ def testTrueCladdingShellMapsEveryLegacyWedgeToThreeTetChildren(trueCladdingRefe
 
     for wedge, children in zip(reference["cells"], tet_cells.reshape((-1, 3, 4)), strict=True):
         childPoints = np.unique(np.asarray(topology.points)[children.reshape(-1)], axis=0)
-        wedgePoints = np.asarray(reference["points"])[wedge]
+        wedgePoints = np.asarray(reference["points"])[wedge] * LEGACY_LENGTH_UNIT_SI
         childOrder = np.lexsort(childPoints.T[::-1])
         wedgeOrder = np.lexsort(wedgePoints.T[::-1])
         np.testing.assert_allclose(
@@ -255,11 +257,14 @@ def testTrueCladdingShellMapsEveryLegacyWedgeToThreeTetChildren(trueCladdingRefe
     )
     geometry = reference["metadata"]["geometry"]
     np.testing.assert_allclose(
-        tet_volumes.sum(), geometry["totalVolume"], rtol=2.0e-9, atol=0.0
+        tet_volumes.sum(),
+        geometry["totalVolume"] * LEGACY_VOLUME_UNIT_SI,
+        rtol=2.0e-9,
+        atol=0.0,
     )
     np.testing.assert_allclose(
         tet_volumes[tet_types == CLADDING_NUMBER].sum(),
-        geometry["claddingVolume"],
+        geometry["claddingVolume"] * LEGACY_VOLUME_UNIT_SI,
         rtol=2.0e-9,
         atol=0.0,
     )
@@ -328,7 +333,7 @@ def testCurrentTrueCladdingPhiAseMatchesLegacyTotalIntegral(
         assert np.max(current["relativeStandardError"]) < 0.05
         np.testing.assert_allclose(
             current["integrals"]["total"],
-            legacy["total"],
+            legacy["total"] * LEGACY_LENGTH_UNIT_SI,
             rtol=0.05,
             atol=0.0,
             err_msg=f"bulkAttenuation={current['bulkAttenuation']}",

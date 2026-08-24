@@ -8,7 +8,6 @@
 import numpy as np
 from HASEonGPU import Grid, MeshTopology
 from pyInclude.geometry.core import GainMedium
-from pyInclude.openpmd import PrimitiveFieldSpec, PrismSchema
 
 
 def test_meshTopologyFromPointsConstructsTriangles():
@@ -88,7 +87,18 @@ def test_gainMediumOwnsPhysicalProperties():
 def test_frontendExportsOnlyOpenPmdApi():
     import HASEonGPU
 
-    for name in ("TraceData", "AseTraceControls", "ExecutionPolicy", "Mesh"):
+    for name in (
+        "TraceData",
+        "AseTraceControls",
+        "ExecutionPolicy",
+        "Mesh",
+        "BaseSchema",
+        "PointSchema",
+        "PrimitiveFieldSpec",
+        "PrismSchema",
+        "TriangleSchema",
+        "unitDimension",
+    ):
         assert not hasattr(HASEonGPU, name)
     assert not hasattr(HASEonGPU, "calcPhiASE")
 
@@ -112,23 +122,6 @@ def test_gainMediumPhysicalPropertiesAreDiscoverableAndAssignable():
         "surfaceRefractiveIndexOutside",
     } & {item["name"] for item in gainMedium.listProperties()}
 
-
-
-def test_gainMediumAcceptsInheritedPrimitiveSchemaFields():
-    class ThermalPrism(PrismSchema):
-        temperature = PrimitiveFieldSpec("temperature", "custom_temperature", np.float64, unit="K", backendRequired=False)
-
-    topology = MeshTopology.fromGrid(Grid(xExtent=1.0, yExtent=1.0, zExtent=0.5, tileSizeZ=0.25))
-    values = np.array([[300.0, 310.0], [320.0, 330.0]], dtype=np.float64)
-
-    medium = GainMedium(topology=topology).withPrimitiveSchema(ThermalPrism, temperature=values)
-
-    field = medium.getField("temperature")
-    assert field.unit == "K"
-    assert field.entity == "cell_layer"
-    np.testing.assert_array_equal(field.primitiveView(), values)
-    np.testing.assert_array_equal(medium.getPrisms()["temperature"], values)
-    assert [prism.temperature for prism in medium.getPrisms()] == [300.0, 310.0, 320.0, 330.0]
 
 
 def test_primitiveElementsAssignFieldsAndExposeMetadata():
@@ -174,20 +167,3 @@ def test_meshPrimitiveViewsExposeVectorFields():
     fields = {field.name: field for field in triangle.getFields()}
     assert fields["center"].meta()["axes"] == ("cell", "coordinate")
     assert fields["normal"].meta()["axes"] == ("cell", "local_side", "coordinate")
-
-
-def test_registerSchemaBeforeValues():
-    class ThermalPrism(PrismSchema):
-        temperature = PrimitiveFieldSpec("temperature", "custom_temperature", np.float64, unit="K", backendRequired=False)
-
-    topology = MeshTopology.fromGrid(Grid(xExtent=1.0, yExtent=1.0, zExtent=0.5, tileSizeZ=0.25))
-    medium = GainMedium(topology=topology).withPrimitiveSchema(ThermalPrism)
-
-    assert medium.getField("temperature").primitiveView().shape == medium.getPrisms().shape
-    np.testing.assert_array_equal(medium.getField("temperature").primitiveView(), np.zeros(medium.getPrisms().shape))
-
-    for prism in medium.getPrisms():
-        prism.temperature = 300.0
-
-    assert [prism.temperature for prism in medium.getPrisms()] == [300.0, 300.0, 300.0, 300.0]
-    assert next(iter(medium.getPrisms())).getFields()[1].meta()["unit"] == "K"

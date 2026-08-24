@@ -218,7 +218,7 @@ def topologyFromVtk(path, topologyCls):
 
 def gainMediumFromVtk(path, topologyCls, gainMediumCls, *, numberOfLevels=None, thickness=None):
     """Load Tet4 topology plus material arrays from a VTK file."""
-    from ..openpmd import backendFlat
+    from ..fields import backendFlat
 
     if numberOfLevels is not None or thickness is not None:
         raise ValueError("Tet4 VTK gain-medium import does not use numberOfLevels or thickness")
