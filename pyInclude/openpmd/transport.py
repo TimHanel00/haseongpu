@@ -227,6 +227,9 @@ SST_CONFIG = {
             "parameters": {
                 "DataTransport": "WAN",
                 "OpenTimeoutSecs": "600",
+                # Preserve every submitted iteration when a reader lags. SST
+                # defines zero as an unlimited writer-side step queue.
+                "QueueLimit": "0",
             }
         }
     },
@@ -746,6 +749,10 @@ def _result_status_values(iteration, root="phiAseResult"):
     return result
 
 
+class _NoSimulationIterationsError(RuntimeError):
+    pass
+
+
 def read_simulation_output(path, *, on_state=None):
     """Read C++ time-stepped simulation snapshots from an openPMD output series."""
     path = Path(path)
@@ -801,7 +808,7 @@ def read_simulation_output(path, *, on_state=None):
         iteration.close()
     series.close()
     if not states:
-        raise RuntimeError(f"No simulation iterations were available in {path}")
+        raise _NoSimulationIterationsError(f"No simulation iterations were available in {path}")
     return states
 
 
@@ -1307,10 +1314,17 @@ def _run_streaming_simulation(
                             f"synchronized-debug control iteration {completed_step} was not published"
                         )
 
-            if on_state is None and not synchronized_debug:
-                snapshots = read_simulation_output(output_path)
-            else:
-                snapshots = read_simulation_output(output_path, on_state=receive_state)
+            while True:
+                try:
+                    if on_state is None and not synchronized_debug:
+                        snapshots = read_simulation_output(output_path)
+                    else:
+                        snapshots = read_simulation_output(output_path, on_state=receive_state)
+                    break
+                except _NoSimulationIterationsError:
+                    if proc.poll() is not None:
+                        raise
+                    backend_finished.wait(timeout=_STREAMING_RESULT_POLL_SECONDS)
             result_queue.put((True, snapshots))
         except BaseException as exc:
             result_queue.put((False, exc))

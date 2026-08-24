@@ -23,7 +23,8 @@ namespace hase::internal::openpmd
       "type": "sst",
       "parameters": {
         "DataTransport": "WAN",
-        "OpenTimeoutSecs": "600"
+        "OpenTimeoutSecs": "600",
+        "QueueLimit": "0"
       }
     }
   }

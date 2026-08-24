@@ -114,13 +114,12 @@ references between nodes.
 Numeric scalar and array fields are stored as openPMD mesh records. Each record
 carries its logical graph path, owning primitive type, field name, axes, shape,
 dynamic flag, encoding, and physical-unit metadata. ``Quantity`` values retain
-their ``unitSI`` and ``unitDimension`` information. Strings use native string
-attributes; non-empty string sequences and references use native string-vector
-attributes. Empty sequences use a scalar ``[]`` marker because ADIOS2 cannot
-round-trip an empty string-vector attribute. The stored scalar/vector datatype
-keeps that marker distinct from a one-element sequence containing ``"[]"``.
-Provider APIs perform Unicode handling without a second JSON decoder. JSON
-metadata remains serialized in namespaced string attributes.
+their ``unitSI`` and ``unitDimension`` information. Scalar strings use native
+string attributes. String sequences, graph node lists, and references use
+scalar JSON arrays because ADIOS2 SST does not reliably round-trip string-vector
+attribute values. Provider APIs perform Unicode handling without a second JSON
+decoder for scalar text; graph structure, string sequences, and other explicitly
+JSON metadata are decoded from namespaced string attributes.
 
 Logical paths are encoded into provider-safe record and attribute keys. A
 consumer uses the stored logical path rather than assigning meaning to the
@@ -180,9 +179,10 @@ pump, injection method, and relays.
 In ``autonomous`` mode, Python sends the initial graph and the C++ backend owns
 the complete time loop. Python receives the completed steps selected by
 ``outputSteps`` and ``outputFields``. With an SST backend, the result receiver
-starts before the input writer and a bounded handoff applies backpressure when
-a callback is slower than the backend. Caller-managed simulation sessions are
-not supported.
+starts before the input writer. SST uses an unlimited writer-side step queue,
+so a slow Python reader does not block autonomous stepping; queued snapshot
+memory can grow with reader lag. Caller-managed simulation sessions are not
+supported.
 
 ``synchronized-debug`` mode requires ``adios-sst``. After output step *N*,
 Python runs the registered ``onStep`` and ``beforeStep`` callbacks, refreshes

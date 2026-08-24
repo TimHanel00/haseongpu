@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import pyInclude.openpmd.graph as graph_transport
 import pyInclude.openpmd.transport as transport
 from openpmd_backend_matrix import openpmd_runtime_backend, openpmd_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
@@ -471,6 +472,7 @@ def test_backendNamesMapToConfigs(monkeypatch):
     sst_engine = transport._backend_spec("adios-sst").config["adios2"]["engine"]
     assert sst_engine["type"] == "sst"
     assert "QueueFullPolicy" not in sst_engine["parameters"]
+    assert sst_engine["parameters"]["QueueLimit"] == "0"
     assert transport._backend_spec("adios-sst").streaming is True
     assert transport._backend_spec("hdf5").config == {"backend": "hdf5"}
 
@@ -485,6 +487,43 @@ def test_backendNamesMapToConfigs(monkeypatch):
     for backend in ("bp", "unsupported"):
         with pytest.raises(ValueError, match="unsupported openPMD backend"):
             transport._backend_spec(backend)
+
+
+def test_graphStringArraysUseProviderSafeScalarAttributes():
+    attributes = {}
+    iteration = SimpleNamespace(
+        set_attribute=lambda name, value: attributes.__setitem__(name, value),
+        series_flush=lambda: None,
+    )
+    root = SimpleNamespace(
+        owner=object(),
+        path="simulation",
+        typeName="simulation",
+        fields={
+            "labels": (SimpleNamespace(encoding="text"), ("first", "second")),
+            "emptyLabels": (SimpleNamespace(encoding="text"), ()),
+        },
+        references={
+            "empty": (),
+            "domain": ("domain",),
+            "components": ("component0", "component1"),
+        },
+    )
+    nodes = (root,) + tuple(
+        SimpleNamespace(owner=object(), path=path, typeName=path, fields={}, references={})
+        for path in ("domain", "component0", "component1")
+    )
+    graph = SimpleNamespace(root="simulation", nodes=nodes)
+
+    graph_transport.writeGraph(iteration, graph, SimpleNamespace())
+
+    assert attributes["haseNodePaths"] == '["simulation","domain","component0","component1"]'
+    assert attributes["haseNodeTypes"] == '["simulation","domain","component0","component1"]'
+    assert attributes[graph_transport.attributeName("simulation/labels")] == '["first","second"]'
+    assert attributes[graph_transport.attributeName("simulation/emptyLabels")] == "[]"
+    assert attributes[graph_transport.referenceName("simulation/empty")] == "[]"
+    assert attributes[graph_transport.referenceName("simulation/domain")] == '["domain"]'
+    assert attributes[graph_transport.referenceName("simulation/components")] == '["component0","component1"]'
 
 
 def test_autoBackendPrefersAdiosThenSstThenHdf5(monkeypatch, tmp_path):
@@ -1683,6 +1722,53 @@ def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypat
     assert read_event[1] == "HASE compiled simulation snapshot receiver"
     write_event = next(event for event in events if event[0] == "write-input")
     assert write_event[1] == "HASE compiled simulation input sender"
+
+
+def test_streaming_simulation_retries_transient_empty_output(monkeypatch, tmp_path):
+    retry_observed = threading.Event()
+    release_backend = threading.Event()
+    read_attempts = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, command, **kwargs):
+            pass
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            raise AssertionError("a transient empty SST read must not kill the backend")
+
+        def communicate(self):
+            assert retry_observed.wait(timeout=2.0)
+            release_backend.set()
+            return "", ""
+
+    def fake_read_simulation_output(path):
+        read_attempts.append(Path(path))
+        if len(read_attempts) == 1:
+            retry_observed.set()
+            raise transport._NoSimulationIterationsError("output stream is not ready")
+        assert release_backend.wait(timeout=2.0)
+        return [SimpleNamespace(step=1)]
+
+    monkeypatch.setattr(transport.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(transport, "read_simulation_output", fake_read_simulation_output)
+    monkeypatch.setattr(transport, "_write_simulation_input", lambda *args, **kwargs: None)
+
+    states = transport._run_streaming_simulation(
+        ["calcPhiASE", "--cpp-control"],
+        tmp_path / "input.sst",
+        tmp_path / "output.sst",
+        SimpleNamespace(name="adios-sst"),
+        SimpleNamespace(),
+        1,
+    )
+
+    assert states[0].step == 1
+    assert len(read_attempts) == 2
 
 
 def test_streaming_simulation_keeps_input_series_open_until_backend_exits(monkeypatch, tmp_path):

@@ -43,8 +43,6 @@ namespace hase::data
             transport::TransportPath const& prefix);
 
         /** @brief Apply one explicit dynamic openPMD update to this table. */
-        void updateFromTransport(
-            transport::TransportReader const& reader,
-            transport::TransportPath const& prefix);
+        void updateFromTransport(transport::TransportReader const& reader, transport::TransportPath const& prefix);
     };
 } // namespace hase::data
