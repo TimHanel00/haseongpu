@@ -172,9 +172,33 @@ namespace hase::core
         {
             if(experiment.useReflections)
             {
-                m_srmScratch = std::make_unique<ReflectionResamplingScratch<T_Device>>(
-                    m_devBundle.device,
-                    std::max(experiment.maxRays, experiment.resolvedForwardRayCount()));
+                std::uint32_t const maxRayCount = std::max(experiment.maxRays, experiment.resolvedForwardRayCount());
+                if(experiment.reflectionMode == "direct")
+                {
+                    m_directReflectionScratch
+                        = std::make_unique<ReflectionResamplingScratch<T_Device>>(m_devBundle.device, maxRayCount);
+                }
+                else
+                {
+                    std::uint32_t const faceCount = hostMesh.numberOfCells * hostMesh.numberOfFacesPerCell;
+                    auto const slotsPerFace = alpaka::Vec{experiment.surfaceReservoirSize};
+                    if(experiment.srmPositionMode == "centroid")
+                    {
+                        m_centroidSurfaceReservoirScratch = std::make_unique<CentroidSurfaceReservoirScratch>(
+                            m_devBundle.device,
+                            faceCount,
+                            slotsPerFace,
+                            maxRayCount);
+                    }
+                    else
+                    {
+                        m_exactSurfaceReservoirScratch = std::make_unique<ExactSurfaceReservoirScratch>(
+                            m_devBundle.device,
+                            faceCount,
+                            slotsPerFace,
+                            maxRayCount);
+                    }
+                }
             }
         }
 
@@ -257,26 +281,62 @@ namespace hase::core
             m_srmResult.rayCount = rayCount;
             if(experiment.useReflections)
             {
-                if(!m_srmScratch)
-                    throw std::runtime_error("reflection resampling scratch was not initialized");
                 auto const controls = resolveSrmControls(experiment);
                 m_srmResult.srmMaxIterations = controls.maxIterations;
                 m_srmResult.srmDivergenceStreak = controls.divergenceStreak;
-                runForwardSrm(
-                    m_devBundle,
-                    m_queue,
-                    mesh,
-                    experiment,
-                    m_srmResult,
-                    rayCount,
-                    rseBatch,
-                    betaVolumeTotal,
-                    m_vertexBatchScoreSum,
-                    m_volumeRayVisits,
-                    m_droppedRays,
-                    rngSeed,
-                    controls,
-                    *m_srmScratch);
+                if(experiment.reflectionMode == "direct")
+                {
+                    if(!m_directReflectionScratch)
+                        throw std::runtime_error("direct reflection scratch was not initialized");
+                    runForwardSrm(
+                        m_devBundle,
+                        m_queue,
+                        mesh,
+                        experiment,
+                        m_srmResult,
+                        rayCount,
+                        rseBatch,
+                        betaVolumeTotal,
+                        m_vertexBatchScoreSum,
+                        m_volumeRayVisits,
+                        m_droppedRays,
+                        rngSeed,
+                        controls,
+                        *m_directReflectionScratch);
+                }
+                else
+                {
+                    auto runSurfaceSrm = [&](auto& scratch)
+                    {
+                        runForwardSurfaceSrm(
+                            m_devBundle,
+                            m_queue,
+                            mesh,
+                            experiment,
+                            m_srmResult,
+                            rayCount,
+                            rseBatch,
+                            betaVolumeTotal,
+                            m_vertexBatchScoreSum,
+                            m_volumeRayVisits,
+                            m_droppedRays,
+                            rngSeed,
+                            controls,
+                            scratch);
+                    };
+                    if(experiment.srmPositionMode == "centroid")
+                    {
+                        if(!m_centroidSurfaceReservoirScratch)
+                            throw std::runtime_error("centroid surface reservoir scratch was not initialized");
+                        runSurfaceSrm(*m_centroidSurfaceReservoirScratch);
+                    }
+                    else
+                    {
+                        if(!m_exactSurfaceReservoirScratch)
+                            throw std::runtime_error("exact surface reservoir scratch was not initialized");
+                        runSurfaceSrm(*m_exactSurfaceReservoirScratch);
+                    }
+                }
             }
             else
             {
@@ -511,6 +571,11 @@ namespace hase::core
         }
 
     private:
+        using ExactSurfaceReservoirScratch
+            = SurfaceReservoirScratch<T_Device, hase::kernels::forward::surfaceReservoirPosition::Exact>;
+        using CentroidSurfaceReservoirScratch
+            = SurfaceReservoirScratch<T_Device, hase::kernels::forward::surfaceReservoirPosition::Centroid>;
+
         hase::alpakaUtils::DevBundle<T_Device, T_Exec> m_devBundle;
         T_Queue m_queue;
         std::vector<std::uint32_t> m_rseBatchRayCounts;
@@ -525,7 +590,9 @@ namespace hase::core
         T_DoubleBuffer m_relativeStandardError;
         T_DoubleBuffer m_volumeDndtAse;
         T_ByteBuffer m_sourceStrengthPrefixScanBuffer;
-        std::unique_ptr<ReflectionResamplingScratch<T_Device>> m_srmScratch;
+        std::unique_ptr<ReflectionResamplingScratch<T_Device>> m_directReflectionScratch;
+        std::unique_ptr<ExactSurfaceReservoirScratch> m_exactSurfaceReservoirScratch;
+        std::unique_ptr<CentroidSurfaceReservoirScratch> m_centroidSurfaceReservoirScratch;
         ForwardPhiAseRawResult m_srmResult;
         unsigned m_volumeCount;
         unsigned m_materialVertexCount;

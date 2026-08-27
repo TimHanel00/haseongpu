@@ -14,6 +14,9 @@ namespace hase::data
         reader.assign(result.repetitions, prefix, FieldName::repetitions);
         reader.assign(result.adaptiveSteps, prefix, FieldName::adaptiveSteps);
         reader.assign(result.useReflections, prefix, FieldName::useReflections);
+        reader.assign(result.reflectionMode, prefix, FieldName::reflectionMode);
+        reader.assign(result.surfaceReservoirSize, prefix, FieldName::surfaceReservoirSize);
+        reader.assign(result.srmPositionMode, prefix, FieldName::srmPositionMode);
         reader.assign(result.reflectionMaxIterations, prefix, FieldName::reflectionMaxIterations);
         reader.assign(result.reflectionTolerance, prefix, FieldName::reflectionTolerance);
         reader.assign(result.monochromatic, prefix, FieldName::monochromatic);

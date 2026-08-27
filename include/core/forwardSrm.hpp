@@ -13,6 +13,7 @@
 #include <core/Runtime.hpp>
 #include <core/reflectionResampling.hpp>
 #include <core/srm.hpp>
+#include <core/surfaceReservoir.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
 
@@ -161,6 +162,124 @@ namespace hase::core
 
             double const currentWeight
                 = scratch.updateSampling(devBundle, queue, inputA ? scratch.first : scratch.second, rayCount);
+            result.srmPasses = pass;
+            result.srmRemainingFraction = currentWeight / initialWeight;
+            if(currentWeight > previousWeight)
+            {
+                ++growCount;
+                if(growCount >= srmControls.divergenceStreak)
+                {
+                    result.srmStatus = data::SrmStatus::diverged;
+                    break;
+                }
+            }
+            else
+            {
+                growCount = 0u;
+                if(alpaka::math::abs(currentWeight - previousWeight) / alpaka::math::max(currentWeight, 1.0e-30)
+                   < experiment.reflectionTolerance)
+                {
+                    result.srmStatus = data::SrmStatus::stable;
+                    break;
+                }
+            }
+            if(result.srmRemainingFraction < experiment.reflectionTolerance)
+            {
+                result.srmStatus = data::SrmStatus::converged;
+                break;
+            }
+            previousWeight = currentWeight;
+        }
+    }
+
+    /** @brief Trace forward histories through a bounded face-indexed surface reservoir. */
+    template<
+        alpaka::onHost::concepts::Device T_Device,
+        alpaka::concepts::Executor T_Exec,
+        hase::kernels::forward::SurfaceReservoirPositionPolicy T_PositionPolicy>
+    void runForwardSurfaceSrm(
+        alpakaUtils::DevBundle<T_Device, T_Exec>& devBundle,
+        concepts::Queue auto const& queue,
+        hase::data::TraceView const mesh,
+        AseTraceControls const& experiment,
+        ForwardPhiAseRawResult& result,
+        std::uint32_t const rayCount,
+        std::uint32_t const rseBatch,
+        double const sourceStrengthTotal,
+        alpaka::concepts::IBuffer<double> auto& vertexBatchScoreSum,
+        alpaka::concepts::IBuffer<std::uint32_t> auto& volumeRayVisits,
+        alpaka::concepts::IBuffer<std::uint32_t> auto& droppedRays,
+        std::uint32_t const rngSeed,
+        SrmControls const srmControls,
+        SurfaceReservoirScratch<T_Device, T_PositionPolicy>& scratch)
+    {
+        auto accumulation = hase::kernels::forward::ForwardAccumulationSpans{
+            vertexBatchScoreSum.getMdSpan(),
+            volumeRayVisits.getMdSpan(),
+            droppedRays.getMdSpan()};
+        std::uint32_t const faceCount = mesh.numberOfCells * mesh.numberOfFacesPerCell;
+        auto const slotsPerFace = alpaka::Vec{experiment.surfaceReservoirSize};
+        scratch.validate(faceCount, rayCount);
+        scratch.clear(queue, scratch.reservoir.first);
+        scratch.clear(queue, scratch.reservoir.second);
+        alpaka::onHost::wait(queue);
+
+        auto const rayFrameSpec = hase::alpakaUtils::getFrameSpec<std::uint32_t>(
+            devBundle.device,
+            devBundle.executor,
+            alpaka::Vec{rayCount});
+        queue.enqueue(
+            rayFrameSpec,
+            alpaka::KernelBundle{
+                hase::kernels::forward::AccumulateForwardPhiAseSurfaceReservoir{},
+                mesh,
+                rayCount,
+                rseBatch,
+                sourceStrengthTotal,
+                accumulation,
+                scratch.reservoir.first.view(slotsPerFace),
+                rngSeed});
+        alpaka::onHost::wait(queue);
+
+        bool inputFirst = true;
+        double const initialWeight
+            = scratch.updateSampling(devBundle, queue, scratch.reservoir.first, slotsPerFace, rayCount, rngSeed, 0u);
+        if(initialWeight == 0.0)
+        {
+            result.srmStatus = data::SrmStatus::converged;
+            return;
+        }
+
+        double previousWeight = initialWeight;
+        std::uint32_t growCount = 0u;
+        result.srmStatus = data::SrmStatus::maxIterations;
+        result.srmRemainingFraction = 1.0;
+        for(std::uint32_t pass = 1u; pass <= srmControls.maxIterations; ++pass)
+        {
+            double const sourceWeight = previousWeight / static_cast<double>(rayCount);
+            auto& input = inputFirst ? scratch.reservoir.first : scratch.reservoir.second;
+            auto& output = inputFirst ? scratch.reservoir.second : scratch.reservoir.first;
+            scratch.clear(queue, output);
+            alpaka::onHost::wait(queue);
+            queue.enqueue(
+                rayFrameSpec,
+                alpaka::KernelBundle{
+                    hase::kernels::forward::AccumulateSurfaceReservoirForwardPhiAse{},
+                    mesh,
+                    rayCount,
+                    rseBatch,
+                    sourceWeight,
+                    accumulation,
+                    input.view(slotsPerFace),
+                    scratch.samplingView(faceCount <= rayCount),
+                    output.view(slotsPerFace),
+                    rngSeed,
+                    pass});
+            alpaka::onHost::wait(queue);
+            inputFirst = !inputFirst;
+
+            double const currentWeight
+                = scratch.updateSampling(devBundle, queue, output, slotsPerFace, rayCount, rngSeed, pass);
             result.srmPasses = pass;
             result.srmRemainingFraction = currentWeight / initialWeight;
             if(currentWeight > previousWeight)

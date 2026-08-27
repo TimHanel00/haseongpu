@@ -171,7 +171,8 @@ def testLaserPumpCladdingApiAndYamlBuildEquivalentSimulations():
     phi_fields = (
         "propagationMode", "minRays", "maxRays", "forwardRayCount",
         "relativeStandardErrorThreshold", "repetitions", "adaptiveSteps",
-        "useReflections", "reflectionMaxIterations", "reflectionTolerance",
+        "useReflections", "reflectionMode", "surfaceReservoirSize",
+        "srmPositionMode", "reflectionMaxIterations", "reflectionTolerance",
         "monochromatic", "backend", "openpmdBackend",
         "parallelMode", "numDevices", "nPerNode", "ase_steps",
     )

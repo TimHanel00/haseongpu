@@ -15,6 +15,7 @@
 #include <kernels/forward/rayTransition.hpp>
 #include <kernels/forward/rayWalk.hpp>
 #include <kernels/forward/reflectionResampling.hpp>
+#include <kernels/forward/surfaceReservoir.hpp>
 #include <kernels/forward/volumeSampling.hpp>
 #include <kernels/reflection.hpp>
 #include <random/randomEngine.hpp>
@@ -479,6 +480,199 @@ namespace hase::kernels::forward
                     accumulation,
                     outputCandidates,
                     batchRayIndex);
+            }
+        }
+    };
+
+    /** @brief Forward ASE walker that deposits reflected states into a bounded per-face reservoir. */
+    struct AccumulateForwardPhiAseSurfaceReservoir
+    {
+        template<
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> T_Reservoir,
+            alpaka::rand::concepts::UniformRandomEngine T_Rng>
+        struct StoreReflectionBoundary : ray::BoundaryPolicySrm<ray::srmPosition::Centroid>
+        {
+            T_Reservoir reservoir;
+            T_Rng rng;
+            std::uint32_t candidateIndex;
+
+            ALPAKA_FN_HOST_ACC constexpr StoreReflectionBoundary(
+                T_Reservoir reservoirValue,
+                T_Rng rngValue,
+                std::uint32_t const candidateIndexValue)
+                : reservoir{reservoirValue}
+                , rng{rngValue}
+                , candidateIndex{candidateIndexValue}
+            {
+            }
+
+            ALPAKA_FN_ACC ray::BoundaryResult operator()(
+                alpaka::onAcc::concepts::Acc auto const& acc,
+                hase::data::TraceView const& mesh,
+                ray::State auto& rayState,
+                unsigned const tet,
+                unsigned const localFace)
+            {
+                core::Direction const normal = outwardFaceNormal(mesh, tet, localFace);
+                double const reflectance = boundaryReflectance(mesh, tet, localFace, rayState.direction, normal);
+                return storeSurfaceReservoirBoundarySample(
+                    acc,
+                    mesh,
+                    rayState,
+                    tet,
+                    localFace,
+                    SurfaceReservoirBoundarySample{
+                        reflectedDirection(rayState.direction, normal),
+                        rayState.weight * rayState.accumulatedGain * reflectance,
+                        rayState.wavelength},
+                    reservoir,
+                    candidateIndex,
+                    rng);
+            }
+        };
+
+        ALPAKA_FN_HOST_ACC void walkForwardRay(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            data::TraceView const& mesh,
+            unsigned const tet,
+            core::Point const origin,
+            core::Point const direction,
+            std::int32_t const initialForbiddenFace,
+            double const sourceWeight,
+            double const wavelength,
+            unsigned const rseBatch,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto reservoir,
+            std::uint32_t const candidateIndex,
+            alpaka::rand::concepts::UniformRandomEngine auto rng) const
+        {
+            ForwardAseRayState rayState;
+            rayState.position = origin;
+            rayState.direction = direction;
+            rayState.cell = tet;
+            rayState.forbiddenFace = initialForbiddenFace;
+            rayState.weight = sourceWeight;
+            rayState.wavelength = wavelength;
+            rayState.rseBatch = rseBatch;
+            auto const walkResult = ray::walk(
+                acc,
+                mesh,
+                rayState,
+                ray::RayWalkBehaviour{
+                    ForwardAseCellPolicy<ALPAKA_TYPEOF(accumulation)>{accumulation},
+                    StoreReflectionBoundary<ALPAKA_TYPEOF(reservoir), ALPAKA_TYPEOF(rng)>{
+                        reservoir,
+                        rng,
+                        candidateIndex}});
+            if(walkResult == ray::WalkResult::failed)
+                CountDroppedForwardRay<ALPAKA_TYPEOF(accumulation)>{accumulation}(acc, mesh, rayState);
+        }
+
+        ALPAKA_FN_HOST_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            hase::data::TraceView const mesh,
+            std::uint32_t const forwardRayCount,
+            std::uint32_t const batch,
+            double const sourceStrengthTotal,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto reservoir,
+            std::uint32_t const rngSeed) const
+        {
+            for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
+                    acc,
+                    alpaka::onAcc::worker::threadsInGrid,
+                    alpaka::IdxRange{forwardRayCount}))
+            {
+                std::uint32_t const batchRayIndex = rayNumber;
+                std::uint32_t const batchSeed = rseBatchSeed(rngSeed, batch);
+                auto rng = hase::random::makeRandomEngine(batchSeed, rayHistoryId(0u, batchRayIndex));
+                std::uint32_t const tet = sampleStratifiedVolumeBySourceStrength(
+                    mesh,
+                    sourceStrengthTotal,
+                    batchRayIndex,
+                    forwardRayCount,
+                    rseBatchSourceStratificationOffset(rngSeed, batch),
+                    rng);
+                double const sourceWeight = sourceStrengthTotal > 0.0 ? 1.0 : 0.0;
+                core::Point const origin = samplePointInVolume(mesh, tet, rng);
+                core::Point const direction = sampleIsotropicDirection(rng);
+                std::uint32_t const material = mesh.getMaterialId(tet);
+                std::uint32_t const spectrumSize = mesh.crossSectionCount(material);
+                std::uint32_t const spectrumIndex = stratifiedSpectrumIndex(
+                    spectrumSize,
+                    batchRayIndex,
+                    forwardRayCount,
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                walkForwardRay(
+                    acc,
+                    mesh,
+                    tet,
+                    origin,
+                    direction,
+                    -1,
+                    sourceWeight,
+                    spectrumSize == 0u ? 0.0 : mesh.emissionWavelength(material, spectrumIndex),
+                    batch,
+                    accumulation,
+                    reservoir,
+                    batchRayIndex,
+                    rng);
+            }
+        }
+    };
+
+    /** @brief Relaunch bounded SRM states from either face centroids or retained exact hits. */
+    struct AccumulateSurfaceReservoirForwardPhiAse
+    {
+        ALPAKA_FN_HOST_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            hase::data::TraceView const mesh,
+            std::uint32_t const forwardRayCount,
+            std::uint32_t const batch,
+            double const sourceWeight,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto input,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSamplingCdfSpans> auto sampling,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto output,
+            std::uint32_t const rngSeed,
+            std::uint32_t const reflectionPass) const
+        {
+            AccumulateForwardPhiAseSurfaceReservoir walker;
+            for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
+                    acc,
+                    alpaka::onAcc::worker::threadsInGrid,
+                    alpaka::IdxRange{forwardRayCount}))
+            {
+                std::uint32_t const batchRayIndex = rayNumber;
+                std::uint32_t const batchSeed = rseBatchSeed(rngSeed, batch);
+                auto rng = hase::random::makeRandomEngine(batchSeed, rayHistoryId(reflectionPass, batchRayIndex));
+                SurfaceReservoirSample const sample = sampleSurfaceReservoir(
+                    input,
+                    sampling,
+                    mesh.numberOfCells * mesh.numberOfFacesPerCell,
+                    batchRayIndex,
+                    rng);
+                if(!sample.valid)
+                    continue;
+
+                std::uint32_t const tet = sample.faceId / mesh.numberOfFacesPerCell;
+                std::uint32_t const localFace = sample.faceId % mesh.numberOfFacesPerCell;
+                core::Point const origin
+                    = restoreSurfaceReservoirPosition(input.positionSpans, mesh, tet, localFace, sample.slotIndex);
+                walker.walkForwardRay(
+                    acc,
+                    mesh,
+                    tet,
+                    origin,
+                    normalize(input.directions.at(sample.slotIndex)),
+                    static_cast<std::int32_t>(localFace),
+                    sourceWeight,
+                    input.wavelengths[sample.slotIndex],
+                    batch,
+                    accumulation,
+                    output,
+                    batchRayIndex,
+                    rng);
             }
         }
     };

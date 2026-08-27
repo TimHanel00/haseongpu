@@ -197,6 +197,9 @@ namespace hase::core
         std::string propagationMode = "forward";
         double relativeStandardErrorThreshold = 0.0;
         bool useReflections = false;
+        std::string reflectionMode = "direct";
+        unsigned surfaceReservoirSize = 64u;
+        std::string srmPositionMode = "exact";
         bool monochromatic = false;
         unsigned reflectionMaxIterations = 40u;
         double reflectionTolerance = 1.0e-4;

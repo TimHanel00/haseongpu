@@ -900,7 +900,12 @@ namespace hase::kernels
                 std::uint32_t const cell = sample.faceId / mesh.numberOfFacesPerCell;
                 std::uint32_t const localFace = sample.faceId % mesh.numberOfFacesPerCell;
                 GeneralPumpRayState ray;
-                ray.position = input.positions.at(sample.slotIndex);
+                ray.position = hase::kernels::forward::restoreSurfaceReservoirPosition(
+                    input.positionSpans,
+                    mesh,
+                    cell,
+                    localFace,
+                    sample.slotIndex);
                 ray.direction = hase::kernels::forward::normalize(input.directions.at(sample.slotIndex));
                 ray.power = sourcePower;
                 ray.wavelength = input.wavelengths[sample.slotIndex];
