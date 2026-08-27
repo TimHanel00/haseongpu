@@ -272,12 +272,18 @@ def test_phi_ase_reflection_controls_are_openpmd_attributes():
 
     phi = PhiASE(
         useReflections=True,
+        reflectionMode="srm",
+        surfaceReservoirSize=256,
+        srmPositionMode="centroid",
         reflectionMaxIterations=3,
         reflectionTolerance=2.5e-3,
     )
     attributes = phi.openPmdAttributes(numberOfSamples=4)
 
     assert attributes["useReflections"] is True
+    assert attributes["reflectionMode"] == "srm"
+    assert attributes["surfaceReservoirSize"] == 256
+    assert attributes["srmPositionMode"] == "centroid"
     assert attributes["reflectionMaxIterations"] == 3
     assert attributes["reflectionTolerance"] == 2.5e-3
     assert "forwardRayLength" not in attributes

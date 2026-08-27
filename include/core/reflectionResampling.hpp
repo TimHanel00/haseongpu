@@ -61,8 +61,8 @@ namespace hase::core
             return result;
         }
 
-        hase::core::PositionBufferSoA<T_Device> positions;
-        hase::core::DirectionBufferSoA<T_Device> directions;
+        PositionBufferSoA<T_Device> positions;
+        DirectionBufferSoA<T_Device> directions;
         T_DoubleBuffer weights;
         T_DoubleBuffer wavelengths;
         T_UnsignedBuffer faceIds;

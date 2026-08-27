@@ -14,6 +14,7 @@
 #include <kernels/forward/surfaceReservoir.hpp>
 
 #include <array>
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -22,20 +23,67 @@
 
 namespace hase::core
 {
-    /** @brief Device buffers for one per-face weighted surface-reservoir bank. */
+    template<
+        alpaka::onHost::concepts::Device T_Device,
+        hase::kernels::forward::SurfaceReservoirPositionPolicy T_PositionPolicy>
+    class SurfaceReservoirPositionBuffers;
+
     template<alpaka::onHost::concepts::Device T_Device>
+    class SurfaceReservoirPositionBuffers<T_Device, hase::kernels::forward::surfaceReservoirPosition::Exact>
+    {
+    public:
+        SurfaceReservoirPositionBuffers(
+            T_Device& device,
+            std::uint32_t const reservoirSlotCount,
+            std::uint32_t const maxRayCount)
+            : positions(device, reservoirSlotCount)
+            , candidatePositions(device, maxRayCount)
+        {
+        }
+
+        [[nodiscard]] auto view()
+        {
+            return hase::kernels::forward::ExactSurfaceReservoirPositionSpans{
+                positions.view(),
+                candidatePositions.view()};
+        }
+
+    private:
+        hase::core::PositionBufferSoA<T_Device> positions;
+        hase::core::PositionBufferSoA<T_Device> candidatePositions;
+    };
+
+    template<alpaka::onHost::concepts::Device T_Device>
+    class SurfaceReservoirPositionBuffers<T_Device, hase::kernels::forward::surfaceReservoirPosition::Centroid>
+    {
+    public:
+        SurfaceReservoirPositionBuffers(T_Device&, std::uint32_t, std::uint32_t)
+        {
+        }
+
+        [[nodiscard]] static constexpr hase::kernels::forward::CentroidSurfaceReservoirPositionSpans view()
+        {
+            return {};
+        }
+    };
+
+    /** @brief Device buffers for one per-face weighted surface-reservoir bank. */
+    template<
+        alpaka::onHost::concepts::Device T_Device,
+        hase::kernels::forward::SurfaceReservoirPositionPolicy T_PositionPolicy
+        = hase::kernels::forward::surfaceReservoirPosition::Exact>
     class SurfaceReservoirBank
     {
+        static_assert(
+            !std::same_as<T_PositionPolicy, hase::kernels::forward::surfaceReservoirPosition::Centroid>
+            || std::is_empty_v<SurfaceReservoirPositionBuffers<T_Device, T_PositionPolicy>>);
+
         using T_DoubleBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::uint32_t{1}));
         using T_UnsignedBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::uint32_t{1}));
         using T_KeyBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint64_t>(std::declval<T_Device&>(), std::uint32_t{1}));
-        using T_DoubleView = ALPAKA_TYPEOF(std::declval<T_DoubleBuffer&>().getView());
-        using T_UnsignedView = ALPAKA_TYPEOF(std::declval<T_UnsignedBuffer&>().getView());
-        using T_KeyView = ALPAKA_TYPEOF(std::declval<T_KeyBuffer&>().getView());
-        using T_CartesianView = ALPAKA_TYPEOF(std::declval<hase::core::CartesianBufferSoA<T_Device>&>().view().x);
 
     public:
         /**
@@ -46,16 +94,15 @@ namespace hase::core
         SurfaceReservoirBank(
             T_Device& device,
             std::uint32_t faceCount,
-            alpaka::concepts::CVector auto slotsPerFace,
+            alpaka::concepts::Vector auto slotsPerFace,
             std::uint32_t maxRayCount)
             : counts(alpaka::onHost::alloc<std::uint32_t>(device, faceCount))
-            , positions(device, faceCount * slotsPerFace.x())
+            , positionBuffers(device, faceCount * slotsPerFace.x(), maxRayCount)
             , directions(device, faceCount * slotsPerFace.x())
             , weights(alpaka::onHost::alloc<double>(device, faceCount * slotsPerFace.x()))
             , wavelengths(alpaka::onHost::alloc<double>(device, faceCount * slotsPerFace.x()))
             , faceWeights(alpaka::onHost::alloc<double>(device, faceCount))
             , selectionKeys(alpaka::onHost::alloc<std::uint64_t>(device, faceCount * slotsPerFace.x()))
-            , candidatePositions(device, maxRayCount)
             , candidateDirections(device, maxRayCount)
             , candidateWeights(alpaka::onHost::alloc<double>(device, maxRayCount))
             , candidateWavelengths(alpaka::onHost::alloc<double>(device, maxRayCount))
@@ -65,17 +112,16 @@ namespace hase::core
         /**
          * @return Trivially-copyable non-owning view for device kernels.
          */
-        [[nodiscard]] auto view(alpaka::concepts::CVector auto slotsPerFace)
+        [[nodiscard]] auto view(alpaka::concepts::Vector auto slotsPerFace)
         {
             auto result = hase::kernels::forward::SurfaceReservoirSpans{
                 counts.getView(),
-                positions.view(),
+                positionBuffers.view(),
                 directions.view(),
                 weights.getView(),
                 wavelengths.getView(),
                 faceWeights.getView(),
                 selectionKeys.getView(),
-                candidatePositions.view(),
                 candidateDirections.view(),
                 candidateWeights.getView(),
                 candidateWavelengths.getView(),
@@ -86,20 +132,22 @@ namespace hase::core
         }
 
         T_UnsignedBuffer counts;
-        hase::core::PositionBufferSoA<T_Device> positions;
+        SurfaceReservoirPositionBuffers<T_Device, T_PositionPolicy> positionBuffers;
         hase::core::DirectionBufferSoA<T_Device> directions;
         T_DoubleBuffer weights;
         T_DoubleBuffer wavelengths;
         T_DoubleBuffer faceWeights;
         T_KeyBuffer selectionKeys;
-        hase::core::PositionBufferSoA<T_Device> candidatePositions;
         hase::core::DirectionBufferSoA<T_Device> candidateDirections;
         T_DoubleBuffer candidateWeights;
         T_DoubleBuffer candidateWavelengths;
     };
 
     /** @brief Pair of reservoir banks used as alternating SRM input and output. */
-    template<alpaka::onHost::concepts::Device T_Device>
+    template<
+        alpaka::onHost::concepts::Device T_Device,
+        hase::kernels::forward::SurfaceReservoirPositionPolicy T_PositionPolicy
+        = hase::kernels::forward::surfaceReservoirPosition::Exact>
     class SurfaceReservoir
     {
     public:
@@ -111,7 +159,7 @@ namespace hase::core
         SurfaceReservoir(
             T_Device& device,
             std::uint32_t faceCount,
-            alpaka::concepts::CVector auto slotsPerFace,
+            alpaka::concepts::Vector auto slotsPerFace,
             std::uint32_t maxRayCount)
             : first(device, faceCount, slotsPerFace, maxRayCount)
             , second(device, faceCount, slotsPerFace, maxRayCount)
@@ -119,13 +167,16 @@ namespace hase::core
         {
         }
 
-        SurfaceReservoirBank<T_Device> first;
-        SurfaceReservoirBank<T_Device> second;
+        SurfaceReservoirBank<T_Device, T_PositionPolicy> first;
+        SurfaceReservoirBank<T_Device, T_PositionPolicy> second;
         std::uint32_t faceCount;
     };
 
     /** @brief Persistent reservoir and scan workspace for one maximum launch shape. */
-    template<alpaka::onHost::concepts::Device T_Device>
+    template<
+        alpaka::onHost::concepts::Device T_Device,
+        hase::kernels::forward::SurfaceReservoirPositionPolicy T_PositionPolicy
+        = hase::kernels::forward::surfaceReservoirPosition::Exact>
     class SurfaceReservoirScratch
     {
         using T_DoubleBuffer
@@ -149,7 +200,7 @@ namespace hase::core
         SurfaceReservoirScratch(
             T_Device device,
             std::uint32_t faceCount,
-            alpaka::concepts::CVector auto slotsPerFace,
+            alpaka::concepts::Vector auto slotsPerFace,
             std::uint32_t maxRayCount)
             : reservoir(device, faceCount, slotsPerFace, maxRayCount)
             , samplingCdf(alpaka::onHost::alloc<double>(device, faceCount))
@@ -190,7 +241,7 @@ namespace hase::core
          * @param queue Queue targeting the reservoir device.
          * @param bank Bank whose per-face accumulation state is reset.
          */
-        void clear(concepts::Queue auto const& queue, SurfaceReservoirBank<T_Device>& bank)
+        void clear(concepts::Queue auto const& queue, SurfaceReservoirBank<T_Device, T_PositionPolicy>& bank)
         {
             alpaka::onHost::fill(queue, bank.counts, 0u, alpaka::Vec{reservoir.faceCount});
             alpaka::onHost::fill(queue, bank.faceWeights, 0.0, alpaka::Vec{reservoir.faceCount});
@@ -228,8 +279,8 @@ namespace hase::core
         [[nodiscard]] double updateSampling(
             alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
             concepts::Queue auto const& queue,
-            SurfaceReservoirBank<T_Device>& bank,
-            alpaka::concepts::CVector auto slotsPerFace,
+            SurfaceReservoirBank<T_Device, T_PositionPolicy>& bank,
+            alpaka::concepts::Vector auto slotsPerFace,
             std::uint32_t const rayCount,
             std::uint32_t const rngSeed,
             std::uint32_t const pass)
@@ -315,7 +366,7 @@ namespace hase::core
             return totalWeight.getHostView()[0u];
         }
 
-        SurfaceReservoir<T_Device> reservoir;
+        SurfaceReservoir<T_Device, T_PositionPolicy> reservoir;
         T_DoubleBuffer samplingCdf;
         T_DoubleBuffer samplingTotalWeight;
         T_DoubleBuffer systematicOffset;

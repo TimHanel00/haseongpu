@@ -22,6 +22,9 @@ namespace hase::data
             static constexpr char const* repetitions = "repetitions";
             static constexpr char const* adaptiveSteps = "adaptiveSteps";
             static constexpr char const* useReflections = "useReflections";
+            static constexpr char const* reflectionMode = "reflectionMode";
+            static constexpr char const* surfaceReservoirSize = "surfaceReservoirSize";
+            static constexpr char const* srmPositionMode = "srmPositionMode";
             static constexpr char const* reflectionMaxIterations = "reflectionMaxIterations";
             static constexpr char const* reflectionTolerance = "reflectionTolerance";
             static constexpr char const* monochromatic = "monochromatic";
@@ -44,6 +47,9 @@ namespace hase::data
         std::uint64_t repetitions{};
         std::uint64_t adaptiveSteps{};
         bool useReflections{};
+        std::string reflectionMode;
+        std::uint64_t surfaceReservoirSize{};
+        std::string srmPositionMode;
         std::uint64_t reflectionMaxIterations{};
         double reflectionTolerance{};
         bool monochromatic{};

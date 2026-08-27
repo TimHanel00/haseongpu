@@ -210,6 +210,9 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
     assert phiAse.maxRays == 10000
     assert phiAse.repetitions == 1
     assert phiAse.backend == "Host_Cpu_CpuSerial"
+    assert phiAse.reflectionMode == "direct"
+    assert phiAse.surfaceReservoirSize == 64
+    assert phiAse.srmPositionMode == "exact"
 
     parser = argparse.ArgumentParser()
     PhiASE.addArguments(parser)
@@ -220,6 +223,12 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
         "32",
         "--openpmd-backend",
         "adios-sst",
+        "--reflection-mode",
+        "srm",
+        "--surface-reservoir-size",
+        "256",
+        "--srm-position-mode",
+        "centroid",
     ])
 
     fromArgs = PhiASE.fromArgs(args)
@@ -227,6 +236,50 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
     assert fromArgs.minRays == 32
     assert fromArgs.maxRays == 10000
     assert fromArgs.openpmdBackend == "adios-sst"
+    assert fromArgs.reflectionMode == "srm"
+    assert fromArgs.surfaceReservoirSize == 256
+    assert fromArgs.srmPositionMode == "centroid"
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "message"),
+    (
+        ("reflectionMode", "histogram", "reflectionMode"),
+        ("surfaceReservoirSize", 0, "surfaceReservoirSize"),
+        ("surfaceReservoirSize", 2.5, "surfaceReservoirSize"),
+        ("srmPositionMode", "vertex", "srmPositionMode"),
+    ),
+)
+def testPhiAseRejectsInvalidSrmConfiguration(keyword, value, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        PhiASE(**{keyword: value})
+
+
+def testPhiAseLoadsCentroidSrmFromYaml(tmp_path):
+    path = tmp_path / "centroid-srm.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 3,
+                "simulation": {
+                    "phi_ase": {
+                        "use_reflections": True,
+                        "reflection_mode": "srm",
+                        "surface_reservoir_size": 512,
+                        "srm_position_mode": "centroid",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    phiAse = PhiASE.fromYaml(path)
+
+    assert phiAse.useReflections is True
+    assert phiAse.reflectionMode == "srm"
+    assert phiAse.surfaceReservoirSize == 512
+    assert phiAse.srmPositionMode == "centroid"
 
 def testPhiAseDefaultBackendSerializesAvailableAlpakaBackend():
     phiAse = PhiASE()

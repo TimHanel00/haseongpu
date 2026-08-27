@@ -137,6 +137,12 @@ class PhiASE:
     """Maximum geometric ray-count increases from ``minRays`` to ``maxRays``."""
     useReflections: bool = False
     """Whether surface reflectivities affect forward propagation."""
+    reflectionMode: str = "direct"
+    """Reflection source representation: ``direct`` exact hits or bounded ``srm`` bins."""
+    surfaceReservoirSize: int = 64
+    """Number of retained statistical ray records per boundary face in SRM mode."""
+    srmPositionMode: str = "exact"
+    """SRM relaunch position: the retained ``exact`` hit or the face ``centroid``."""
     reflectionMaxIterations: int = 40
     """Maximum reflected-source passes after the direct volume-source pass."""
     reflectionTolerance: float = 1e-4
@@ -182,6 +188,9 @@ class PhiASE:
                 transportField("repetitions"),
                 transportField("adaptiveSteps"),
                 transportField("useReflections"),
+                transportField("reflectionMode"),
+                transportField("surfaceReservoirSize"),
+                transportField("srmPositionMode"),
                 transportField("reflectionMaxIterations"),
                 transportField("reflectionTolerance"),
                 transportField("monochromatic"),
@@ -206,6 +215,16 @@ class PhiASE:
         )
 
     def __post_init__(self):
+        if self.reflectionMode not in {"direct", "srm"}:
+            raise ValueError("PhiASE.reflectionMode must be 'direct' or 'srm'")
+        if isinstance(self.surfaceReservoirSize, bool) or not isinstance(
+            self.surfaceReservoirSize, (int, np.integer)
+        ):
+            raise TypeError("PhiASE.surfaceReservoirSize must be an integer")
+        if self.surfaceReservoirSize <= 0:
+            raise ValueError("PhiASE.surfaceReservoirSize must be positive")
+        if self.srmPositionMode not in {"exact", "centroid"}:
+            raise ValueError("PhiASE.srmPositionMode must be 'exact' or 'centroid'")
         if self.ase_steps is not None:
             if isinstance(self.ase_steps, bool) or not isinstance(self.ase_steps, (int, np.integer)):
                 raise TypeError("PhiASE.ase_steps must be an integer or None")
@@ -224,6 +243,7 @@ class PhiASE:
         obj = _phiAse(simulation["phi_ase"])
         for name, value in overrides.items():
             setattr(obj, name, value)
+        obj.__post_init__()
         return obj
 
     @staticmethod
@@ -237,6 +257,9 @@ class PhiASE:
         parser.add_argument("--relative-standard-error-threshold", type=float, default=None)
         parser.add_argument("--reflection-max-iterations", type=int, default=None)
         parser.add_argument("--reflection-tolerance", type=float, default=None)
+        parser.add_argument("--reflection-mode", choices=("direct", "srm"), default=None)
+        parser.add_argument("--surface-reservoir-size", type=int, default=None)
+        parser.add_argument("--srm-position-mode", choices=("exact", "centroid"), default=None)
         parser.add_argument("--repetitions", type=int, default=None)
         parser.add_argument("--adaptive-steps", type=int, default=None)
         parser.add_argument("--backend", default=None)
@@ -262,6 +285,9 @@ class PhiASE:
             "relative_standard_error_threshold": "relativeStandardErrorThreshold",
             "reflection_max_iterations": "reflectionMaxIterations",
             "reflection_tolerance": "reflectionTolerance",
+            "reflection_mode": "reflectionMode",
+            "surface_reservoir_size": "surfaceReservoirSize",
+            "srm_position_mode": "srmPositionMode",
             "repetitions": "repetitions",
             "adaptive_steps": "adaptiveSteps",
             "backend": "backend",
@@ -277,6 +303,7 @@ class PhiASE:
                 setattr(obj, attr_name, value)
         for name, value in overrides.items():
             setattr(obj, name, value)
+        obj.__post_init__()
         return obj
 
     def openPmdAttributes(self, *, numberOfSamples):
@@ -304,6 +331,9 @@ class PhiASE:
             "relativeStandardErrorThreshold": self.relativeStandardErrorThreshold,
             "reflectionMaxIterations": self.reflectionMaxIterations,
             "reflectionTolerance": self.reflectionTolerance,
+            "reflectionMode": self.reflectionMode,
+            "surfaceReservoirSize": int(self.surfaceReservoirSize),
+            "srmPositionMode": self.srmPositionMode,
             "repetitions": self.repetitions,
             "adaptiveSteps": adaptive_steps,
             "useReflections": self.useReflections,

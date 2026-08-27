@@ -75,6 +75,9 @@ TEST_CASE("simulation preparation builds material-local trace data", "[transport
     phiAse->relativeStandardErrorThreshold = 0.1;
     phiAse->repetitions = 2u;
     phiAse->adaptiveSteps = 3u;
+    phiAse->reflectionMode = "srm";
+    phiAse->surfaceReservoirSize = 256u;
+    phiAse->srmPositionMode = "centroid";
     phiAse->reflectionMaxIterations = 40u;
     phiAse->reflectionTolerance = 1.0e-4;
     phiAse->backend = "test-backend";
@@ -111,6 +114,9 @@ TEST_CASE("simulation preparation builds material-local trace data", "[transport
     CHECK(state.trace.crossSectionEmission.front() == Catch::Approx(2.1e-24));
     CHECK(state.controls.numberOfSteps == 2u);
     CHECK(state.controls.timeIntegration.method == "explicit-euler");
+    CHECK(state.ase.reflectionMode == "srm");
+    CHECK(state.ase.surfaceReservoirSize == 256u);
+    CHECK(state.ase.srmPositionMode == "centroid");
 
     excitation->values.values = {0.75};
     preparation.excitation.apply(*excitation, state.trace.betaVolume);
@@ -201,6 +207,9 @@ TEST_CASE(
     phiAse->relativeStandardErrorThreshold = 0.1;
     phiAse->repetitions = 1u;
     phiAse->adaptiveSteps = 0u;
+    phiAse->reflectionMode = "direct";
+    phiAse->surfaceReservoirSize = 64u;
+    phiAse->srmPositionMode = "exact";
     phiAse->reflectionMaxIterations = 40u;
     phiAse->reflectionTolerance = 1.0e-4;
     phiAse->backend = "test-backend";

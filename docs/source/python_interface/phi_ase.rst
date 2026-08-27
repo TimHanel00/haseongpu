@@ -16,6 +16,9 @@ evolving excitation state.
        adaptiveSteps=4,
        relativeStandardErrorThreshold=0.05,
        useReflections=True,
+       reflectionMode="srm",
+       surfaceReservoirSize=256,
+       srmPositionMode="centroid",
        backend="Host_Cpu_CpuSerial",
        openpmdBackend="auto",
        rngSeed=1234,
@@ -89,6 +92,26 @@ Reflections
 ``SurfaceOptics``. Direct and reflected rays travel to a physical mesh boundary;
 there is no configurable forward ray-length cutoff.
 
+``reflectionMode``
+   Selects the reflected-source representation. ``"direct"`` retains one exact
+   boundary-intersection candidate for every launched ray before constructing
+   the next reflected pass. ``"srm"`` first reduces those candidates to a
+   bounded statistical reservoir for each boundary face. Both modes relaunch a
+   fixed ray batch on each reflection pass. The default remains ``"direct"``.
+
+``surfaceReservoirSize``
+   Number of statistically retained ray records per boundary face when
+   ``reflectionMode="srm"``. Reflected weight is accumulated independently of
+   this bounded record count.
+
+``srmPositionMode``
+   Selects where retained SRM records are relaunched. ``"exact"`` retains each
+   sampled boundary intersection, while ``"centroid"`` allocates no device
+   position buffers and relaunches every record at the centroid of its owning
+   face. Directions, weights, wavelengths, and selection keys remain bounded by
+   faces times ``surfaceReservoirSize``. This setting affects only
+   ``reflectionMode="srm"``; direct mode always uses exact intersections.
+
 ``reflectionMaxIterations``
    Maximum surface-resampling passes after the direct pass. The positive integer
    environment override is ``HASE_SRM_MAX_ITERATIONS``.
@@ -140,6 +163,9 @@ YAML and CLI helpers
        adaptive_steps: 4
        ase_steps: 150
        use_reflections: true
+       reflection_mode: srm
+       surface_reservoir_size: 256
+       srm_position_mode: centroid
        reflection_max_iterations: 40
        backend: Host_Cpu_CpuSerial
        openpmd_backend: auto

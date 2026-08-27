@@ -765,6 +765,16 @@ namespace hase::data
         ase.maxRays = narrow<unsigned>(simulation.phiAse->maxRays, "phiAse.maxRays");
         ase.relativeStandardErrorThreshold = simulation.phiAse->relativeStandardErrorThreshold;
         ase.useReflections = simulation.phiAse->useReflections;
+        ase.reflectionMode = simulation.phiAse->reflectionMode;
+        ase.surfaceReservoirSize
+            = narrow<unsigned>(simulation.phiAse->surfaceReservoirSize, "phiAse.surfaceReservoirSize");
+        ase.srmPositionMode = simulation.phiAse->srmPositionMode;
+        if(ase.reflectionMode != "direct" && ase.reflectionMode != "srm")
+            invalid("phiAse.reflectionMode must be 'direct' or 'srm'");
+        if(ase.surfaceReservoirSize == 0u)
+            invalid("phiAse.surfaceReservoirSize must be positive");
+        if(ase.srmPositionMode != "exact" && ase.srmPositionMode != "centroid")
+            invalid("phiAse.srmPositionMode must be 'exact' or 'centroid'");
         ase.monochromatic = simulation.phiAse->monochromatic;
         ase.propagationMode = simulation.phiAse->propagationMode;
         ase.forwardRayCount

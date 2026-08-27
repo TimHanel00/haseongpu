@@ -14,36 +14,127 @@
 #include <random/randomEngine.hpp>
 
 #include <bit>
+#include <concepts>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 namespace hase::kernels::forward
 {
+    namespace surfaceReservoirPosition
+    {
+        struct Policy
+        {
+        };
+
+        struct Exact : Policy
+        {
+        };
+
+        struct Centroid : Policy
+        {
+        };
+
+        inline constexpr Exact exact;
+        inline constexpr Centroid centroid;
+    } // namespace surfaceReservoirPosition
+
+    template<typename T>
+    concept SurfaceReservoirPositionPolicy
+        = std::derived_from<std::remove_cvref_t<T>, surfaceReservoirPosition::Policy>;
+
+    template<alpaka::concepts::IView<double> T_PositionView>
+    struct ExactSurfaceReservoirPositionSpans
+    {
+        hase::core::PositionViewSoA<T_PositionView> positions;
+        hase::core::PositionViewSoA<T_PositionView> candidatePositions;
+    };
+
+    struct CentroidSurfaceReservoirPositionSpans
+    {
+    };
+
     /** @brief Kernel views of one face-indexed weighted reservoir bank. */
     template<
         alpaka::concepts::IView<std::uint32_t> T_Counts,
-        alpaka::concepts::IView<double> T_PositionView,
+        alpaka::concepts::KernelArg T_PositionSpans,
         alpaka::concepts::IView<double> T_DirectionView,
         alpaka::concepts::IView<double> T_Weights,
         alpaka::concepts::IView<double> T_Wavelengths,
         alpaka::concepts::IView<double> T_FaceWeights,
         alpaka::concepts::IView<std::uint64_t> T_SelectionKeys,
-        alpaka::concepts::CVector T_SlotsPerFace>
+        alpaka::concepts::Vector T_SlotsPerFace>
     struct SurfaceReservoirSpans
     {
         T_Counts counts;
-        hase::core::PositionViewSoA<T_PositionView> positions;
+        T_PositionSpans positionSpans;
         hase::core::DirectionViewSoA<T_DirectionView> directions;
         T_Weights weights;
         T_Wavelengths wavelengths;
         T_FaceWeights faceWeights;
         T_SelectionKeys selectionKeys;
-        hase::core::PositionViewSoA<T_PositionView> candidatePositions;
         hase::core::DirectionViewSoA<T_DirectionView> candidateDirections;
         T_Weights candidateWeights;
         T_Wavelengths candidateWavelengths;
         T_SlotsPerFace slotsPerFace;
     };
+
+    template<alpaka::concepts::IView<double> T_PositionView>
+    ALPAKA_FN_ACC inline void captureSurfaceReservoirPosition(
+        ExactSurfaceReservoirPositionSpans<T_PositionView> positionSpans,
+        std::uint32_t const candidateIndex,
+        hase::core::Position const position)
+    {
+        positionSpans.candidatePositions.x[candidateIndex] = position.x;
+        positionSpans.candidatePositions.y[candidateIndex] = position.y;
+        positionSpans.candidatePositions.z[candidateIndex] = position.z;
+    }
+
+    ALPAKA_FN_ACC inline void captureSurfaceReservoirPosition(
+        CentroidSurfaceReservoirPositionSpans,
+        std::uint32_t,
+        hase::core::Position)
+    {
+    }
+
+    template<alpaka::concepts::IView<double> T_PositionView>
+    ALPAKA_FN_ACC inline void finalizeSurfaceReservoirPosition(
+        ExactSurfaceReservoirPositionSpans<T_PositionView> positionSpans,
+        std::uint32_t const destination,
+        std::uint32_t const candidateIndex)
+    {
+        positionSpans.positions.x[destination] = positionSpans.candidatePositions.x[candidateIndex];
+        positionSpans.positions.y[destination] = positionSpans.candidatePositions.y[candidateIndex];
+        positionSpans.positions.z[destination] = positionSpans.candidatePositions.z[candidateIndex];
+    }
+
+    ALPAKA_FN_ACC inline void finalizeSurfaceReservoirPosition(
+        CentroidSurfaceReservoirPositionSpans,
+        std::uint32_t,
+        std::uint32_t)
+    {
+    }
+
+    template<alpaka::concepts::IView<double> T_PositionView>
+    [[nodiscard]] ALPAKA_FN_ACC inline hase::core::Position restoreSurfaceReservoirPosition(
+        ExactSurfaceReservoirPositionSpans<T_PositionView> positionSpans,
+        hase::data::TraceView const&,
+        std::uint32_t,
+        std::uint32_t,
+        std::uint32_t const slotIndex)
+    {
+        return positionSpans.positions.at(slotIndex);
+    }
+
+    [[nodiscard]] ALPAKA_FN_ACC inline hase::core::Position restoreSurfaceReservoirPosition(
+        CentroidSurfaceReservoirPositionSpans,
+        hase::data::TraceView const& mesh,
+        std::uint32_t const cell,
+        std::uint32_t const localFace,
+        std::uint32_t)
+    {
+        return ray::restoreSrmPosition(ray::srmPosition::centroid, mesh, cell, localFace);
+    }
 
     /** @brief Kernel views of the normalized face CDF and ray-face assignments. */
     template<
@@ -98,13 +189,11 @@ namespace hase::kernels::forward
         std::uint32_t const candidateIndex,
         alpaka::rand::concepts::UniformRandomEngine auto& rng)
     {
-        alpaka::concepts::CVector auto slotsPerFace = reservoir.slotsPerFace;
+        alpaka::concepts::Vector auto slotsPerFace = reservoir.slotsPerFace;
         if(weight <= 0.0 || !alpaka::math::isfinite(weight))
             return;
 
-        reservoir.candidatePositions.x[candidateIndex] = position.x;
-        reservoir.candidatePositions.y[candidateIndex] = position.y;
-        reservoir.candidatePositions.z[candidateIndex] = position.z;
+        captureSurfaceReservoirPosition(reservoir.positionSpans, candidateIndex, position);
         reservoir.candidateDirections.x[candidateIndex] = direction.x;
         reservoir.candidateDirections.y[candidateIndex] = direction.y;
         reservoir.candidateDirections.z[candidateIndex] = direction.z;
@@ -189,7 +278,7 @@ namespace hase::kernels::forward
         std::uint32_t const rayIndex,
         alpaka::rand::concepts::UniformRandomEngine auto& rng)
     {
-        alpaka::concepts::CVector auto slotsPerFace = reservoir.slotsPerFace;
+        alpaka::concepts::Vector auto slotsPerFace = reservoir.slotsPerFace;
         if(faceCount == 0u || sampling.totalWeight[0u] <= 0.0)
             return {};
 
@@ -236,7 +325,7 @@ namespace hase::kernels::forward
             alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto reservoir) const
         {
             constexpr std::uint64_t emptyKey = std::numeric_limits<std::uint64_t>::max();
-            alpaka::concepts::CVector auto slotsPerFace = reservoir.slotsPerFace;
+            alpaka::concepts::Vector auto slotsPerFace = reservoir.slotsPerFace;
             for(auto [face] :
                 alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{faceCount}))
             {
@@ -249,9 +338,7 @@ namespace hase::kernels::forward
                         break;
                     std::uint32_t const candidateIndex = static_cast<std::uint32_t>(key);
                     std::uint32_t const destination = offset + slot;
-                    reservoir.positions.x[destination] = reservoir.candidatePositions.x[candidateIndex];
-                    reservoir.positions.y[destination] = reservoir.candidatePositions.y[candidateIndex];
-                    reservoir.positions.z[destination] = reservoir.candidatePositions.z[candidateIndex];
+                    finalizeSurfaceReservoirPosition(reservoir.positionSpans, destination, candidateIndex);
                     reservoir.directions.x[destination] = reservoir.candidateDirections.x[candidateIndex];
                     reservoir.directions.y[destination] = reservoir.candidateDirections.y[candidateIndex];
                     reservoir.directions.z[destination] = reservoir.candidateDirections.z[candidateIndex];

@@ -49,7 +49,7 @@ namespace hase::core
          * @param hostMesh Prepared host trace retained across the evaluation.
          * @return Zero on a completed matching backend, nonzero if none ran.
          */
-        int runPreparedPhiAse(
+        inline int runPreparedPhiAse(
             AseTraceControls& experiment,
             ExecutionPolicy& compute,
             data::PhiAseResult& result,
@@ -80,7 +80,7 @@ namespace hase::core
                     }
                     using T_Device = ALPAKA_TYPEOF(devSelector.makeDevice(0));
                     T_Device sampleDevice = devSelector.makeDevice(0);
-                    if(hase::alpakaUtils::getNameForBackend(backend, sampleDevice) != compute.backend)
+                    if(alpakaUtils::getNameForBackend(backend, sampleDevice) != compute.backend)
                     {
                         return 0;
                     }
@@ -93,8 +93,8 @@ namespace hase::core
                                         << std::endl;
                         compute.numDevices = deviceCount;
                     }
-                    compute.devices.resize(compute.numDevices);
 
+                    compute.devices.resize(compute.numDevices);
                     std::vector<T_Device> devices;
                     devices.reserve(compute.devices.size());
                     for(auto const& gpu_i : compute.devices)
