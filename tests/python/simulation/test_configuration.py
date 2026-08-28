@@ -11,6 +11,7 @@ import yaml
 
 from HASEonGPU import (
     CrossSectionTable,
+    FrozenSourcesRungeKutta4,
     ImplicitEuler,
     Material,
     Simulation,
@@ -158,6 +159,17 @@ def testSimulationFromYamlBuildsPublicObjectGraph(tmp_path):
     assert isinstance(simulation.pumps[0].profile, SuperGaussianPumpProfile)
     assert simulation.outputSteps == (2, 3)
     assert simulation.outputFields == ("beta_volume", "phi_ase", "dndt_pump")
+
+
+def testSchemaV3BuildsFrozenSourcesRungeKutta4(tmp_path):
+    config = _config()
+    config["simulation"]["time_integrator"] = {
+        "method": "frozen_sources_runge_kutta4"
+    }
+
+    simulation = _load(tmp_path, config)
+
+    assert isinstance(simulation.timeIntegrationSolver, FrozenSourcesRungeKutta4)
 
 
 def testSchemaV3DerivesRunLimitWhenSimulationStepsIsOmitted(tmp_path):

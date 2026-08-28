@@ -28,6 +28,7 @@ from .timeIntegration import (
     ExplicitEuler,
     ExponentialEuler,
     FrozenPhiAseRungeKutta4,
+    FrozenSourcesRungeKutta4,
     Heun,
     ImplicitEuler,
     Midpoint,
@@ -457,6 +458,7 @@ def _timeIntegrator(spec):
         "midpoint": Midpoint,
         "runge_kutta4": RungeKutta4,
         "frozen_phi_ase_runge_kutta4": FrozenPhiAseRungeKutta4,
+        "frozen_sources_runge_kutta4": FrozenSourcesRungeKutta4,
         "implicit_euler": ImplicitEuler,
         "exponential_euler": ExponentialEuler,
     }

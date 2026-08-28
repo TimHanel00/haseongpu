@@ -323,7 +323,11 @@ Tet4 cell:
 
 Standard RK4 reevaluates ASE and pump transport at every stage.
 ``FrozenPhiAseRungeKutta4`` reuses its first ASE calculation for the remaining
-stages, while still evaluating the pump contribution. Setting
+stages, while still evaluating the pump contribution.
+``FrozenSourcesRungeKutta4`` evaluates pump and ASE transport once at the
+pre-step beta field, then holds both resulting rate fields fixed during all
+four RK4 stages. Only the fluorescence term :math:`-\beta/\tau` changes with
+the intermediate stage field. Setting
 ``PhiASE(ase_steps=0, ...)`` advances active pump excitation and fluorescence
 without an ASE calculation. Setting one pump's ``pump_steps`` to zero disables
 only that source.

@@ -59,6 +59,40 @@ namespace hase::kernels
         }
     };
 
+    /** @brief Compose a stage derivative while reusing frozen pump and ASE rates. */
+    struct ComposeFrozenSourcesDerivative
+    {
+        std::span<std::uint8_t const> materialActive;
+        std::span<double const> materialFluorescenceLifetimes;
+
+        ALPAKA_FN_ACC auto operator()(
+            alpaka::concepts::Simd auto const& betaVolume,
+            alpaka::concepts::Simd auto const& dndtPump,
+            alpaka::concepts::Simd auto const& dndtAse,
+            alpaka::concepts::Simd auto const& materialIds) const
+        {
+            using T_Result = std::remove_cvref_t<decltype(betaVolume)>;
+            static_assert(std::same_as<typename T_Result::type, double>);
+            static_assert(std::same_as<typename std::remove_cvref_t<decltype(materialIds)>::type, unsigned>);
+            auto const active = alpaka::SimdMask<double, T_Result::width()>{
+                [&](auto const lane)
+                {
+                    auto const material = materialIds[decltype(lane)::value];
+                    return materialActive[material] != 0u;
+                }};
+            auto const tau
+                = T_Result{[&](auto const lane)
+                           {
+                               auto const material = materialIds[decltype(lane)::value];
+                               return active[decltype(lane)::value] ? materialFluorescenceLifetimes[material] : 1.0;
+                           }};
+            auto const derivative = dndtPump - dndtAse - betaVolume / tau;
+            auto result = T_Result{[](auto) { return 0.0; }};
+            alpaka::where(active, result) = derivative;
+            return result;
+        }
+    };
+
     /**
      * @brief Exact fluorescence-decay update with frozen pump and ASE sources.
      *

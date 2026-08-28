@@ -13,6 +13,7 @@
 #include <alpakaUtils/backendNames.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <alpakaUtils/utils.hpp>
+#include <benchmark.hpp>
 #include <core/Runtime.hpp>
 #include <core/SimulationControls.hpp>
 #include <core/forwardPhiAseEvaluator.hpp>
@@ -205,7 +206,10 @@ namespace hase::core
 #ifdef HASE_ENABLE_STEP_TIMING
                 auto const started = std::chrono::steady_clock::now();
 #endif
-                advanceTimeStep(simulationStep, pumpEnabled, aseEnabled);
+                {
+                    BENCH_SYNC(m_queue, TimeIntegrationStep);
+                    advanceTimeStep(simulationStep, pumpEnabled, aseEnabled);
+                }
 #ifdef HASE_ENABLE_STEP_TIMING
                 alpaka::onHost::wait(m_queue);
                 if(timingCsv)
@@ -282,6 +286,7 @@ namespace hase::core
                 }
                 if(pumpEnabled)
                 {
+                    BENCH_SYNC(m_queue, PumpEvaluation);
                     hase::kernels::enqueueGeneralPump(
                         m_devBundle,
                         m_queue,
@@ -357,6 +362,10 @@ namespace hase::core
             {
                 integrateFrozenPhiAseRungeKutta4(evaluateStage);
             }
+            else if(method == TimeIntegrator::FROZEN_SOURCES_RUNGE_KUTTA_4)
+            {
+                integrateFrozenSourcesRungeKutta4(evaluateStage);
+            }
             else if(method == TimeIntegrator::IMPLICIT_EULER)
             {
                 integrateImplicitEuler(evaluateStage);
@@ -409,6 +418,24 @@ namespace hase::core
 
             evaluateStage(m_stage, false);
             alpaka::onHost::memcpy(m_queue, m_k4, m_derivative);
+            enqueueRungeKutta4();
+        }
+
+        void integrateFrozenSourcesRungeKutta4(std::invocable<T_DoubleBuffer&, bool> auto&& evaluateStage)
+        {
+            evaluateStage(m_beta, true);
+            alpaka::onHost::memcpy(m_queue, m_k1, m_derivative);
+            // The source rates stay frozen, but -beta/tau changes at every stage;
+            // retain each distinct slope for the final RK4 weighted sum.
+            enqueueAddScaled(m_beta, m_k1, m_stage, 0.5 * m_run.timeStep);
+
+            enqueueFrozenSourcesDerivative(m_stage, m_k2);
+            enqueueAddScaled(m_beta, m_k2, m_stage, 0.5 * m_run.timeStep);
+
+            enqueueFrozenSourcesDerivative(m_stage, m_k3);
+            enqueueAddScaled(m_beta, m_k3, m_stage, m_run.timeStep);
+
+            enqueueFrozenSourcesDerivative(m_stage, m_k4);
             enqueueRungeKutta4();
         }
 
@@ -571,6 +598,23 @@ namespace hase::core
                 m_k4);
         }
 
+        void enqueueFrozenSourcesDerivative(
+            alpaka::concepts::IBuffer<double> auto& beta,
+            alpaka::concepts::IBuffer<double> auto& stageDerivativeOut)
+        {
+            alpaka::onHost::transform(
+                m_queue,
+                m_devBundle.executor,
+                stageDerivativeOut,
+                hase::kernels::ComposeFrozenSourcesDerivative{
+                    m_mesh.materialActive,
+                    m_mesh.materialFluorescenceLifetimes},
+                beta,
+                m_dndtPump,
+                m_dndtAse,
+                m_forwardAseContext.primaryMesh().cellMaterialIds.toDeviceView());
+        }
+
         void enqueueExponentialEuler()
         {
             alpaka::onHost::transform(
@@ -678,6 +722,10 @@ namespace hase::core
                     for(unsigned deviceIndex : compute.devices)
                         devices.emplace_back(devSelector.makeDevice(deviceIndex));
                     oneDidRun = true;
+#ifdef HASE_ENABLE_BENCHMARK
+                    hase::benchmark::ScopedRunContext benchmarkContext{sampleDevice, exec, compute, experiment};
+#endif
+                    BENCH(CompiledBackendSimulation);
                     CompiledSimulationRunner runner{std::move(devices), exec, experiment, compute, run, hostMesh};
                     runner.run(callback, receiveControl);
                     return 0;

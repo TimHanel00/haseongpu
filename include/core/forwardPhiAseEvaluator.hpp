@@ -11,6 +11,7 @@
 
 #include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
+#include <benchmark.hpp>
 #include <concepts/concepts.hpp>
 #include <core/Runtime.hpp>
 #include <core/calcForwardPhiAse.hpp>
@@ -342,6 +343,10 @@ namespace hase::core
             data::PhiAseResult& result,
             bool const allowDeviceResident = true)
         {
+#ifdef HASE_ENABLE_BENCHMARK
+            hase::benchmark::ScopedRunContext benchmarkContext{primaryDevice(), m_executor, compute, experiment};
+#endif
+            BENCH(AseEvaluation);
             bool const mpiMode = compute.parallelMode == ParallelMode::MPI;
 #if defined(MPI_FOUND) && !defined(DISABLE_MPI)
             if(mpiMode)

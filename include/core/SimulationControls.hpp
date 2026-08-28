@@ -72,6 +72,7 @@ namespace hase::core
         static inline std::string const MIDPOINT = "midpoint";
         static inline std::string const RUNGE_KUTTA_4 = "runge-kutta-4";
         static inline std::string const FROZEN_PHI_ASE_RUNGE_KUTTA_4 = "frozen-phi-ase-runge-kutta-4";
+        static inline std::string const FROZEN_SOURCES_RUNGE_KUTTA_4 = "frozen-sources-runge-kutta-4";
         static inline std::string const IMPLICIT_EULER = "implicit-euler";
         static inline std::string const EXPONENTIAL_EULER = "exponential-euler";
     };

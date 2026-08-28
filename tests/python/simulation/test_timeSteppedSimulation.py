@@ -18,6 +18,7 @@ from HASEonGPU import (
     ExponentialEuler,
     ExplicitEuler,
     FrozenPhiAseRungeKutta4,
+    FrozenSourcesRungeKutta4,
     GainMedium,
     Heun,
     ImplicitEuler,
@@ -712,6 +713,7 @@ def testTimeIntegrationSolversCanStepSimulation(
         Midpoint(),
         RungeKutta4(),
         FrozenPhiAseRungeKutta4(),
+        FrozenSourcesRungeKutta4(),
         ImplicitEuler(iterations=2),
         ExponentialEuler(),
     ]
