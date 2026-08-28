@@ -860,3 +860,113 @@ add_custom_target(
     assert (runtime_build / "built-config.txt").read_text(
         encoding="utf-8"
     ).strip() == "Release"
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="The lightweight compiler-launcher fixture uses GCC-style arguments",
+)
+def test_cppInstallExportsFindPackageConsumer(tmp_path):
+    dependency_prefix = tmp_path / "system dependencies"
+    build_dir = tmp_path / "hase build"
+    install_prefix = tmp_path / "hase install"
+    consumer_source = tmp_path / "consumer source"
+    consumer_build = tmp_path / "consumer build"
+    compiler_launcher = tmp_path / "emptyCompileLauncher.py"
+    _write_fake_system_dependencies(dependency_prefix)
+    system_openpmd_dir = _write_fake_system_openpmd(dependency_prefix)
+    _write_empty_compile_launcher(compiler_launcher)
+
+    configured = subprocess.run(
+        [
+            "cmake",
+            *_cmake_generator_arguments(),
+            "-S",
+            str(repoRoot),
+            "-B",
+            str(build_dir),
+            "-DHASE_ENABLE_PYTHON=OFF",
+            "-DHASE_TESTING=OFF",
+            "-DDISABLE_MPI=ON",
+            "-DHASE_SELECT_BACKEND_ALPAKA=ON",
+            "-DHASE_USE_SYSTEM_ALPAKA=ON",
+            (
+                "-Dalpaka_DIR="
+                f"{dependency_prefix / 'lib' / 'cmake' / 'alpaka'}"
+            ),
+            "-DHASE_OPENPMD_PROVIDER=system",
+            f"-DopenPMD_DIR={system_openpmd_dir}",
+            "-DHASE_BUILD_RELEASE=OFF",
+            f"-DCMAKE_INSTALL_PREFIX={install_prefix}",
+            (
+                "-DCMAKE_CXX_COMPILER_LAUNCHER="
+                f"{sys.executable};{compiler_launcher}"
+            ),
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert configured.returncode == 0, configured.stdout
+
+    built = subprocess.run(
+        ["cmake", "--build", str(build_dir)],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert built.returncode == 0, built.stdout
+    subprocess.run(
+        ["cmake", "--install", str(build_dir)],
+        check=True,
+    )
+
+    consumer_source.mkdir()
+    (consumer_source / "CMakeLists.txt").write_text(
+        """
+cmake_minimum_required(VERSION 3.24)
+project(HasePackageConsumer LANGUAGES CXX)
+find_package(HASEonGPU 2.2 CONFIG REQUIRED)
+if(NOT TARGET hase::core OR NOT TARGET hase::hase)
+    message(FATAL_ERROR "HASEonGPU did not export its public targets")
+endif()
+add_executable(consumer main.cpp)
+target_link_libraries(consumer PRIVATE hase::hase)
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (consumer_source / "main.cpp").write_text(
+        """
+#include <hase/version.hpp>
+
+int main()
+{
+    static_assert(HASEONGPU_VERSION_MAJOR == 2);
+    return 0;
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    consumer_prefix_path = f"{install_prefix};{dependency_prefix}"
+    consumed = subprocess.run(
+        [
+            "cmake",
+            *_cmake_generator_arguments(),
+            "-S",
+            str(consumer_source),
+            "-B",
+            str(consumer_build),
+            f"-DCMAKE_PREFIX_PATH={consumer_prefix_path}",
+        ],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert consumed.returncode == 0, consumed.stdout
+    subprocess.run(
+        ["cmake", "--build", str(consumer_build)],
+        check=True,
+    )

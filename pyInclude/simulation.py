@@ -257,17 +257,30 @@ class PhiASE:
         parser.add_argument("--relative-standard-error-threshold", type=float, default=None)
         parser.add_argument("--reflection-max-iterations", type=int, default=None)
         parser.add_argument("--reflection-tolerance", type=float, default=None)
+        reflections = parser.add_mutually_exclusive_group()
+        reflections.add_argument("--use-reflections", dest="use_reflections", action="store_true", default=None)
+        reflections.add_argument("--no-reflections", dest="use_reflections", action="store_false")
         parser.add_argument("--reflection-mode", choices=("direct", "srm"), default=None)
         parser.add_argument("--surface-reservoir-size", type=int, default=None)
         parser.add_argument("--srm-position-mode", choices=("exact", "centroid"), default=None)
         parser.add_argument("--repetitions", type=int, default=None)
         parser.add_argument("--adaptive-steps", type=int, default=None)
+        spectral_mode = parser.add_mutually_exclusive_group()
+        spectral_mode.add_argument("--monochromatic", dest="monochromatic", action="store_true", default=None)
+        spectral_mode.add_argument("--polychromatic", dest="monochromatic", action="store_false")
         parser.add_argument("--backend", default=None)
         parser.add_argument("--openpmd-backend", default=None)
         parser.add_argument("--parallel-mode", default=None)
         parser.add_argument("--max-gpus", type=int, default=None)
         parser.add_argument("--n-per-node", type=int, default=None)
+        vtk_output = parser.add_mutually_exclusive_group()
+        vtk_output.add_argument("--write-vtk", dest="write_vtk", action="store_true", default=None)
+        vtk_output.add_argument("--no-write-vtk", dest="write_vtk", action="store_false")
+        parser.add_argument("--devices", nargs="+", type=int, default=None)
+        parser.add_argument("--min-sample-range", type=int, default=None)
+        parser.add_argument("--max-sample-range", type=int, default=None)
         parser.add_argument("--rng-seed", type=int, default=None)
+        parser.add_argument("--ase-steps", type=int, default=None)
         return parser
 
     @classmethod
@@ -285,17 +298,24 @@ class PhiASE:
             "relative_standard_error_threshold": "relativeStandardErrorThreshold",
             "reflection_max_iterations": "reflectionMaxIterations",
             "reflection_tolerance": "reflectionTolerance",
+            "use_reflections": "useReflections",
             "reflection_mode": "reflectionMode",
             "surface_reservoir_size": "surfaceReservoirSize",
             "srm_position_mode": "srmPositionMode",
             "repetitions": "repetitions",
             "adaptive_steps": "adaptiveSteps",
+            "monochromatic": "monochromatic",
             "backend": "backend",
             "openpmd_backend": "openpmdBackend",
             "parallel_mode": "parallelMode",
             "max_gpus": "numDevices",
             "n_per_node": "nPerNode",
+            "write_vtk": "writeVtk",
+            "devices": "devices",
+            "min_sample_range": "minSampleRange",
+            "max_sample_range": "maxSampleRange",
             "rng_seed": "rngSeed",
+            "ase_steps": "ase_steps",
         }
         for arg_name, attr_name in mapping.items():
             value = getattr(args, arg_name, None)

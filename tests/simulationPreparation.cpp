@@ -164,7 +164,8 @@ TEST_CASE(
         return domain;
     };
 
-    auto makeMaterial = [](std::string name, double wavelength, double absorption, double emission, double density)
+    auto makeMaterial =
+        [](std::string name, double wavelength, double absorption, double emission, double density, double attenuation)
     {
         auto table = std::make_shared<CrossSectionTable>();
         table->wavelengths.values = {wavelength};
@@ -176,12 +177,13 @@ TEST_CASE(
         material->refractiveIndex = 1.8;
         material->fluorescenceLifetime = 1.0e-3;
         material->activeIonDensity = density;
+        material->bulkAttenuation = attenuation;
         material->crossSections = std::move(table);
         return material;
     };
     std::array materials{
-        makeMaterial("first gain material", 1030.0e-9, 1.0e-25, 2.0e-24, 2.76e26),
-        makeMaterial("second gain material", 1064.0e-9, 3.0e-25, 4.0e-24, 3.10e26)};
+        makeMaterial("first gain material", 1030.0e-9, 1.0e-25, 2.0e-24, 2.76e26, 0.5),
+        makeMaterial("second gain material", 1064.0e-9, 3.0e-25, 4.0e-24, 3.10e26, 1.5)};
 
     std::vector<std::shared_ptr<OpticalComponent>> components;
     std::vector<std::shared_ptr<Domain>> domains;
@@ -244,4 +246,5 @@ TEST_CASE(
     CHECK(state.trace.crossSectionAbsorption == std::vector<double>{1.0e-25, 3.0e-25});
     CHECK(state.trace.crossSectionEmission == std::vector<double>{2.0e-24, 4.0e-24});
     CHECK(state.trace.materialActiveIonDensities == std::vector<double>{2.76e26, 3.10e26});
+    CHECK(state.trace.materialBulkAttenuations == std::vector<double>{0.5, 1.5});
 }

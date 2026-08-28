@@ -145,9 +145,11 @@ gain--cladding adjacency. Independent meshes are concatenated as disconnected
 bodies without geometric welding; geometrically touching materials must
 therefore use a conforming shared topology.
 
-All gain components currently must reference the same resolved ``Material``
-object. The current backend accepts Tet4 ``VolumeTopology`` bindings and
-represents all passive cells with one constant coefficient. It rejects both
-unsupported cell structures and heterogeneous passive attenuation before
-launch. These are backend limits, not restrictions of the domain/component
-model.
+The backend accepts several material IDs in one trace. Each cell retains its
+component's resolved ``Material`` and therefore uses material-local cross
+sections, active-ion density, fluorescence lifetime, and ``bulkAttenuation``.
+Active and passive materials may use different attenuation coefficients.
+
+The current backend accepts Tet4 ``VolumeTopology`` bindings. Unsupported cell
+structures remain a backend limit rather than a restriction of the
+domain/component model.
