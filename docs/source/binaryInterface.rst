@@ -28,7 +28,7 @@ direct ASE request, Python constructs that graph from ``PhiASE``, the physical
 ``GainMedium``, its components, materials, cross-section tables, domains, and
 domain-local topology shards. The output ``phiAseResult`` namespace contains
 cell-centered flux, uncertainty, history counts, depletion rate, and
-reflection termination metadata. See :doc:`openpmdTransport` for the graph and
+boundary-pass termination metadata. See :doc:`openpmdTransport` for the graph and
 on-disk projection.
 
 Compiled simulation mode

@@ -17,9 +17,7 @@ evolving excitation state.
        relativeStandardErrorThreshold=0.05,
        enableDiagnostics=True,
        useReflections=True,
-       reflectionMode="srm",
-       surfaceReservoirSize=256,
-       srmPositionMode="centroid",
+       reflectionMode="direct",
        backend="Host_Cpu_CpuSerial",
        openpmdBackend="auto",
        rngSeed=1234,
@@ -44,8 +42,9 @@ create a second transport copy:
 
 ``getResults`` raises ``RuntimeError`` before a successful run.
 The result includes ``phiAse``, ``standardError``,
-``relativeStandardError``, ``totalRays``, and ``dndtAse`` plus reflected-pass
-termination information when reflections are enabled. A time-stepped
+``relativeStandardError``, ``totalRays``, and ``dndtAse`` plus boundary-pass
+termination information when reflection or inter-component transmission is
+active. A time-stepped
 ``Simulation`` exposes the same raw object as ``TimeStepState.aseResult``.
 
 Sampling controls
@@ -91,10 +90,13 @@ Sampling controls
    spectrum.
 
 Each direct history samples a spectral bin, a source cell with probability
-proportional to ``betaVolume * cellVolume``, a uniform point in that Tet4 cell,
-and an isotropic direction. It then deposits a gain-weighted track-length score
-in every traversed cell. Spectral bins and source cells are stratified over the
-global batch, including when devices or MPI ranks split that batch. See
+proportional to its spontaneous-source strength, a uniform point in that Tet4
+cell, and an isotropic direction. The global count is divided among optical
+components from their current total source strengths. Setting
+``OpticalComponent.aseRays`` reserves that component's exact final primary-ray
+count; unspecified positive-source components share the remainder. It then
+deposits a gain-weighted track-length score in every traversed cell. Spectral
+bins and source cells are stratified within each domain and statistical batch. See
 :ref:`forward-ase-model` for normalization and uncertainty equations.
 
 Forward traversal has no fixed cell-crossing limit. A valid ray continues until
@@ -103,24 +105,25 @@ mesh resolution cannot make a ray fail merely because it requires more
 crossings. With diagnostics enabled, invalid geometric transitions and
 non-finite contributions are counted as dropped rays.
 
-Reflections
------------
+Domain boundaries
+-----------------
 
 ``useReflections`` enables specular ASE reflection on domain-assigned
 ``SurfaceOptics``. Direct and reflected rays travel to a physical mesh boundary;
 there is no configurable forward ray-length cutoff.
 
 ``reflectionMode``
-   Selects the reflected-source representation. ``"direct"`` retains one exact
-   boundary-intersection candidate for every launched ray before constructing
-   the next reflected pass. ``"srm"`` first reduces those candidates to a
-   bounded statistical reservoir for each boundary face. Both modes relaunch a
-   fixed ray batch on each reflection pass. The default remains ``"direct"``.
+   Selects the boundary-history representation. ``"direct"`` (the default)
+   stores up to two compact exact-intersection children per boundary hit and
+   performs systematic particle combing. ``"srm"`` instead offers both children
+   to a bounded weighted sample per mesh face. Both policies route transmitted
+   histories between adjacent optical components and keep their large buffers,
+   scans, and selections on the accelerator.
 
 ``surfaceReservoirSize``
    Number of statistically retained ray records per boundary face when
-   ``reflectionMode="srm"``. Reflected weight is accumulated independently of
-   this bounded record count.
+   ``reflectionMode="srm"``. Reflected and transmitted weight is accumulated
+   independently of this bounded record count.
 
 ``srmPositionMode``
    Selects where retained SRM records are relaunched. ``"exact"`` retains each
@@ -130,24 +133,37 @@ there is no configurable forward ray-length cutoff.
    faces times ``surfaceReservoirSize``. This setting affects only
    ``reflectionMode="srm"``; direct mode always uses exact intersections.
 
+``boundaryMaxPasses``
+   Hard limit for direct or SRM boundary passes. ``None`` chooses a limit from
+   the number of domains and the reflection iteration setting.
+
 ``reflectionMaxIterations``
-   Maximum surface-resampling passes after the direct pass. The positive integer
-   environment override is ``HASE_SRM_MAX_ITERATIONS``.
+   Legacy reflection-pass setting used when deriving the automatic boundary
+   cap. For ``reflectionMode="srm"``, the positive integer environment
+   override is ``HASE_SRM_MAX_ITERATIONS``.
 
 ``reflectionTolerance``
    Stop when remaining reflected source weight, relative to the direct pass,
    falls below this fraction.
 
-The runtime reports ``srmStatus``, ``srmPasses``, ``srmRemainingFraction``,
-``srmMaxIterations``, and ``srmDivergenceStreak``. Terminal status can be
-``converged``, ``stable``, ``diverged``, or ``max_iterations``; ``disabled``
-means reflections were not requested. ``HASE_SRM_DIVERGENCE_STREAK`` controls
-how many consecutive growing passes report divergence.
+The runtime reports ``boundaryStatus``, ``boundaryPasses``,
+``boundaryRemainingFraction``, ``boundaryMaxPasses``, and
+``boundaryDivergenceStreak``. Terminal status can be ``converged``, ``stable``,
+``diverged``, or ``maxPasses``; ``disabled`` means neither reflections nor
+inter-component routing required boundary passes.
+``HASE_SRM_DIVERGENCE_STREAK`` controls how many consecutive growing SRM passes
+report divergence.
 
-The current boundary model uses configured constant reflectivity and total
-internal reflection. It does not calculate Fresnel coefficients or launch a
-transmitted/refracted ray. See :ref:`ase-surface-reflections` for the physical
-model and termination criteria.
+With ``useReflections`` enabled, each eligible interface hit creates both
+histories: the reflected child has weight ``R W`` and the transmitted child has
+weight ``(1-R) W``. Total internal reflection creates only a reflected child
+with weight ``W``. Disabling reflections discards the reflected contribution.
+Particle combing then restores the configured per-domain population: discarded
+histories transfer their represented weight to selected histories, and
+histories may be duplicated when a domain has too few candidates. The model
+uses configured constant reflectivity and Snell refraction; it does not
+calculate Fresnel or polarization-dependent coefficients. See
+:ref:`ase-surface-reflections`.
 
 Compute and transport
 ---------------------
@@ -186,6 +202,7 @@ YAML and CLI helpers
        surface_reservoir_size: 256
        srm_position_mode: centroid
        reflection_max_iterations: 40
+       boundary_max_passes: 256
        backend: Host_Cpu_CpuSerial
        openpmd_backend: auto
        parallel_mode: single

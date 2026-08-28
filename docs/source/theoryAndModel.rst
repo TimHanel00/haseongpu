@@ -229,31 +229,57 @@ contributing an invalid value.
 
 .. _ase-surface-reflections:
 
-Surface Reflections
--------------------
+Domain-boundary transport
+-------------------------
 
-When reflections are enabled, direct rays still propagate to a physical mesh
-boundary. Domain-assigned ``SurfaceOptics`` determines the reflected fraction.
-The current model applies specular reflection with either total internal
-reflection or a configured constant reflectivity.
+Every optical component is an ASE scheduling domain. The global primary-ray
+count is divided among domains from their integrated spontaneous-source
+strength, except for exact counts reserved by ``OpticalComponent.aseRays``.
+Workers receive indivisible ``(domainId, batchId)`` items. Estimated work
+combines the item's ray count, the domain cell count, boundary faces, resident
+bytes, worker capacity, and node locality.
 
-The surface-resampling method (SRM) records at most one reflected boundary
-candidate per input history. A fixed-order cumulative sum preserves the exact
-candidate weights, and seed-driven systematic resampling selects the source
-histories for the next pass with replacement. The new pass contributes through
-the same track-length estimator and records the candidates for the following
-pass.
+The current execution context still keeps the complete prepared trace on every
+worker device. The schedule exposes each worker's required domain set so a
+later storage change can replace that replication with domain shards without
+changing work-item identity. Boundary candidates, CDFs, scans, selections, and
+alternating pass buffers remain device-resident and are enqueued on non-blocking
+queues. A worker downloads its combined raw accumulator once per adaptive
+launch; boundary pass control downloads only one aggregate-weight scalar.
 
-Reflection terminates when the remaining source weight is below
+At a domain boundary, configured constant reflectivity :math:`R` splits incoming
+weight :math:`W` deterministically. The specularly reflected child receives
+:math:`R W`, and the Snell-refracted transmitted child receives
+:math:`(1-R)W`. Total internal reflection produces only a reflected child with
+weight :math:`W`. Disabling reflections discards the reflected contribution but
+does not change the transmitted child's weight.
+
+The direct policy stores both boundary children in persistent
+structure-of-arrays device buffers. A per-domain systematic particle comb
+restores the requested population before the next pass. The comb preserves the
+sum of candidate weights, transfers the weight represented by discarded
+candidates to retained histories, and duplicates histories when too few
+candidates reach a domain. Thus population control changes the number of
+histories, not the represented boundary weight. Domains with no primary
+emission reserve a minimal relaunch slot when the batch is large enough,
+allowing transmitted histories to enter passive components.
+
+The surface-reservoir method (SRM) retains a bounded weighted sample of the
+direction, spectral bin, and weight from both children arriving at their target
+faces. Per-domain face combing defines the source distribution for the next
+pass. The new pass contributes through the same track-length estimator and
+fills the reservoir for the following pass.
+
+Boundary propagation terminates when the remaining source weight is below
 ``reflectionTolerance``, reaches a non-growing stable state, exceeds the
-configured divergence streak, or reaches ``reflectionMaxIterations``. The
-result exposes the SRM status, pass count, remaining fraction, and the active
-safety limits.
+configured divergence streak, or reaches ``boundaryMaxPasses``. The result
+exposes neutral boundary status, pass count, remaining fraction, and active
+safety limits for either boundary policy.
 
-The ASE boundary model does not yet launch a transmitted or refracted ray and
-does not calculate angle- or polarization-dependent Fresnel coefficients. A
-non-reflected fraction leaves the simulated domain. Refractive indices are
-currently used to detect total internal reflection only.
+The ASE boundary model does not calculate angle- or polarization-dependent
+Fresnel coefficients. Transmission is available only across prepared,
+conforming component interfaces; the transmitted fraction at an exterior
+surface leaves the simulated assembly.
 
 ASE Population Derivative
 -------------------------
@@ -338,10 +364,10 @@ Model Limits
 ------------
 
 The current transport model does not include polarization, Fresnel
-transmission, detailed coating stacks, general internal optical interfaces,
+coefficients, detailed coating stacks, non-conforming internal optical interfaces,
 unlimited pump-cavity recirculation, or custom Python transport callbacks
 inside compiled time steps. Volume transport supports Tet4 cells. Runtime and
-available device memory limit practical ray and reflected-candidate counts.
+available device memory limit practical ray and boundary-buffer counts.
 
 References
 ----------

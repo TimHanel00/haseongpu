@@ -61,6 +61,7 @@ references are errors.
      crystal:
        domain: crystal_volume
        material: yb_yag
+       ase_rays: 80000
        surface_optics:
          - domain: pump_face
            reflectivity: 0.0
@@ -81,6 +82,10 @@ references are errors.
        value: 0.0
      phi_ase:
        ase_steps: 150
+       min_rays: 100000
+       max_rays: 100000
+       reflection_mode: direct
+       boundary_max_passes: 256
      time_integrator:
        method: frozen_phi_ase_runge_kutta4
      time_step_size: 2.0e-5

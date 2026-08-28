@@ -56,6 +56,7 @@ An ``OpticalComponent`` accepts one non-empty volume domain and one material:
        domain=doped,
        material=ybYag,
        name="crystal",
+       aseRays=80_000,
    )
    claddingComponent = OpticalComponent(
        domain=passive,
@@ -77,6 +78,12 @@ Components in one simulation must not overlap. Gain and cladding therefore
 partition the mesh: the gain component selects the active cells and the
 cladding component selects different cells. Their domain union reconstructs
 the occupied volume without overlaying two materials on the same cell.
+
+``aseRays`` optionally reserves an exact primary ASE count for this component.
+``PhiASE.minRays``, ``maxRays``, or ``forwardRayCount`` remain global totals.
+When ``aseRays`` is omitted, the backend allocates the unreserved total from
+the component's current spontaneous-source strength. Manual counts must fit
+inside the global total and may only be assigned to positive-source domains.
 
 The refractive indices in ``SurfaceOptics`` describe the two sides of the
 selected boundary. They can be taken from the component material, but remain

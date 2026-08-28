@@ -1,10 +1,11 @@
 MPI Execution
 =============
 
-HASEonGPU can distribute one ASE calculation over multiple MPI ranks.  MPI
-splits the sample index range across ranks; each rank then uses the devices
-assigned on its node. MPI changes execution topology, not the physical model or
-openPMD record layout.
+HASEonGPU can distribute one ASE calculation over multiple MPI ranks. The
+domain scheduler assigns indivisible ``(domainId, batchId)`` work items to
+rank-owned devices. It balances estimated ray/mesh work while considering
+resident bytes and node locality. MPI changes execution topology, not the
+physical model or openPMD record layout.
 
 Build Requirement
 -----------------
@@ -24,8 +25,10 @@ Build with MPI support before selecting ``parallelMode="mpi"`` or YAML
 Execution Model
 ---------------
 
-* MPI ranks divide the global sample range.
-* Ranks on the same node divide the local device list.
+* MPI ranks participate as workers with stable rank, node, and device identity.
+* Each rank owns one device selected from the node-local visible device list.
+* Domain/batch work is never split after assignment.
+* Raw batch accumulators are reduced before one global normalization.
 * GPU IDs printed by HASEonGPU are local to each node.
 
 For example, with two nodes and four visible GPUs per node, ranks on both nodes
@@ -46,8 +49,8 @@ Alpaka compute and openPMD storage backends remain independent selections; see
    splits samples across ranks.
 
 ``numDevices``
-   Maximum number of local devices one node should use.  In MPI mode,
-   HASEonGPU divides those devices across ranks on the same node.
+   Maximum number of local devices made visible to the run. In MPI mode each
+   rank selects one of those devices from its node-local rank index.
 
 ``nPerNode`` / ``n_per_node``
    Number of MPI ranks per allocated node passed to ``mpiexec -npernode``.
@@ -115,9 +118,9 @@ ranks may wait indefinitely in a collective while the launcher process remains
 alive. The frontend streaming watchdog checks the launched process; it does not
 prove that every worker rank is making progress.
 
-MPI reductions require exactly one producer for each statistical batch and
-combine raw contributions before normalization. This detects an inconsistent
-batch assignment when every rank reaches the collective, but it does not detect
+MPI reductions require exactly one producer for each domain/batch work item and
+combine raw contributions before normalization. This detects inconsistent
+global ray accounting when every rank reaches the collective, but it does not detect
 plausible corrupted values returned by a participating worker. HASEonGPU has no
 redundant computation or result-integrity mechanism for that case.
 
