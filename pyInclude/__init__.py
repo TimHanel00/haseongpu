@@ -58,6 +58,7 @@ from .timeIntegration import (
     ExplicitEuler,
     ExponentialEuler,
     FrozenPhiAseRungeKutta4,
+    FrozenSourcesRungeKutta4,
     Heun,
     ImplicitEuler,
     Midpoint,

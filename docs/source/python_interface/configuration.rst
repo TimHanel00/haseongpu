@@ -86,6 +86,12 @@ references are errors.
      time_step_size: 2.0e-5
      simulation_steps: 150
 
+For a step that evaluates pump and ASE transport once and freezes both source
+rates across all four RK4 stages, use
+``method: frozen_sources_runge_kutta4``. This differs from
+``frozen_phi_ase_runge_kutta4``, which freezes the ASE flux but reevaluates the
+pump rate at the intermediate RK4 states.
+
 ``yb_yag`` is only a local reference name. ``path`` and ``key`` choose the
 database record. YAML bare dimensional values use SI: kelvin, ``m^-3``,
 seconds, metres, ``m^2``, and ``m^-1``.

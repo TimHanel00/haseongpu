@@ -22,6 +22,7 @@ legacyPhiAseConfigFile = Path(__file__).parent / "data" / "cfg" / "legacy_config
 requiredHaseApi = (
     "AlpakaBackends",
     "Domain",
+    "FrozenSourcesRungeKutta4",
     "GainMedium",
     "Material",
     "OpticalComponent",

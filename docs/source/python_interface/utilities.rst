@@ -11,16 +11,19 @@ The public solver descriptors are:
 * ``Midpoint()``
 * ``RungeKutta4()``
 * ``FrozenPhiAseRungeKutta4()``
+* ``FrozenSourcesRungeKutta4()``
 * ``ImplicitEuler(iterations=8, tolerance=1e-10)``
 * ``ExponentialEuler()``
 
 Python serializes the descriptor name and controls; the C++/Alpaka backend
 performs the integration on cell-centered fields. Standard RK4 evaluates ASE
 at each stage. ``FrozenPhiAseRungeKutta4`` reuses the first ASE result for the
-remaining stages while pump transport is still evaluated. Custom Python time
-integrators cannot run inside the compiled loop. See
-:ref:`pump-and-time-stepping` for how these evaluations enter the population
-equation.
+remaining stages while pump transport is still evaluated.
+``FrozenSourcesRungeKutta4`` evaluates pump and ASE transport once at the
+beginning of the step and holds both resulting source-rate fields fixed for all
+four RK4 stages; only fluorescence decay follows each intermediate stage.
+Custom Python time integrators cannot run inside the compiled loop. See
+:ref:`pump-and-time-stepping` for how these evaluations enter the population equation.
 
 Tet4 VTK
 --------
