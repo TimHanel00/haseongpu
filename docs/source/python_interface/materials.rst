@@ -74,8 +74,9 @@ An active material requires a fluorescence lifetime, cross sections, and
 non-zero emission data. A library record may be resolved with zero density for
 inspection or subsequent parameterization. Before that material is placed in a
 ``GainMedium``, the run condition must supply a positive density.
-``bulkAttenuation`` is not required for a gain material. The current backend
-does not apply a non-zero passive loss coefficient in active gain cells.
+``bulkAttenuation`` is not required for a gain material. When specified, the
+backend subtracts it from the material-local stimulated gain coefficient in
+active cells as well as applying it as loss in passive cells.
 
 Passive materials and bulk attenuation
 --------------------------------------
@@ -217,6 +218,7 @@ volumes. Both are ``OpticalComponent`` objects, but only the active crystal is
 placed in ``GainMedium``. It constructs the optional exterior surface from the
 domain union and assigns a reflective coating to one cladding face. Surface
 reflectivity and volumetric attenuation remain independent properties. The
-current backend accepts several gain components when they reference the same
-resolved ``Material`` object and one common attenuation value across passive
-cells. Component and domain composition is described in :doc:`gain_medium`.
+backend assigns each distinct resolved material its own material ID. Gain
+components may therefore use different spectra and active-ion parameters, and
+active or passive components may use distinct attenuation coefficients.
+Component and domain composition is described in :doc:`gain_medium`.

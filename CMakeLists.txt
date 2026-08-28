@@ -53,6 +53,7 @@ project(
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 20)
 include(CMakePrintHelpers)
+include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
 set(HASE_FETCHCONTENT_EXCLUDE_FROM_ALL)
@@ -719,6 +720,8 @@ endif()
 # core library with all sources
 add_library(hase_core INTERFACE)
 add_library(hase::core ALIAS hase_core)
+set_target_properties(hase_core PROPERTIES EXPORT_NAME core)
+target_compile_features(hase_core INTERFACE cxx_std_20)
 
 target_compile_options(
     hase_core
@@ -913,7 +916,12 @@ target_compile_definitions(
         HASE_EXACT_PUMP_CACHE=$<BOOL:${HASE_EXACT_PUMP_CACHE}>
         HASE_RESERVOIR_SLOTS_PUMP=${HASE_COMPILED_RESERVOIR_SLOTS_PUMP}
 )
-target_link_libraries(hase_core INTERFACE alpaka::alpaka)
+add_library(hase::alpaka_dependency INTERFACE IMPORTED GLOBAL)
+set_property(
+    TARGET hase::alpaka_dependency
+    PROPERTY INTERFACE_LINK_LIBRARIES alpaka::alpaka
+)
+target_link_libraries(hase_core INTERFACE hase::alpaka_dependency)
 if(TARGET CUDA::cudart)
     target_link_libraries(hase_core INTERFACE CUDA::cudart)
     list(APPEND HASE_BUILD_TREE_RPATH "$<TARGET_FILE_DIR:CUDA::cudart>")
@@ -985,8 +993,24 @@ endforeach()
 alpaka_finalize(calcPhiASE)
 
 if(HASE_INSTALL_CPP_INTERFACE)
+    set(HASE_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/HASEonGPU")
+    set(HASE_CUDA_RUNTIME_EXPORTED OFF)
+    if(TARGET CUDA::cudart)
+        set(HASE_CUDA_RUNTIME_EXPORTED ON)
+    endif()
+    configure_package_config_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/HASEonGPUConfig.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/HASEonGPUConfig.cmake"
+        INSTALL_DESTINATION "${HASE_INSTALL_CMAKEDIR}"
+    )
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/HASEonGPUConfigVersion.cmake"
+        VERSION "${PROJECT_VERSION}"
+        COMPATIBILITY SameMajorVersion
+    )
     install(
         TARGETS hase hase_core calcPhiASE HaseAlpakaBackendNames
+        EXPORT HASEonGPUTargets
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
@@ -995,6 +1019,18 @@ if(HASE_INSTALL_CPP_INTERFACE)
     install(
         DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+    install(
+        EXPORT HASEonGPUTargets
+        FILE HASEonGPUTargets.cmake
+        NAMESPACE hase::
+        DESTINATION "${HASE_INSTALL_CMAKEDIR}"
+    )
+    install(
+        FILES
+            "${CMAKE_CURRENT_BINARY_DIR}/HASEonGPUConfig.cmake"
+            "${CMAKE_CURRENT_BINARY_DIR}/HASEonGPUConfigVersion.cmake"
+        DESTINATION "${HASE_INSTALL_CMAKEDIR}"
     )
 endif()
 

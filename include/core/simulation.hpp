@@ -322,9 +322,6 @@ namespace hase::core
                         hase::utils::ray_histogram(convergenceRayCounts, rayCount);
                         dout(V_STAT) << std::endl;
                     }
-                    // Cleanup device memory
-                    // TODO: replace by smart pointer for device memory
-                    std::cout << " " << "\n";
                     return 0;
                 },
                 backends);

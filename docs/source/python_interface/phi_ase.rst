@@ -181,4 +181,15 @@ YAML and CLI helpers
 
 Keyword arguments override file values. Material spectra are attached later by
 ``Simulation``. ``addArguments`` and ``fromArgs`` add the same controls to an
-``argparse`` command.
+``argparse`` command. Boolean pairs allow either a constructor default or a
+loaded YAML value to be overridden explicitly:
+
+.. code-block:: console
+
+   --use-reflections | --no-reflections
+   --monochromatic | --polychromatic
+   --write-vtk | --no-write-vtk
+
+Explicit device IDs use ``--devices ID [ID ...]``. Inclusive sample bounds use
+``--min-sample-range`` and ``--max-sample-range``; ``--ase-steps`` controls the
+outer ASE-active step count.

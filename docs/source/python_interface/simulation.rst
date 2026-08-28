@@ -25,12 +25,11 @@ and evolving excitation, solver and pump configuration, and time integration.
 
 Components outside ``gainMedium`` are passive transport regions. Their
 materials may define ``bulkAttenuation`` for volumetric loss; omission means
-zero bulk loss. The current backend requires one common value across all
-passive cells. Their ``active`` flag must be false, so their excitation remains
-zero. All gain components require an active material, positive
-``activeIonDensity``, and the same resolved ``Material`` object. Unsupported
-heterogeneous material response is rejected instead of being selected or
-averaged silently.
+zero bulk loss. Their ``active`` flag must be false, so their excitation remains
+zero. Gain components require an active material and positive
+``activeIonDensity``. Components may reference different resolved materials;
+each cell retains its material ID and uses that material's spectroscopic and
+attenuation data without selecting or averaging between materials.
 
 Physical validation
 -------------------

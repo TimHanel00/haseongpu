@@ -223,12 +223,24 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
         "32",
         "--openpmd-backend",
         "adios-sst",
+        "--use-reflections",
         "--reflection-mode",
         "srm",
         "--surface-reservoir-size",
         "256",
         "--srm-position-mode",
         "centroid",
+        "--monochromatic",
+        "--write-vtk",
+        "--devices",
+        "2",
+        "4",
+        "--min-sample-range",
+        "3",
+        "--max-sample-range",
+        "11",
+        "--ase-steps",
+        "7",
     ])
 
     fromArgs = PhiASE.fromArgs(args)
@@ -236,9 +248,16 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
     assert fromArgs.minRays == 32
     assert fromArgs.maxRays == 10000
     assert fromArgs.openpmdBackend == "adios-sst"
+    assert fromArgs.useReflections is True
     assert fromArgs.reflectionMode == "srm"
     assert fromArgs.surfaceReservoirSize == 256
     assert fromArgs.srmPositionMode == "centroid"
+    assert fromArgs.monochromatic is True
+    assert fromArgs.writeVtk is True
+    assert fromArgs.devices == [2, 4]
+    assert fromArgs.minSampleRange == 3
+    assert fromArgs.maxSampleRange == 11
+    assert fromArgs.ase_steps == 7
 
 
 @pytest.mark.parametrize(
