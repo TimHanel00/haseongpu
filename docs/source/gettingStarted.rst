@@ -129,10 +129,32 @@ The configurator prints a command of this form when options are selected:
 Run the printed command if you did not let the configurator install
 immediately. The pip build updates the durable runtime and installs only the
 thin frontend; it does not install the public C++ headers or library. Those
-artifacts require an explicit source CMake installation, and a downstream
-``find_package(HASEonGPU)`` export is not currently provided. ``CMAKE_ARGS`` is
-how you pass build options such as the openPMD
-provider, MPI mode, Alpaka choices, and native CPU optimization setting.
+artifacts and their CMake package require an explicit source CMake installation.
+``CMAKE_ARGS`` is how you pass build options such as the openPMD provider, MPI
+mode, Alpaka choices, and native CPU optimization setting.
+
+For a C++ installation, configure and install the source tree with
+``HASE_INSTALL_CPP_INTERFACE=ON`` (the default):
+
+.. code-block:: bash
+
+   cmake -S . -B build/hase-install -DHASE_ENABLE_PYTHON=OFF
+   cmake --build build/hase-install
+   cmake --install build/hase-install --prefix /path/to/hase-prefix
+
+A downstream CMake project can then consume the installed library:
+
+.. code-block:: cmake
+
+   find_package(HASEonGPU CONFIG REQUIRED)
+   target_link_libraries(myTarget PRIVATE hase::hase)
+
+Add ``/path/to/hase-prefix`` to ``CMAKE_PREFIX_PATH`` if it is outside CMake's
+standard search locations. The installed package resolves the Alpaka, openPMD,
+and enabled MPI or CUDA dependencies recorded by its exported targets. This C++
+package is separate from the thin Python frontend: rebuilding its durable
+runtime still updates an already installed frontend without rebuilding the
+wheel.
 
 To keep the runtime somewhere other than ``build/``, let the configurator
 select and remember it:

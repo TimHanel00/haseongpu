@@ -1,0 +1,26 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(alpaka CONFIG)
+find_dependency(openPMD CONFIG)
+
+if(@HASE_MPI_ENABLED@)
+    find_dependency(MPI COMPONENTS CXX)
+endif()
+
+if(@HASE_CUDA_RUNTIME_EXPORTED@)
+    find_dependency(CUDAToolkit 12.5)
+endif()
+
+if(NOT TARGET hase::alpaka_dependency)
+    add_library(hase::alpaka_dependency INTERFACE IMPORTED)
+    set_property(
+        TARGET hase::alpaka_dependency
+        PROPERTY INTERFACE_LINK_LIBRARIES alpaka::alpaka
+    )
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/HASEonGPUTargets.cmake")
+
+check_required_components(HASEonGPU)
