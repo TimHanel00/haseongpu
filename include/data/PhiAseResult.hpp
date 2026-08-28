@@ -13,36 +13,36 @@
 
 namespace hase::data
 {
-    /** @brief Termination state of the forward reflection iteration. */
-    enum class SrmStatus
+    /** @brief Termination state of domain-boundary propagation. */
+    enum class BoundaryStatus
     {
         disabled,
         converged,
         stable,
         diverged,
-        maxIterations
+        maxPasses
     };
 
     /**
-     * @param status Reflection-iteration termination state.
+     * @param status Domain-boundary termination state.
      * @return Stable lowercase transport spelling of `status`.
      */
-    [[nodiscard]] inline char const* toString(SrmStatus const status)
+    [[nodiscard]] inline char const* toString(BoundaryStatus const status)
     {
         switch(status)
         {
-        case SrmStatus::disabled:
+        case BoundaryStatus::disabled:
             return "disabled";
-        case SrmStatus::converged:
+        case BoundaryStatus::converged:
             return "converged";
-        case SrmStatus::stable:
+        case BoundaryStatus::stable:
             return "stable";
-        case SrmStatus::diverged:
+        case BoundaryStatus::diverged:
             return "diverged";
-        case SrmStatus::maxIterations:
-            return "max_iterations";
+        case BoundaryStatus::maxPasses:
+            return "maxPasses";
         }
-        return "max_iterations";
+        return "maxPasses";
     }
 
     /** @brief Cell-ordered ASE estimates, uncertainty, diagnostics, and depletion rates. */
@@ -57,22 +57,22 @@ namespace hase::data
             std::vector<unsigned> totalRays,
             std::vector<double> dndtAse,
             std::vector<unsigned> droppedRays = {},
-            SrmStatus srmStatus = SrmStatus::disabled,
-            unsigned srmPasses = 0u,
-            double srmRemainingFraction = 0.0,
-            unsigned srmMaxIterations = 0u,
-            unsigned srmDivergenceStreak = 0u)
+            BoundaryStatus boundaryStatus = BoundaryStatus::disabled,
+            unsigned boundaryPasses = 0u,
+            double boundaryRemainingFraction = 0.0,
+            unsigned boundaryMaxPasses = 0u,
+            unsigned boundaryDivergenceStreak = 0u)
             : phiAse(std::move(phiAse))
             , standardError(std::move(standardError))
             , relativeStandardError(std::move(relativeStandardError))
             , totalRays(std::move(totalRays))
             , dndtAse(std::move(dndtAse))
             , droppedRays(std::move(droppedRays))
-            , srmStatus(srmStatus)
-            , srmPasses(srmPasses)
-            , srmRemainingFraction(srmRemainingFraction)
-            , srmMaxIterations(srmMaxIterations)
-            , srmDivergenceStreak(srmDivergenceStreak)
+            , boundaryStatus(boundaryStatus)
+            , boundaryPasses(boundaryPasses)
+            , boundaryRemainingFraction(boundaryRemainingFraction)
+            , boundaryMaxPasses(boundaryMaxPasses)
+            , boundaryDivergenceStreak(boundaryDivergenceStreak)
         {
             if(this->droppedRays.empty())
                 this->droppedRays.assign(this->phiAse.size(), 0u);
@@ -84,10 +84,10 @@ namespace hase::data
         std::vector<unsigned> totalRays;
         std::vector<double> dndtAse;
         std::vector<unsigned> droppedRays;
-        SrmStatus srmStatus = SrmStatus::disabled;
-        unsigned srmPasses = 0u;
-        double srmRemainingFraction = 0.0;
-        unsigned srmMaxIterations = 0u;
-        unsigned srmDivergenceStreak = 0u;
+        BoundaryStatus boundaryStatus = BoundaryStatus::disabled;
+        unsigned boundaryPasses = 0u;
+        double boundaryRemainingFraction = 0.0;
+        unsigned boundaryMaxPasses = 0u;
+        unsigned boundaryDivergenceStreak = 0u;
     };
 } // namespace hase::data

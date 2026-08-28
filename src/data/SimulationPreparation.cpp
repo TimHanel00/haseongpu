@@ -516,6 +516,261 @@ namespace hase::internal::simulationPreparation
         return result;
     }
 
+    TraceData extractAseDomainTrace(
+        TraceData const& global,
+        std::vector<unsigned> const& globalCells,
+        std::vector<std::uint32_t>& localToGlobalPoints)
+    {
+        std::vector<int> globalToLocalCell(global.numberOfCells, -1);
+        for(std::size_t local = 0u; local < globalCells.size(); ++local)
+            globalToLocalCell.at(globalCells[local]) = static_cast<int>(local);
+
+        std::vector<int> globalToLocalPoint(global.numberOfMeshPoints, -1);
+        for(auto const globalCell : globalCells)
+            for(std::size_t vertex = 0u; vertex < global.numberOfCellVertices; ++vertex)
+            {
+                auto const globalPoint = global.cellPointIndices.at(globalCell * global.numberOfCellVertices + vertex);
+                if(globalToLocalPoint.at(globalPoint) < 0)
+                {
+                    globalToLocalPoint[globalPoint] = static_cast<int>(localToGlobalPoints.size());
+                    localToGlobalPoints.push_back(static_cast<std::uint32_t>(globalPoint));
+                }
+            }
+
+        std::vector<double> points(3u * localToGlobalPoints.size());
+        for(std::size_t local = 0u; local < localToGlobalPoints.size(); ++local)
+            for(std::size_t coordinate = 0u; coordinate < 3u; ++coordinate)
+                points[coordinate * localToGlobalPoints.size() + local]
+                    = global.points[coordinate * global.numberOfMeshPoints + localToGlobalPoints[local]];
+
+        std::vector<unsigned> cellPointIndices;
+        std::vector<unsigned> cellTypes;
+        std::vector<int> cellFaces;
+        std::vector<int> neighborCells;
+        std::vector<int> neighborLocalFaces;
+        std::vector<int> faceBoundaries;
+        std::vector<double> cellVolumes;
+        std::vector<double> cellCenters(3u * globalCells.size());
+        std::vector<double> betaVolume;
+        std::vector<unsigned> cellMaterialIds;
+        cellPointIndices.reserve(globalCells.size() * global.numberOfCellVertices);
+        cellTypes.reserve(globalCells.size());
+        cellFaces.reserve(globalCells.size() * global.numberOfFacesPerCell * data::tet4FaceWidth);
+        neighborCells.reserve(globalCells.size() * global.numberOfFacesPerCell);
+        neighborLocalFaces.reserve(globalCells.size() * global.numberOfFacesPerCell);
+        faceBoundaries.reserve(globalCells.size() * global.numberOfFacesPerCell);
+        cellVolumes.reserve(globalCells.size());
+        betaVolume.reserve(globalCells.size());
+        cellMaterialIds.reserve(globalCells.size());
+
+        for(std::size_t localCell = 0u; localCell < globalCells.size(); ++localCell)
+        {
+            auto const globalCell = globalCells[localCell];
+            cellTypes.push_back(global.cellTypes.at(globalCell));
+            cellVolumes.push_back(global.cellVolumes.at(globalCell));
+            betaVolume.push_back(global.betaVolume.at(globalCell));
+            cellMaterialIds.push_back(global.cellMaterialIds.at(globalCell));
+            for(std::size_t coordinate = 0u; coordinate < 3u; ++coordinate)
+                cellCenters[coordinate * globalCells.size() + localCell]
+                    = global.cellCenters[coordinate * global.numberOfCells + globalCell];
+            for(std::size_t vertex = 0u; vertex < global.numberOfCellVertices; ++vertex)
+            {
+                auto const globalPoint = global.cellPointIndices.at(globalCell * global.numberOfCellVertices + vertex);
+                cellPointIndices.push_back(static_cast<unsigned>(globalToLocalPoint.at(globalPoint)));
+            }
+            for(std::size_t face = 0u; face < global.numberOfFacesPerCell; ++face)
+            {
+                auto const globalFace = globalCell * global.numberOfFacesPerCell + face;
+                for(std::size_t vertex = 0u; vertex < data::tet4FaceWidth; ++vertex)
+                {
+                    auto const globalPoint = global.cellFaces.at(globalFace * data::tet4FaceWidth + vertex);
+                    cellFaces.push_back(globalToLocalPoint.at(static_cast<std::size_t>(globalPoint)));
+                }
+                auto const globalNeighbor = global.cellNeighborCells.at(globalFace);
+                auto const localNeighbor
+                    = globalNeighbor < 0 ? -1 : globalToLocalCell.at(static_cast<std::size_t>(globalNeighbor));
+                neighborCells.push_back(localNeighbor);
+                neighborLocalFaces.push_back(localNeighbor < 0 ? -1 : global.cellNeighborLocalFaces.at(globalFace));
+                faceBoundaries.push_back(global.cellFaceBoundaries.at(globalFace));
+            }
+        }
+
+        auto samplePoints = cellCenters;
+        return TraceData(
+            std::move(cellPointIndices),
+            std::move(cellTypes),
+            std::move(cellFaces),
+            std::move(neighborCells),
+            std::move(neighborLocalFaces),
+            std::move(faceBoundaries),
+            std::move(cellVolumes),
+            std::move(points),
+            std::move(samplePoints),
+            std::move(cellCenters),
+            std::move(betaVolume),
+            std::move(cellMaterialIds),
+            global.materialActive,
+            global.materialRefractiveIndices,
+            global.materialActiveIonDensities,
+            global.materialFluorescenceLifetimes,
+            global.materialBulkAttenuations,
+            global.materialPeakAbsorption,
+            global.materialPeakEmission,
+            global.materialCrossSectionOffsets,
+            global.crossSectionWavelengths,
+            global.crossSectionAbsorption,
+            global.crossSectionEmission,
+            global.surfaceReflectivities,
+            global.surfaceRefractiveIndexInside,
+            global.surfaceRefractiveIndexOutside);
+    }
+
+    AseDomainGraph prepareAseDomainGraph(
+        Simulation const& simulation,
+        Assembly const& assembly,
+        TraceData const& global)
+    {
+        AseDomainGraph graph;
+        graph.globalCellDomains.assign(global.numberOfCells, std::numeric_limits<DomainId>::max());
+        auto const globalFaceCount = global.numberOfCells * global.numberOfFacesPerCell;
+        graph.globalBoundaryTargetDomains.assign(globalFaceCount, invalidDomainId);
+        graph.globalBoundaryTargetCells.assign(globalFaceCount, std::numeric_limits<std::uint32_t>::max());
+        graph.globalBoundaryTargetFaces.assign(globalFaceCount, std::numeric_limits<std::uint32_t>::max());
+        graph.globalBoundaryReflectivities.assign(globalFaceCount, 0.0f);
+        graph.globalBoundarySourceRefractiveIndices.assign(globalFaceCount, 1.0f);
+        graph.globalBoundaryTargetRefractiveIndices.assign(globalFaceCount, 1.0f);
+        graph.domains.reserve(simulation.opticalComponents.size());
+        std::vector<std::vector<int>> globalToLocalCells;
+        for(std::size_t index = 0u; index < simulation.opticalComponents.size(); ++index)
+        {
+            auto cells = domainCells(assembly, *simulation.opticalComponents[index]->domain);
+            std::ranges::sort(cells);
+            std::vector<std::uint32_t> localToGlobalCells(cells.begin(), cells.end());
+            std::vector<std::uint32_t> localToGlobalPoints;
+            auto trace = extractAseDomainTrace(global, cells, localToGlobalPoints);
+            auto const id = static_cast<DomainId>(index);
+            std::vector<int> inverse(global.numberOfCells, -1);
+            for(std::size_t local = 0u; local < cells.size(); ++local)
+            {
+                graph.globalCellDomains.at(cells[local]) = id;
+                inverse[cells[local]] = static_cast<int>(local);
+            }
+            globalToLocalCells.push_back(std::move(inverse));
+            graph.domains.push_back(
+                {id,
+                 std::move(trace),
+                 std::move(localToGlobalCells),
+                 std::move(localToGlobalPoints),
+                 std::vector<DomainId>(cells.size(), id),
+                 std::vector<DomainId>(cells.size() * global.numberOfFacesPerCell, invalidDomainId),
+                 std::vector<std::uint32_t>(
+                     cells.size() * global.numberOfFacesPerCell,
+                     std::numeric_limits<std::uint32_t>::max()),
+                 std::vector<std::uint32_t>(
+                     cells.size() * global.numberOfFacesPerCell,
+                     std::numeric_limits<std::uint32_t>::max()),
+                 std::vector<float>(cells.size() * global.numberOfFacesPerCell, 0.0f),
+                 std::vector<float>(cells.size() * global.numberOfFacesPerCell, 1.0f),
+                 std::vector<float>(cells.size() * global.numberOfFacesPerCell, 1.0f),
+                 simulation.opticalComponents[index]->aseRays});
+        }
+
+        graph.domainCellOffsets.push_back(0u);
+        double globalSourceStrength = 0.0;
+        for(auto const& domain : graph.domains)
+        {
+            graph.domainGlobalCells.insert(
+                graph.domainGlobalCells.end(),
+                domain.localToGlobalCells.begin(),
+                domain.localToGlobalCells.end());
+            double previousLocalStrength = 0.0;
+            for(double const localPrefix : domain.trace.sourceStrengthPrefix)
+            {
+                globalSourceStrength += localPrefix - previousLocalStrength;
+                previousLocalStrength = localPrefix;
+                graph.domainSourceStrengthPrefix.push_back(globalSourceStrength);
+            }
+            graph.domainSourceStrengthTotals.push_back(previousLocalStrength);
+            graph.domainCellOffsets.push_back(static_cast<std::uint32_t>(graph.domainGlobalCells.size()));
+        }
+
+        for(auto& domain : graph.domains)
+            for(std::size_t localCell = 0u; localCell < domain.localToGlobalCells.size(); ++localCell)
+                for(std::size_t face = 0u; face < global.numberOfFacesPerCell; ++face)
+                {
+                    auto const globalCell = domain.localToGlobalCells[localCell];
+                    auto const globalFace = globalCell * global.numberOfFacesPerCell + face;
+                    auto const neighbor = global.cellNeighborCells[globalFace];
+                    if(neighbor < 0)
+                        continue;
+                    auto const targetDomain = graph.globalCellDomains.at(static_cast<std::size_t>(neighbor));
+                    if(targetDomain == domain.id)
+                        continue;
+                    auto const targetLocal
+                        = globalToLocalCells.at(targetDomain).at(static_cast<std::size_t>(neighbor));
+                    if(targetLocal < 0)
+                        invalid("inter-domain neighbor is absent from its component-local trace");
+
+                    auto const oppositeFace = global.cellNeighborLocalFaces.at(globalFace);
+                    if(oppositeFace < 0 || static_cast<std::size_t>(oppositeFace) >= global.numberOfFacesPerCell)
+                        invalid("inter-domain interface has no reciprocal local face");
+                    auto const sourceBoundary = global.cellFaceBoundaries.at(globalFace);
+                    auto const targetGlobalFace = static_cast<std::size_t>(neighbor) * global.numberOfFacesPerCell
+                                                  + static_cast<std::size_t>(oppositeFace);
+                    auto const targetBoundary = global.cellFaceBoundaries.at(targetGlobalFace);
+                    auto const reflectivity = [&](int const boundary)
+                    { return boundary > 0 ? static_cast<double>(global.surfaceReflectivities.at(boundary)) : 0.0; };
+                    double const sourceReflectivity = reflectivity(sourceBoundary);
+                    double const targetReflectivity = reflectivity(targetBoundary);
+                    if(sourceBoundary > 0 && targetBoundary > 0
+                       && std::abs(sourceReflectivity - targetReflectivity) > 1.0e-7)
+                        invalid("the two sides of an inter-domain interface have different reflectivities");
+                    double const sharedReflectivity = sourceBoundary > 0 ? sourceReflectivity : targetReflectivity;
+                    auto const sourceMaterial = global.cellMaterialIds.at(globalCell);
+                    auto const targetMaterial = global.cellMaterialIds.at(static_cast<std::size_t>(neighbor));
+                    double const sourceIndex = global.materialRefractiveIndices.at(sourceMaterial);
+                    double const targetIndex = global.materialRefractiveIndices.at(targetMaterial);
+
+                    if(domain.trace.surfaceReflectivities.empty())
+                    {
+                        domain.trace.surfaceReflectivities.push_back(0.0f);
+                        domain.trace.surfaceRefractiveIndexInside.push_back(1.0f);
+                        domain.trace.surfaceRefractiveIndexOutside.push_back(1.0f);
+                    }
+                    auto const boundaryId = static_cast<std::uint32_t>(domain.trace.surfaceReflectivities.size());
+                    domain.trace.surfaceReflectivities.push_back(static_cast<float>(sharedReflectivity));
+                    domain.trace.surfaceRefractiveIndexInside.push_back(static_cast<float>(sourceIndex));
+                    domain.trace.surfaceRefractiveIndexOutside.push_back(static_cast<float>(targetIndex));
+                    domain.trace.cellFaceBoundaries.at(localCell * global.numberOfFacesPerCell + face)
+                        = static_cast<int>(boundaryId);
+                    auto const localFaceIndex = localCell * global.numberOfFacesPerCell + face;
+                    domain.boundaryTargetDomains.at(localFaceIndex) = targetDomain;
+                    domain.boundaryTargetCells.at(localFaceIndex) = static_cast<std::uint32_t>(targetLocal);
+                    domain.boundaryTargetFaces.at(localFaceIndex) = static_cast<std::uint32_t>(oppositeFace);
+                    domain.boundaryReflectivities.at(localFaceIndex) = static_cast<float>(sharedReflectivity);
+                    domain.boundarySourceRefractiveIndices.at(localFaceIndex) = static_cast<float>(sourceIndex);
+                    domain.boundaryTargetRefractiveIndices.at(localFaceIndex) = static_cast<float>(targetIndex);
+                    graph.globalBoundaryTargetDomains.at(globalFace) = targetDomain;
+                    graph.globalBoundaryTargetCells.at(globalFace) = static_cast<std::uint32_t>(neighbor);
+                    graph.globalBoundaryTargetFaces.at(globalFace) = static_cast<std::uint32_t>(oppositeFace);
+                    graph.globalBoundaryReflectivities.at(globalFace) = static_cast<float>(sharedReflectivity);
+                    graph.globalBoundarySourceRefractiveIndices.at(globalFace) = static_cast<float>(sourceIndex);
+                    graph.globalBoundaryTargetRefractiveIndices.at(globalFace) = static_cast<float>(targetIndex);
+                    graph.interfaces.push_back(
+                        {domain.id,
+                         targetDomain,
+                         static_cast<std::uint32_t>(localCell),
+                         static_cast<std::uint32_t>(face),
+                         static_cast<std::uint32_t>(targetLocal),
+                         static_cast<std::uint32_t>(oppositeFace),
+                         boundaryId,
+                         sharedReflectivity,
+                         sourceIndex,
+                         targetIndex});
+                }
+        return graph;
+    }
+
     core::PumpProfileParameters pumpProfile(PumpProfile const& profile)
     {
         core::PumpProfileParameters result;
@@ -759,6 +1014,7 @@ namespace hase::data
             std::move(surfaceReflectivity),
             std::move(surfaceInside),
             std::move(surfaceOutside));
+        auto aseDomains = prepareAseDomainGraph(simulation, assembly, trace);
 
         core::AseTraceControls ase;
         ase.minRays = narrow<unsigned>(simulation.phiAse->minRays, "phiAse.minRays");
@@ -783,6 +1039,9 @@ namespace hase::data
         ase.reflectionMaxIterations
             = narrow<unsigned>(simulation.phiAse->reflectionMaxIterations, "phiAse.reflectionMaxIterations");
         ase.reflectionTolerance = simulation.phiAse->reflectionTolerance;
+        ase.boundaryMaxPasses
+            = narrow<unsigned>(simulation.phiAse->boundaryMaxPasses.value_or(0u), "phiAse.boundaryMaxPasses");
+        ase.domainCount = aseDomains.domains.size();
 
         if(!simulation.phiAse->backend)
             invalid("phiAse backend was not resolved before transport");
@@ -818,7 +1077,13 @@ namespace hase::data
             std::vector<double>(trace.numberOfCells, 0.0),
             std::vector<unsigned>(trace.numberOfCells, 0u),
             std::vector<double>(trace.numberOfCells, 0.0));
-        SimulationState state{std::move(ase), std::move(compute), std::move(trace), std::move(result), std::move(run)};
+        SimulationState state{
+            std::move(ase),
+            std::move(compute),
+            std::move(trace),
+            std::move(aseDomains),
+            std::move(result),
+            std::move(run)};
         return {std::move(state), std::move(excitationPlan)};
     }
 } // namespace hase::data

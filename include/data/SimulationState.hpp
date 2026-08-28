@@ -9,6 +9,7 @@
 
 #include <core/Runtime.hpp>
 #include <core/SimulationControls.hpp>
+#include <data/AseDomainGraph.hpp>
 #include <data/TraceData.hpp>
 
 namespace hase::data
@@ -19,6 +20,7 @@ namespace hase::data
         core::AseTraceControls ase;
         core::ExecutionPolicy execution;
         TraceData trace;
+        AseDomainGraph aseDomains;
         PhiAseResult result;
         core::SimulationControls controls;
     };

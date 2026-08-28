@@ -28,7 +28,7 @@ namespace hase::core
             std::vector<unsigned>(volumeCount, 0u),
             std::vector<unsigned>(volumeCount, 0u),
             0u,
-            data::SrmStatus::disabled,
+            data::BoundaryStatus::disabled,
             0u,
             0.0,
             0u,
@@ -49,12 +49,13 @@ namespace hase::core
         }
 
         target.rayCount += source.rayCount;
-        if(srmStatusPriority(source.srmStatus) > srmStatusPriority(target.srmStatus))
-            target.srmStatus = source.srmStatus;
-        target.srmPasses = std::max(target.srmPasses, source.srmPasses);
-        target.srmRemainingFraction = std::max(target.srmRemainingFraction, source.srmRemainingFraction);
-        target.srmMaxIterations = std::max(target.srmMaxIterations, source.srmMaxIterations);
-        target.srmDivergenceStreak = std::max(target.srmDivergenceStreak, source.srmDivergenceStreak);
+        if(boundaryStatusPriority(source.boundaryStatus) > boundaryStatusPriority(target.boundaryStatus))
+            target.boundaryStatus = source.boundaryStatus;
+        target.boundaryPasses = std::max(target.boundaryPasses, source.boundaryPasses);
+        target.boundaryRemainingFraction
+            = std::max(target.boundaryRemainingFraction, source.boundaryRemainingFraction);
+        target.boundaryMaxPasses = std::max(target.boundaryMaxPasses, source.boundaryMaxPasses);
+        target.boundaryDivergenceStreak = std::max(target.boundaryDivergenceStreak, source.boundaryDivergenceStreak);
         if(target.vertexBatchScoreSum.size() != source.vertexBatchScoreSum.size())
             throw std::runtime_error("cannot merge forward ASE results with different vertex counts");
         for(unsigned vertex = 0u; vertex < target.vertexBatchScoreSum.size(); ++vertex)
@@ -151,11 +152,11 @@ namespace hase::core
             rawResult.totalRays,
             std::vector(volumeCount, 0.0),
             rawResult.droppedRays,
-            rawResult.srmStatus,
-            rawResult.srmPasses,
-            rawResult.srmRemainingFraction,
-            rawResult.srmMaxIterations,
-            rawResult.srmDivergenceStreak);
+            rawResult.boundaryStatus,
+            rawResult.boundaryPasses,
+            rawResult.boundaryRemainingFraction,
+            rawResult.boundaryMaxPasses,
+            rawResult.boundaryDivergenceStreak);
         for(unsigned volume = 0u; volume < volumeCount; ++volume)
         {
             double const volumeSize = hostMesh.cellVolumes.at(volume);

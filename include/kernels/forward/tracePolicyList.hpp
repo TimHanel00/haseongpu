@@ -76,12 +76,17 @@ namespace hase::kernels::forward::tracePolicy
         {
         };
 
+        struct BoundaryCandidates : category::Source
+        {
+        };
+
         struct SurfaceReservoir : category::Source
         {
         };
 
         inline constexpr Volume volume;
         inline constexpr ReflectionCandidates reflectionCandidates;
+        inline constexpr BoundaryCandidates boundaryCandidates;
         inline constexpr SurfaceReservoir surfaceReservoir;
     } // namespace source
 
@@ -104,12 +109,17 @@ namespace hase::kernels::forward::tracePolicy
         {
         };
 
+        struct BoundaryCandidates : category::Boundary
+        {
+        };
+
         struct SurfaceReservoir : category::Boundary
         {
         };
 
         inline constexpr Escape escape;
         inline constexpr ReflectionCandidates reflectionCandidates;
+        inline constexpr BoundaryCandidates boundaryCandidates;
         inline constexpr SurfaceReservoir surfaceReservoir;
     } // namespace boundary
 

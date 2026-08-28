@@ -15,8 +15,10 @@
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
 
+#include <concepts>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 namespace hase::kernels
 {
@@ -37,6 +39,47 @@ namespace hase::kernels
                                                   ? mesh.getBetaVolume(cell) * mesh.getCellVolume(cell)
                                                         * mesh.activeIonDensity(cell) / mesh.fluorescenceLifetime(cell)
                                                   : 0.0;
+            }
+        }
+    };
+
+    /** @brief Transform domain-grouped global cell ids into spontaneous-source weights. */
+    struct DomainSourceStrength
+    {
+        data::TraceView mesh;
+
+        ALPAKA_FN_ACC auto operator()(alpaka::concepts::Simd auto const& globalCells) const
+        {
+            using T_Cells = std::remove_cvref_t<decltype(globalCells)>;
+            static_assert(std::same_as<typename T_Cells::type, std::uint32_t>);
+            return alpaka::Simd<double, T_Cells::width()>{
+                [&](auto const lane)
+                {
+                    auto const cell = globalCells[decltype(lane)::value];
+                    return mesh.isActive(cell) ? mesh.getBetaVolume(cell) * mesh.getCellVolume(cell)
+                                                     * mesh.activeIonDensity(cell) / mesh.fluorescenceLifetime(cell)
+                                               : 0.0;
+                }};
+        }
+    };
+
+    /** @brief Compute domain totals from endpoints in one globally cumulative grouped prefix. */
+    struct ComputeDomainSourceStrengthTotals
+    {
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            alpaka::concepts::IView<std::uint32_t> auto const offsets,
+            alpaka::concepts::IView<double> auto const sourceStrengthPrefix,
+            alpaka::concepts::IView<double> auto sourceStrengthTotals,
+            std::uint32_t const domainCount) const
+        {
+            for(auto [domain] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{domainCount}))
+            {
+                auto const begin = offsets[domain];
+                auto const end = offsets[domain + 1u];
+                double const prefixBase = begin == 0u ? 0.0 : sourceStrengthPrefix[begin - 1u];
+                sourceStrengthTotals[domain] = begin == end ? 0.0 : sourceStrengthPrefix[end - 1u] - prefixBase;
             }
         }
     };

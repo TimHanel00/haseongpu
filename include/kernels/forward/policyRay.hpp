@@ -223,6 +223,16 @@ namespace hase::kernels::forward::ray
                  { term(acc, mesh, rayState) } -> std::same_as<void>;
              };
 
+    template<typename T_Term>
+    concept HasInteriorBoundary = concepts::BoundaryBehaviour<T_Term>
+                                  && requires(
+                                      T_Term const& term,
+                                      hase::data::TraceView const& mesh,
+                                      unsigned const cell,
+                                      unsigned const localFace) {
+                                         { term.isInteriorBoundary(mesh, cell, localFace) } -> std::same_as<bool>;
+                                     };
+
     inline constexpr BoundaryPolicySrm aseSrmPolicy{};
     inline constexpr BoundaryPolicySrm<srmPosition::Barycentric> pumpSrmPolicy{};
 
@@ -295,12 +305,11 @@ namespace hase::kernels::forward::ray
     };
 
     /**
-     * @brief Terminate a domain-local walk at an exterior boundary.
+     * @brief Terminate a walk at an exterior boundary.
      *
-     * Boundary behavior is deliberately separate from cell propagation. A
-     * later scheduler can replace this policy with one that records a compact
-     * ray handoff for another component without making the local walk recurse
-     * into that component.
+     * Boundary behavior is deliberately separate from cell propagation.
+     * Boundary-aware policies replace this escape behavior when reflection or
+     * inter-component transmission is enabled.
      */
     struct BoundaryPolicyEscape : behaviourDimension::Boundary
     {
@@ -367,6 +376,14 @@ namespace hase::kernels::forward::ray
             State auto& rayState)
         {
             (invokeFailure(static_cast<T_Terms&>(*this), acc, mesh, rayState), ...);
+        }
+
+        [[nodiscard]] ALPAKA_FN_ACC bool isInteriorBoundary(
+            hase::data::TraceView const& mesh,
+            unsigned const cell,
+            unsigned const localFace) const
+        {
+            return (invokeInteriorBoundary(static_cast<T_Terms const&>(*this), mesh, cell, localFace) || ...);
         }
 
     private:
@@ -438,6 +455,27 @@ namespace hase::kernels::forward::ray
         ALPAKA_FN_ACC static void invokeFailure(T_Term&, T_Acc const&, hase::data::TraceView const&, T_RayState&)
         {
         }
+
+        template<HasInteriorBoundary T_Term>
+        [[nodiscard]] ALPAKA_FN_ACC static bool invokeInteriorBoundary(
+            T_Term const& term,
+            hase::data::TraceView const& mesh,
+            unsigned const cell,
+            unsigned const localFace)
+        {
+            return term.isInteriorBoundary(mesh, cell, localFace);
+        }
+
+        template<concepts::BehaviourTerm T_Term>
+        requires(!HasInteriorBoundary<T_Term>)
+        [[nodiscard]] ALPAKA_FN_ACC static bool invokeInteriorBoundary(
+            T_Term const&,
+            hase::data::TraceView const&,
+            unsigned,
+            unsigned)
+        {
+            return false;
+        }
     };
 
     template<typename... T_Terms>
@@ -500,8 +538,13 @@ namespace hase::kernels::forward::ray
                     behaviour.onFailure(acc, mesh, rayState);
                     return;
                 }
-                auto const transition
-                    = recoverFaceTransition(mesh, currentCell, recoveryFace, rayState.position, rayState.direction);
+                auto const transition = recoverFaceTransition(
+                    mesh,
+                    currentCell,
+                    recoveryFace,
+                    rayState.position,
+                    rayState.direction,
+                    behaviour);
                 if(transition.status == Tet4TransitionStatus::failed)
                 {
                     rayState.cell = transition.cell;
@@ -531,8 +574,23 @@ namespace hase::kernels::forward::ray
                 return;
             }
             rayState.position = advance(rayState.position, rayState.direction, intersection.length);
-            auto const transition
-                = transitionAcrossIntersection(mesh, currentCell, intersection, rayState.position, rayState.direction);
+            if(behaviour.isInteriorBoundary(mesh, currentCell, static_cast<unsigned>(intersection.localFace)))
+            {
+                rayState.cell = currentCell;
+                auto const boundaryResult
+                    = behaviour
+                          .onBoundary(acc, mesh, rayState, currentCell, static_cast<unsigned>(intersection.localFace));
+                if(boundaryResult == BoundaryResult::continueTraversal)
+                    continue;
+                return;
+            }
+            auto const transition = transitionAcrossIntersection(
+                mesh,
+                currentCell,
+                intersection,
+                rayState.position,
+                rayState.direction,
+                behaviour);
             if(transition.status == Tet4TransitionStatus::failed)
             {
                 rayState.cell = transition.cell;

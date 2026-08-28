@@ -467,9 +467,12 @@ class OpticalComponent:
     opticalRole
         Optional role metadata. Adding the component to a :class:`GainMedium`
         sets this to ``"gainElement"``.
+    aseRays
+        Optional exact primary ASE count reserved for this component from the
+        global :class:`PhiASE` ray total.
     """
 
-    def __init__(self, *, domain, material, name=None, opticalRole=None):
+    def __init__(self, *, domain, material, name=None, opticalRole=None, aseRays=None):
         if not isinstance(material, Material):
             raise TypeError("OpticalComponent.material must be Material")
         selected = domain if isinstance(domain, Domain) else Domain(domain)
@@ -478,6 +481,13 @@ class OpticalComponent:
         self.material = material
         self.name = name
         self.opticalRole = opticalRole
+        if aseRays is not None:
+            if isinstance(aseRays, bool) or not isinstance(aseRays, (int, np.integer)):
+                raise TypeError("OpticalComponent.aseRays must be a positive integer or None")
+            if int(aseRays) <= 0:
+                raise ValueError("OpticalComponent.aseRays must be greater than zero")
+            aseRays = int(aseRays)
+        self.aseRays = aseRays
         self._domain = selected
         self._surfaceOptics = []
 
@@ -557,7 +567,11 @@ class OpticalComponent:
     def _transportDescription(self):
         return PrimitiveDescription(
             "opticalComponent",
-            fields=(field("name", optional=True), field("opticalRole", optional=True)),
+            fields=(
+                field("name", optional=True),
+                field("opticalRole", optional=True),
+                field("aseRays", optional=True),
+            ),
             references=(
                 reference("domain"),
                 reference("material"),

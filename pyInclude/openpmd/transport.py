@@ -735,11 +735,11 @@ def _has_attribute(obj, name):
 
 def _result_status_values(iteration, root="phiAseResult"):
     fields = {
-        "srmStatus": ("disabled", str),
-        "srmPasses": (0, int),
-        "srmRemainingFraction": (0.0, float),
-        "srmMaxIterations": (0, int),
-        "srmDivergenceStreak": (0, int),
+        "boundaryStatus": ("disabled", str),
+        "boundaryPasses": (0, int),
+        "boundaryRemainingFraction": (0.0, float),
+        "boundaryMaxPasses": (0, int),
+        "boundaryDivergenceStreak": (0, int),
     }
     result = {}
     for field_name, (default, cast) in fields.items():

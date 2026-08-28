@@ -23,6 +23,7 @@ namespace hase::data
         reader.assign(result.srmPositionMode, prefix, FieldName::srmPositionMode);
         reader.assign(result.reflectionMaxIterations, prefix, FieldName::reflectionMaxIterations);
         reader.assign(result.reflectionTolerance, prefix, FieldName::reflectionTolerance);
+        reader.assign(result.boundaryMaxPasses, prefix, FieldName::boundaryMaxPasses);
         reader.assign(result.monochromatic, prefix, FieldName::monochromatic);
         reader.assign(result.backend, prefix, FieldName::backend);
         reader.assign(result.parallelMode, prefix, FieldName::parallelMode);

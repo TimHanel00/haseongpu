@@ -1500,11 +1500,11 @@ def test_read_simulation_output_uses_cell_layout(tmp_path):
 
     iteration.set_attribute(transport.attributeName("simulationSnapshot/step"), 1)
     iteration.set_attribute(transport.attributeName("simulationSnapshot/time"), 0.25)
-    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmStatus"), "stable")
-    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmPasses"), 2)
-    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmRemainingFraction"), 0.25)
-    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmMaxIterations"), 8)
-    iteration.set_attribute(transport.attributeName("simulationSnapshot/srmDivergenceStreak"), 3)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryStatus"), "stable")
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryPasses"), 2)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryRemainingFraction"), 0.25)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryMaxPasses"), 8)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryDivergenceStreak"), 3)
     iteration.time = 0.25
 
     root = "simulationSnapshot"
@@ -1527,11 +1527,11 @@ def test_read_simulation_output_uses_cell_layout(tmp_path):
     np.testing.assert_array_equal(state.totalRays, np.arange(cell_flat.size, dtype=np.uint32))
     np.testing.assert_array_equal(state.dndtAse, cell_flat + 2000.0)
     np.testing.assert_array_equal(state.dndtPump, cell_flat + 3000.0)
-    assert state.aseResult.srmStatus == "stable"
-    assert state.aseResult.srmPasses == 2
-    assert state.aseResult.srmRemainingFraction == pytest.approx(0.25)
-    assert state.aseResult.srmMaxIterations == 8
-    assert state.aseResult.srmDivergenceStreak == 3
+    assert state.aseResult.boundaryStatus == "stable"
+    assert state.aseResult.boundaryPasses == 2
+    assert state.aseResult.boundaryRemainingFraction == pytest.approx(0.25)
+    assert state.aseResult.boundaryMaxPasses == 8
+    assert state.aseResult.boundaryDivergenceStreak == 3
 
 
 def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypatch, tmp_path):

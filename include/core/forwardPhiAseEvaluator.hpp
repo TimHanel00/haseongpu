@@ -92,6 +92,9 @@ namespace hase::core
         unsigned baseSeed;
         double betaVolumeTotal;
         unsigned batchCount;
+        std::vector<DomainCost> const& domainCosts;
+        std::vector<DomainQuota> const& finalDomainQuotas;
+        std::vector<hase::data::AseDomainInterface> const& interfaces;
     };
 
     /** @brief Raw and convergence results produced by the worker-group simulation loop. */
@@ -105,35 +108,12 @@ namespace hase::core
     };
 
     /**
-     * @brief Flatten gathered worker containers while retaining batch indices.
-     * @param workerResults Per-worker collections produced by a gather operation.
-     * @param batchCount Required number of unique statistical batches.
-     * @return Batch-index-ordered collection containing every expected batch.
-     * @throws std::runtime_error If a batch is missing, duplicated, or out of range.
-     */
-    [[nodiscard]] inline ForwardRayBatchResults flattenBatchResults(
-        std::vector<ForwardRayBatchResults> const& workerResults,
-        unsigned const batchCount)
-    {
-        ForwardRayBatchResults batches;
-        for(auto const& results : workerResults)
-            batches.insert(batches.end(), results.begin(), results.end());
-        std::ranges::sort(batches, {}, &ForwardRayBatchResult::index);
-        if(batches.size() != batchCount)
-            throw std::runtime_error("forward worker gather did not return every statistical batch");
-        for(unsigned batch = 0u; batch < batches.size(); ++batch)
-            if(batches[batch].index != batch)
-                throw std::runtime_error("forward worker gather returned a missing or duplicate statistical batch");
-        return batches;
-    }
-
-    /**
      * @brief Run the adaptive ASE simulation using a policy-selected worker group.
      *
      * Integration-stage orchestration calls this function once for the current
-     * beta state. Complete ray batches are mapped to workers, traced on their
-     * owned devices, gathered with their batch identities intact, and only then
-     * combined for normalization and adaptive RSE evaluation.
+     * beta state. Domain/batch items are mapped to workers, grouped into
+     * queue-efficient launches on their owned devices, gathered with statistical
+     * batch identity intact, and only then combined for normalization and RSE.
      * @tparam T_WorkerPolicy Worker policy supplying mapping, collectives, and work dispatch.
      * @param worker Participating worker with a stable group identity.
      * @param context Trace controls and immutable launch inputs shared by the group.
@@ -150,63 +130,146 @@ namespace hase::core
             context.hostMesh.numberOfMaterials * context.hostMesh.numberOfMeshPoints,
             context.batchCount);
         simulation.convergenceRayCounts.assign(context.hostMesh.numberOfCells, 0u);
+        std::vector<std::uint64_t> previousDomainCounts(context.finalDomainQuotas.size(), 0u);
         unsigned const baseSeed = worker.scatter(context.baseSeed);
+        auto const workerDescriptors = worker.gather(worker.descriptor());
+        auto const schedule = makeDomainSchedule(
+            *workerDescriptors,
+            context.domainCosts,
+            context.finalDomainQuotas,
+            context.batchCount,
+            context.interfaces);
         // adaptive sampling loop
         for(unsigned completedIncreases = 0u;; ++completedIncreases)
         {
             unsigned const targetRayCount = adaptiveRayTarget(context.experiment, context.compute, completedIncreases);
             unsigned const launchRayCount = targetRayCount - simulation.raw.rayCount;
             unsigned const launchSeed = random::seedForAdaptiveLaunch(baseSeed, simulation.adaptiveLaunches);
+            auto const previousBatchRayCounts = simulation.raw.rseBatchRayCounts;
+            auto const launchDomainCounts
+                = allocateDomainLaunchCounts(context.finalDomainQuotas, previousDomainCounts, launchRayCount);
+            for(std::size_t domain = 0u; domain < launchDomainCounts.size(); ++domain)
+                previousDomainCounts[domain] += launchDomainCounts[domain];
 
-            ForwardRayBatchResults localResults;
-            // batch loop
-            for(auto [batch] : hase::mapIdx(worker, alpaka::IdxRange{context.batchCount}))
+            ForwardRayBatchGroup localWork;
+            std::vector<std::vector<std::uint32_t>> workerBatchCounts(
+                workerDescriptors->size(),
+                std::vector<std::uint32_t>(context.batchCount, 0u));
+            for(auto const& assignment : schedule.assignments())
             {
-                localResults.emplace_back(worker(
-                    ForwardRayBatch{
-                        batch,
-                        kernels::forward::rseBatchRayCount(0u, launchRayCount, batch, context.batchCount),
-                        launchSeed}));
+                auto const quota
+                    = std::ranges::find(context.finalDomainQuotas, assignment.id.domain, &DomainQuota::id);
+                if(quota == context.finalDomainQuotas.end())
+                    throw std::runtime_error("scheduled domain has no ASE quota");
+                auto const domain = static_cast<std::size_t>(std::distance(context.finalDomainQuotas.begin(), quota));
+                auto const batch = assignment.id.batch;
+                auto const owner = std::ranges::find(*workerDescriptors, assignment.worker, &WorkerDescriptor::id);
+                if(owner == workerDescriptors->end())
+                    throw std::runtime_error("scheduled ASE worker is absent from the worker group");
+                auto const ownerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), owner));
+                auto const domainCount = launchDomainCounts[domain];
+                auto const count
+                    = domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
+                workerBatchCounts[ownerIndex][batch] += count;
             }
-            float const localRuntime = std::accumulate(
-                localResults.cbegin(),
-                localResults.cend(),
-                0.0f,
-                [](float const sum, ForwardRayBatchResult const& batch) { return sum + batch.runtime; });
-            simulation.runtime
-                += worker.reduce(localRuntime, [](float const lhs, float const rhs) { return std::max(lhs, rhs); });
 
-            auto const gathered = worker.gather(std::move(localResults));
-            auto batches = flattenBatchResults(*gathered, context.batchCount);
-            for(auto const& batch : batches)
-                mergeForwardRawResult(simulation.raw, batch.raw);
+            auto const localDescriptor = worker.descriptor();
+            auto const local = std::ranges::find(*workerDescriptors, localDescriptor.id, &WorkerDescriptor::id);
+            if(local == workerDescriptors->end())
+                throw std::runtime_error("local ASE worker is absent from the worker group");
+            auto const localWorkerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), local));
+            for(std::uint32_t batch = 0u; batch < context.batchCount; ++batch)
+            {
+                ForwardRayBatch work{batch, 0u, launchSeed};
+                work.domainRayCounts.resize(launchDomainCounts.size(), 0u);
+                work.domainSourceWeights.resize(launchDomainCounts.size(), 0.0);
+                for(auto const& assignment : schedule.assignments())
+                {
+                    if(assignment.worker != localDescriptor.id || assignment.id.batch != batch)
+                        continue;
+                    auto const quota
+                        = std::ranges::find(context.finalDomainQuotas, assignment.id.domain, &DomainQuota::id);
+                    auto const domain
+                        = static_cast<std::size_t>(std::distance(context.finalDomainQuotas.begin(), quota));
+                    auto const domainCount = launchDomainCounts[domain];
+                    auto const count
+                        = domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
+                    work.domainRayCounts[domain] = count;
+                    work.rayCount += count;
+                    if(domainCount > 0u && context.betaVolumeTotal > 0.0)
+                        work.domainSourceWeights[domain]
+                            = static_cast<double>(launchRayCount) * quota->sourceStrength
+                              / (static_cast<double>(domainCount) * context.betaVolumeTotal);
+                }
+                if(work.rayCount == 0u)
+                    continue;
+
+                std::vector<std::uint32_t> batchSourceDomainCounts(launchDomainCounts.size(), 0u);
+                for(std::size_t domain = 0u; domain < launchDomainCounts.size(); ++domain)
+                    batchSourceDomainCounts[domain]
+                        = launchDomainCounts[domain] / context.batchCount
+                          + (batch < launchDomainCounts[domain] % context.batchCount ? 1u : 0u);
+                auto const batchDomainCounts = reservePassiveDomainPopulationSlots(batchSourceDomainCounts);
+                std::vector<std::uint32_t> batchWorkerCounts(workerDescriptors->size(), 0u);
+                for(std::size_t workerIndex = 0u; workerIndex < workerDescriptors->size(); ++workerIndex)
+                    batchWorkerCounts[workerIndex] = workerBatchCounts[workerIndex][batch];
+                auto const populations = distributeDomainPopulations(batchDomainCounts, batchWorkerCounts);
+                work.domainPopulationCounts = populations[localWorkerIndex];
+                localWork.batches.emplace_back(std::move(work));
+            }
+            auto localResult = worker(std::move(localWork));
+            simulation.runtime += worker.reduce(
+                localResult.runtime,
+                [](float const lhs, float const rhs) { return std::max(lhs, rhs); });
+
+            auto const gathered = worker.gather(std::move(localResult));
+            for(auto const& workerResult : *gathered)
+                mergeForwardRawResult(simulation.raw, workerResult.raw);
             if(simulation.raw.rayCount != targetRayCount)
                 throw std::runtime_error("forward statistical batch accounting mismatch");
+            for(unsigned batch = 0u; batch < context.batchCount; ++batch)
+            {
+                unsigned expectedBatchRays = 0u;
+                for(auto const domainCount : launchDomainCounts)
+                    expectedBatchRays
+                        += domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
+                if(simulation.raw.rseBatchRayCounts[batch] != previousBatchRayCounts[batch] + expectedBatchRays)
+                    throw std::runtime_error("forward statistical batch accounting mismatch");
+            }
 
             ++simulation.adaptiveLaunches;
-            simulation.convergence = worker(FinalizeForwardAse{simulation.raw});
-            recordAdaptiveRayConvergence(
-                simulation.convergence,
-                targetRayCount,
-                context.experiment.relativeStandardErrorThreshold,
-                simulation.convergenceRayCounts);
-            bool const stop = context.experiment.forwardRayCount != 0u || targetRayCount == context.experiment.maxRays
-                              || forwardResultMeetsRelativeStandardError(
-                                  simulation.convergence,
-                                  context.experiment.relativeStandardErrorThreshold);
+            bool stop = false;
+            if(worker.isRoot())
+            {
+                simulation.convergence = worker(FinalizeForwardAse{simulation.raw, true, false});
+                recordAdaptiveRayConvergence(
+                    simulation.convergence,
+                    targetRayCount,
+                    context.experiment.relativeStandardErrorThreshold,
+                    simulation.convergenceRayCounts);
+                stop = context.experiment.forwardRayCount != 0u || targetRayCount == context.experiment.maxRays
+                       || forwardResultMeetsRelativeStandardError(
+                           simulation.convergence,
+                           context.experiment.relativeStandardErrorThreshold);
+            }
+            stop = worker.scatter(stop);
             if(stop)
                 break;
         }
+        if(worker.isRoot())
+            simulation.convergence = worker(FinalizeForwardAse{simulation.raw, false, true});
+        else if(worker.requiresFinalizedDeviceState())
+            simulation.convergence = worker(FinalizeForwardAse{simulation.raw, true, true});
         return simulation;
     }
 
     /**
-     * @brief Owns persistent device state for one prepared tracing domain.
+     * @brief Owns persistent device state for one prepared multi-domain trace.
      *
-     * The context keeps geometry and material HybridBuffers resident across
-     * evaluations. A future scheduler may own several contexts and exchange
-     * compact boundary-ray queues between iterations without changing the
-     * domain-local evaluator.
+     * The context keeps geometry, materials, routing tables, source CDFs, and
+     * boundary workspaces resident across evaluations. The scheduler already
+     * exposes each worker's required domain set; physical mesh allocation is
+     * still replicated until domain-shard-only residency is introduced.
      */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Executor>
     class ForwardPhiAseContext
@@ -223,17 +286,26 @@ namespace hase::core
             std::vector<T_Device> devices,
             T_Executor executor,
             AseTraceControls const& experiment,
-            hase::data::TraceData& hostMesh)
+            hase::data::TraceData& hostMesh,
+            hase::data::AseDomainGraph& domains)
             : m_executor(std::move(executor))
+            , m_domains(domains)
+            , m_domainCosts(makeDomainCosts(domains))
         {
             if(devices.empty())
                 throw std::runtime_error("forward ASE context requires at least one device");
             m_meshes.reserve(devices.size());
+            m_interfaceMaps.reserve(devices.size());
+            m_domainSources.reserve(devices.size());
             for(auto& device : devices)
             {
                 m_meshes.emplace_back(hostMesh.makeResident(device));
+                m_interfaceMaps.emplace_back(device, domains);
+                m_domainSources.emplace_back(device, domains);
                 auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
                 m_meshes.back().toDevice(queue);
+                m_interfaceMaps.back().toDevice(queue);
+                m_domainSources.back().toDevice(queue);
                 alpaka::onHost::wait(queue);
             }
             m_deviceContexts.reserve(m_meshes.size());
@@ -380,7 +452,19 @@ namespace hase::core
                 seed = random::SeedGenerator::get().getSeed();
 #endif
             }
-            ForwardRunInputs simulationContext{experiment, compute, hostMesh, seed, m_betaVolumeTotal, batchCount};
+            auto const finalRayCount
+                = experiment.forwardRayCount != 0u ? experiment.forwardRayCount : experiment.maxRays;
+            auto const finalDomainQuotas = allocateDomainRays(m_domainCosts, finalRayCount);
+            ForwardRunInputs simulationContext{
+                experiment,
+                compute,
+                hostMesh,
+                seed,
+                m_betaVolumeTotal,
+                batchCount,
+                m_domainCosts,
+                finalDomainQuotas,
+                m_domains.interfaces};
             ForwardSimulationResult simulation;
             RuntimeTopology topology;
             unsigned usedDevices = 0u;
@@ -410,7 +494,9 @@ namespace hase::core
                                     mesh,
                                     *m_deviceContexts[workerIndex],
                                     experiment,
-                                    m_betaVolumeTotal}};
+                                    m_betaVolumeTotal,
+                                    m_interfaceMaps[workerIndex].view(),
+                                    m_domainSources[workerIndex].view()}};
                                 workerResults[workerIndex] = runForwardSimulation(worker, simulationContext);
                             }
                             catch(...)
@@ -450,7 +536,9 @@ namespace hase::core
                     m_betaVolumeTotal,
                     hostMesh.numberOfCells,
                     hostMesh.numberOfMaterials * hostMesh.numberOfMeshPoints,
-                    batchCount}};
+                    batchCount,
+                    m_interfaceMaps[deviceIndex].view(),
+                    m_domainSources[deviceIndex].view()}};
                 simulation = runForwardSimulation(worker, simulationContext);
                 topology = mpiWorkerTopology();
                 usedDevices = topology.activeGpus;
@@ -496,6 +584,14 @@ namespace hase::core
             bool const synchronizePrimaryMesh)
         {
             m_betaVolumeTotal = m_deviceContexts.front()->rebuildSourceStrengthPrefix(m_meshes.front(), betaVolume);
+            auto primaryDevBundle = hase::alpakaUtils::DevBundle{m_meshes.front().m_device, m_executor};
+            auto primaryQueue = m_meshes.front().m_device.makeQueue(alpaka::queueKind::nonBlocking);
+            m_domainSources.front().rebuild(primaryDevBundle, primaryQueue, primaryMeshView(betaVolume));
+            auto const domainSourceStrengths = m_domainSources.front().downloadSourceStrengthTotals(primaryQueue);
+            if(domainSourceStrengths.size() != m_domainCosts.size())
+                throw std::runtime_error("domain source totals do not match scheduling statistics");
+            for(std::size_t domain = 0u; domain < m_domainCosts.size(); ++domain)
+                m_domainCosts[domain].sourceStrength = domainSourceStrengths[domain];
             if(m_meshes.size() == 1u && !requireHostValues)
                 return;
 
@@ -518,11 +614,18 @@ namespace hase::core
                 mesh.betaVolume.toDevice(secondaryQueue);
                 alpaka::onHost::wait(secondaryQueue);
                 m_deviceContexts[index]->rebuildSourceStrengthPrefix(mesh, mesh.betaVolume.toDeviceView());
+                auto secondaryDevBundle = hase::alpakaUtils::DevBundle{mesh.m_device, m_executor};
+                m_domainSources[index].rebuild(secondaryDevBundle, secondaryQueue, mesh.view());
+                alpaka::onHost::wait(secondaryQueue);
             }
         }
 
         T_Executor m_executor;
+        hase::data::AseDomainGraph& m_domains;
+        std::vector<DomainCost> m_domainCosts;
         std::vector<hase::data::ResidentTrace<T_Device>> m_meshes;
+        std::vector<ResidentAseDomainInterfaces<T_Device>> m_interfaceMaps;
+        std::vector<ResidentAseDomainSources<T_Device>> m_domainSources;
         std::vector<std::unique_ptr<ForwardPhiAseDeviceContext<T_Device, T_Executor>>> m_deviceContexts;
         double m_betaVolumeTotal = 0.0;
     };

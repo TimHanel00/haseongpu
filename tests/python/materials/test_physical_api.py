@@ -158,6 +158,18 @@ def test_one_component_may_span_independent_domain_bindings():
     assert len(component.domain.topologies) == 2
 
 
+def test_component_accepts_only_positive_optional_ase_ray_counts():
+    mesh = topology()
+    domain = Domain.fromTopology(mesh)
+    component = OpticalComponent(material=material(), domain=domain, aseRays=17)
+
+    assert component.aseRays == 17
+    with pytest.raises(ValueError, match="aseRays"):
+        OpticalComponent(material=material(), domain=domain, aseRays=0)
+    with pytest.raises(TypeError, match="aseRays"):
+        OpticalComponent(material=material(), domain=domain, aseRays=True)
+
+
 def test_domain_frontend_accepts_non_tet_regions_but_state_projection_rejects_them():
     topology = HexRegionTopology()
     complete = Domain.fromTopology(topology)

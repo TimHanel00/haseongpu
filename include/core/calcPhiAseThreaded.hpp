@@ -14,7 +14,9 @@
 #include <algorithm>
 #include <any>
 #include <barrier>
+#include <chrono>
 #include <concepts>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <stdexcept>
@@ -24,29 +26,36 @@
 
 namespace hase::core
 {
-    /** @brief One complete, indivisible forward-ray batch. */
+    /** @brief One statistical batch containing this worker's assigned domain work. */
     struct ForwardRayBatch
     {
         unsigned index = 0u; //!< Statistical batch index.
         unsigned rayCount = 0u; //!< Complete number of histories in this batch.
         unsigned rngSeed = 0u; //!< Seed shared by all batches in one adaptive launch.
+        std::vector<std::uint32_t> domainRayCounts;
+        std::vector<double> domainSourceWeights;
+        std::vector<std::uint32_t> domainPopulationCounts;
     };
 
-    /** @brief data::PhiAseResult of one complete forward-ray batch, retaining its statistical identity. */
-    struct ForwardRayBatchResult
+    /** @brief Domain/batch assignments grouped for one worker and adaptive launch. */
+    struct ForwardRayBatchGroup
     {
-        unsigned index = 0u; //!< Statistical batch index.
-        ForwardPhiAseRawResult raw; //!< Unnormalized batch accumulation.
-        float runtime = 0.0f; //!< Device execution time in seconds.
+        std::vector<ForwardRayBatch> batches;
     };
 
-    /** @brief Batch-preserving result collection used by worker gather operations. */
-    using ForwardRayBatchResults = std::vector<ForwardRayBatchResult>;
+    /** @brief One worker's device-resident accumulation downloaded once per adaptive launch. */
+    struct ForwardWorkerResult
+    {
+        ForwardPhiAseRawResult raw;
+        float runtime = 0.0f;
+    };
 
     /** @brief Device-finalization work item created after batch gathering. */
     struct FinalizeForwardAse
     {
         ForwardPhiAseRawResult const& raw; //!< Gathered, unnormalized batch accumulators.
+        bool upload = true; //!< Upload `raw` before finalization.
+        bool downloadFullResult = true; //!< Download all public arrays rather than convergence only.
     };
 
     namespace detail
@@ -118,9 +127,9 @@ namespace hase::core
     /**
      * @brief Worker policy representing one host thread that owns exactly one device.
      *
-     * A worker executes zero or more complete batches selected by `hase::mapIdx`.
-     * It never repartitions a selected batch and never shares its device queue,
-     * accumulators, or reflection reservoir with another worker.
+     * A worker executes zero or more scheduler-owned domain/batch assignments.
+     * It never repartitions an assignment and never shares its device queue,
+     * accumulators, or boundary buffers with another worker.
      *
      * @tparam T_Device Alpaka device type.
      * @tparam T_Exec Alpaka executor type.
@@ -137,7 +146,9 @@ namespace hase::core
             hase::data::TraceView const mesh,
             ForwardPhiAseDeviceContext<T_Device, T_Exec>& deviceContext,
             AseTraceControls const& experiment,
-            double const betaVolumeTotal)
+            double const betaVolumeTotal,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            hase::data::AseDomainSourceView const domainSources)
             : m_workerIndex(workerIndex)
             , m_workerCount(workerCount)
             , m_group(group)
@@ -145,6 +156,8 @@ namespace hase::core
             , m_deviceContext(deviceContext)
             , m_experiment(experiment)
             , m_betaVolumeTotal(betaVolumeTotal)
+            , m_interfaceMap(interfaceMap)
+            , m_domainSources(domainSources)
         {
             if(workerIndex >= workerCount)
                 throw std::out_of_range("thread worker index exceeds worker count");
@@ -158,9 +171,11 @@ namespace hase::core
         ForwardPhiAseDeviceContext<T_Device, T_Exec>& m_deviceContext;
         AseTraceControls const& m_experiment;
         double m_betaVolumeTotal;
+        hase::data::AseDomainInterfaceView m_interfaceMap;
+        hase::data::AseDomainSourceView m_domainSources;
 
         friend struct HaseWorkerDispatch<ThreadOwnedDevices<T_Device, T_Exec>>;
-        friend struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayBatch>;
+        friend struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayBatchGroup>;
         friend struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, FinalizeForwardAse>;
     };
 
@@ -183,6 +198,21 @@ namespace hase::core
         [[nodiscard]] static bool isRoot(T_Policy const& policy)
         {
             return policy.m_workerIndex == 0u;
+        }
+
+        [[nodiscard]] static WorkerDescriptor descriptor(T_Policy const& policy)
+        {
+            return WorkerDescriptor{
+                static_cast<WorkerId>(policy.m_workerIndex),
+                NodeId{0u},
+                static_cast<std::uint32_t>(policy.m_workerIndex),
+                1.0,
+                std::numeric_limits<std::uint64_t>::max()};
+        }
+
+        [[nodiscard]] static bool requiresFinalizedDeviceState(T_Policy const& policy)
+        {
+            return isRoot(policy);
         }
 
         template<typename T_Value>
@@ -210,25 +240,44 @@ namespace hase::core
         }
     };
 
-    /** @brief Execute one complete forward-ray batch on one thread-owned device. */
+    /** @brief Enqueue all locally assigned batches and download their shared accumulator once. */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
-    struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayBatch>
+    struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayBatchGroup>
     {
         using T_Policy = ThreadOwnedDevices<T_Device, T_Exec>;
 
-        [[nodiscard]] static ForwardRayBatchResult run(T_Policy& policy, ForwardRayBatch const& batch)
+        [[nodiscard]] static ForwardWorkerResult run(T_Policy& policy, ForwardRayBatchGroup const& group)
         {
-            ForwardRayBatchResult result;
-            result.index = batch.index;
-            policy.m_deviceContext.evaluate(
-                policy.m_mesh,
-                result.raw,
-                result.runtime,
-                batch.rayCount,
-                batch.rngSeed,
-                batch.index,
-                policy.m_betaVolumeTotal,
-                policy.m_experiment);
+            ForwardWorkerResult result;
+            if(group.batches.empty())
+            {
+                result.raw = policy.m_deviceContext.makeEmptyRawResult();
+                return result;
+            }
+
+            auto const started = std::chrono::steady_clock::now();
+            bool resetAccumulators = true;
+            for(auto const& batch : group.batches)
+            {
+                policy.m_deviceContext.begin(
+                    policy.m_mesh,
+                    batch.rayCount,
+                    batch.rngSeed,
+                    batch.index,
+                    policy.m_betaVolumeTotal,
+                    policy.m_experiment,
+                    policy.m_interfaceMap,
+                    policy.m_domainSources,
+                    batch.domainRayCounts,
+                    batch.domainSourceWeights,
+                    batch.domainPopulationCounts,
+                    resetAccumulators);
+                resetAccumulators = false;
+            }
+            float ignoredRuntime = 0.0f;
+            policy.m_deviceContext.finish(result.raw, ignoredRuntime);
+            result.runtime = static_cast<float>(
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
             return result;
         }
     };
@@ -241,14 +290,20 @@ namespace hase::core
 
         [[nodiscard]] static data::PhiAseResult run(T_Policy& policy, FinalizeForwardAse const& item)
         {
-            policy.m_deviceContext.uploadAndFinalize(policy.m_mesh, item.raw, policy.m_betaVolumeTotal);
-            auto result = policy.m_deviceContext.downloadFinalizedResult(true, true, true, true);
-            result.dndtAse = policy.m_deviceContext.downloadVolumeDndtAse();
-            result.srmStatus = item.raw.srmStatus;
-            result.srmPasses = item.raw.srmPasses;
-            result.srmRemainingFraction = item.raw.srmRemainingFraction;
-            result.srmMaxIterations = item.raw.srmMaxIterations;
-            result.srmDivergenceStreak = item.raw.srmDivergenceStreak;
+            if(item.upload)
+                policy.m_deviceContext.uploadAndFinalize(policy.m_mesh, item.raw, policy.m_betaVolumeTotal);
+            auto result = policy.m_deviceContext.downloadFinalizedResult(
+                item.downloadFullResult,
+                item.downloadFullResult,
+                true,
+                item.downloadFullResult);
+            if(item.downloadFullResult)
+                result.dndtAse = policy.m_deviceContext.downloadVolumeDndtAse();
+            result.boundaryStatus = item.raw.boundaryStatus;
+            result.boundaryPasses = item.raw.boundaryPasses;
+            result.boundaryRemainingFraction = item.raw.boundaryRemainingFraction;
+            result.boundaryMaxPasses = item.raw.boundaryMaxPasses;
+            result.boundaryDivergenceStreak = item.raw.boundaryDivergenceStreak;
             return result;
         }
     };

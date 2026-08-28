@@ -4,6 +4,7 @@
 #include <data/Material.hpp>
 #include <data/SurfaceOpticsAssignment.hpp>
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,9 +15,9 @@ namespace hase::data
     /**
      * @brief Binds one material and its surface models to a volume domain.
      *
-     * An OpticalComponent is the intended unit of a future domain-local trace.
-     * Boundary-ray transfer belongs to orchestration between traces; kernels
-     * consuming a TraceView never recurse into another component.
+     * An OpticalComponent is the unit of ASE source allocation and scheduling.
+     * Prepared routing metadata connects its boundary faces to adjacent
+     * components without adding ownership to the component itself.
      */
     class OpticalComponent
     {
@@ -25,6 +26,7 @@ namespace hase::data
         {
             static constexpr char const* name = "name";
             static constexpr char const* opticalRole = "opticalRole";
+            static constexpr char const* aseRays = "aseRays";
             static constexpr char const* domain = "domain";
             static constexpr char const* material = "material";
             static constexpr char const* surfaceOptics = "surfaceOptics";
@@ -32,6 +34,7 @@ namespace hase::data
 
         std::optional<std::string> name;
         std::optional<std::string> opticalRole;
+        std::optional<std::uint64_t> aseRays;
         std::shared_ptr<Domain> domain;
         std::shared_ptr<Material> material;
         std::vector<std::shared_ptr<SurfaceOpticsAssignment>> surfaceOptics;

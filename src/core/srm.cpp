@@ -36,7 +36,9 @@ namespace hase::core
     SrmControls resolveSrmControls(AseTraceControls const& experiment)
     {
         return SrmControls{
-            positiveEnvironmentUnsigned("HASE_SRM_MAX_ITERATIONS", experiment.reflectionMaxIterations),
+            positiveEnvironmentUnsigned(
+                "HASE_SRM_MAX_ITERATIONS",
+                experiment.resolvedBoundaryMaxPasses(experiment.domainCount)),
             positiveEnvironmentUnsigned("HASE_SRM_DIVERGENCE_STREAK", 3u)};
     }
 
@@ -51,22 +53,39 @@ namespace hase::core
         return setting == "1" || setting == "true" || setting == "TRUE" || setting == "on" || setting == "ON";
     }
 
-    unsigned srmStatusPriority(data::SrmStatus const status)
+    unsigned boundaryStatusPriority(data::BoundaryStatus const status)
     {
         switch(status)
         {
-        case data::SrmStatus::disabled:
+        case data::BoundaryStatus::disabled:
             return 0u;
-        case data::SrmStatus::converged:
+        case data::BoundaryStatus::converged:
             return 1u;
-        case data::SrmStatus::stable:
+        case data::BoundaryStatus::stable:
             return 2u;
-        case data::SrmStatus::maxIterations:
+        case data::BoundaryStatus::maxPasses:
             return 3u;
-        case data::SrmStatus::diverged:
+        case data::BoundaryStatus::diverged:
             return 4u;
         }
         return 4u;
+    }
+
+    data::BoundaryStatus boundaryStatusFromPriority(unsigned const priority)
+    {
+        switch(priority)
+        {
+        case 0u:
+            return data::BoundaryStatus::disabled;
+        case 1u:
+            return data::BoundaryStatus::converged;
+        case 2u:
+            return data::BoundaryStatus::stable;
+        case 3u:
+            return data::BoundaryStatus::maxPasses;
+        default:
+            return data::BoundaryStatus::diverged;
+        }
     }
 
 } // namespace hase::core

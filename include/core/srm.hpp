@@ -37,9 +37,12 @@ namespace hase::core
     [[nodiscard]] bool srmDebugLoggingEnabled();
 
     /**
-     * @param status SRM termination state.
+     * @param status Boundary termination state.
      * @return Ordering priority used to merge worker statuses.
      */
-    [[nodiscard]] unsigned srmStatusPriority(data::SrmStatus status);
+    [[nodiscard]] unsigned boundaryStatusPriority(data::BoundaryStatus status);
+
+    /** @return Boundary status represented by a merged ordering priority. */
+    [[nodiscard]] data::BoundaryStatus boundaryStatusFromPriority(unsigned priority);
 
 } // namespace hase::core

@@ -10,6 +10,9 @@
 #include <alpakaUtils/HybridBuffer.hpp>
 #include <alpakaUtils/memory.hpp>
 #include <benchmark.hpp>
+#include <core/boundaryTracing.hpp>
+#include <core/compileTimeConfig.hpp>
+#include <core/forwardDirect.hpp>
 #include <core/forwardSrm.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forwardPhiAseMapping.hpp>
@@ -21,6 +24,7 @@
 #include <chrono>
 #include <cstdint>
 #include <ctime>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -170,13 +174,13 @@ namespace hase::core
             , m_materialVertexCount(hostMesh.numberOfMaterials * hostMesh.numberOfMeshPoints)
             , m_batchCount(hase::kernels::forward::defaultForwardRseBatchCount)
         {
-            if(experiment.useReflections)
+            if(experiment.useReflections || experiment.domainCount > 1u)
             {
                 std::uint32_t const maxRayCount = std::max(experiment.maxRays, experiment.resolvedForwardRayCount());
                 if(experiment.reflectionMode == "direct")
                 {
-                    m_directReflectionScratch
-                        = std::make_unique<ReflectionResamplingScratch<T_Device>>(m_devBundle.device, maxRayCount);
+                    m_directScratch
+                        = std::make_unique<DirectBoundaryScratch<T_Device>>(m_devBundle.device, maxRayCount);
                 }
                 else
                 {
@@ -221,6 +225,12 @@ namespace hase::core
             m_rseBatchRayCountsBuffer = hase::alpakaUtils::getHybridBuffer(m_devBundle.device, m_rseBatchRayCounts);
         }
 
+        /** @return A consistently sized zero result without touching the device queue. */
+        [[nodiscard]] ForwardPhiAseRawResult makeEmptyRawResult() const
+        {
+            return makeForwardRawResult(m_volumeCount, m_materialVertexCount, m_batchCount);
+        }
+
         /**
          * @brief Reset or extend accumulators and enqueue one forward-ray batch.
          * @param mesh Device-resident trace view.
@@ -238,6 +248,11 @@ namespace hase::core
             unsigned rseBatch,
             double betaVolumeTotal,
             AseTraceControls const& experiment,
+            hase::data::AseDomainInterfaceView const interfaceMap = {},
+            hase::data::AseDomainSourceView const domainSources = {},
+            std::span<std::uint32_t const> const domainRayCounts = {},
+            std::span<double const> const domainSourceWeights = {},
+            std::span<std::uint32_t const> const domainPopulationCounts = {},
             bool resetAccumulators = true)
         {
             m_started = std::chrono::steady_clock::now();
@@ -246,6 +261,7 @@ namespace hase::core
             {
                 m_accumulatedRayCount = 0u;
                 std::ranges::fill(m_rseBatchRayCounts, 0u);
+                m_boundaryAggregate = makeForwardRawResult(m_volumeCount, m_materialVertexCount, m_batchCount);
             }
             m_accumulatedRayCount += rayCount;
             if(rseBatch >= m_batchCount)
@@ -273,70 +289,86 @@ namespace hase::core
                 m_vertexBatchScoreSum.getMdSpan(),
                 m_volumeRayVisits.getMdSpan(),
                 m_droppedRays.getMdSpan()};
-            m_srmResult = makeForwardRawResult(m_volumeCount, m_materialVertexCount, m_batchCount);
-            m_srmResult.rayCount = rayCount;
+            m_boundaryResult = makeForwardRawResult(m_volumeCount, m_materialVertexCount, m_batchCount);
+            m_boundaryResult.rayCount = rayCount;
             auto enqueueTrace = [&](hase::kernels::forward::concepts::TracePolicy auto const diagnostics)
             {
-                if(experiment.useReflections)
+                if(experiment.useReflections || experiment.domainCount > 1u)
                 {
-                    auto const controls = resolveSrmControls(experiment);
-                    m_srmResult.srmMaxIterations = controls.maxIterations;
-                    m_srmResult.srmDivergenceStreak = controls.divergenceStreak;
-                    if(experiment.reflectionMode == "direct")
-                    {
-                        if(!m_directReflectionScratch)
-                            throw std::runtime_error("direct reflection scratch was not initialized");
-                        runForwardSrm(
-                            m_devBundle,
-                            m_queue,
-                            mesh,
-                            experiment,
-                            m_srmResult,
-                            rayCount,
-                            rseBatch,
-                            betaVolumeTotal,
-                            m_vertexBatchScoreSum,
-                            m_volumeRayVisits,
-                            m_droppedRays,
-                            rngSeed,
-                            controls,
-                            *m_directReflectionScratch,
-                            diagnostics);
-                    }
-                    else
-                    {
-                        auto runSurfaceSrm = [&](auto& scratch)
+                    dispatchBoundaryTracing(
+                        experiment,
+                        [&]<BoundaryTracingPolicy T_Policy>(T_Policy)
                         {
-                            runForwardSurfaceSrm(
-                                m_devBundle,
-                                m_queue,
-                                mesh,
-                                experiment,
-                                m_srmResult,
-                                rayCount,
-                                rseBatch,
-                                betaVolumeTotal,
-                                m_vertexBatchScoreSum,
-                                m_volumeRayVisits,
-                                m_droppedRays,
-                                rngSeed,
-                                controls,
-                                scratch,
-                                diagnostics);
-                        };
-                        if(experiment.srmPositionMode == "centroid")
-                        {
-                            if(!m_centroidSurfaceReservoirScratch)
-                                throw std::runtime_error("centroid surface reservoir scratch was not initialized");
-                            runSurfaceSrm(*m_centroidSurfaceReservoirScratch);
-                        }
-                        else
-                        {
-                            if(!m_exactSurfaceReservoirScratch)
-                                throw std::runtime_error("exact surface reservoir scratch was not initialized");
-                            runSurfaceSrm(*m_exactSurfaceReservoirScratch);
-                        }
-                    }
+                            if constexpr(std::same_as<T_Policy, boundaryTracing::Direct>)
+                            {
+                                if(!m_directScratch)
+                                    throw std::runtime_error("direct boundary scratch was not initialized");
+                                runForwardDirect(
+                                    m_devBundle,
+                                    m_queue,
+                                    mesh,
+                                    experiment,
+                                    m_boundaryResult,
+                                    rayCount,
+                                    rseBatch,
+                                    betaVolumeTotal,
+                                    m_vertexBatchScoreSum,
+                                    m_volumeRayVisits,
+                                    m_droppedRays,
+                                    rngSeed,
+                                    *m_directScratch,
+                                    diagnostics,
+                                    interfaceMap,
+                                    domainSources,
+                                    domainRayCounts,
+                                    domainSourceWeights,
+                                    domainPopulationCounts);
+                            }
+                            else
+                            {
+                                auto const controls = resolveSrmControls(experiment);
+                                m_boundaryResult.boundaryMaxPasses = controls.maxIterations;
+                                m_boundaryResult.boundaryDivergenceStreak = controls.divergenceStreak;
+                                auto runSurfaceSrm = [&](auto& scratch)
+                                {
+                                    runForwardSrm(
+                                        m_devBundle,
+                                        m_queue,
+                                        mesh,
+                                        experiment,
+                                        m_boundaryResult,
+                                        rayCount,
+                                        rseBatch,
+                                        betaVolumeTotal,
+                                        m_vertexBatchScoreSum,
+                                        m_volumeRayVisits,
+                                        m_droppedRays,
+                                        rngSeed,
+                                        controls,
+                                        scratch,
+                                        diagnostics,
+                                        interfaceMap,
+                                        domainSources,
+                                        domainRayCounts,
+                                        domainSourceWeights,
+                                        domainPopulationCounts);
+                                };
+                                if(experiment.srmPositionMode == "centroid")
+                                {
+                                    if(!m_centroidSurfaceReservoirScratch)
+                                        throw std::runtime_error(
+                                            "centroid surface reservoir scratch was not initialized");
+                                    runSurfaceSrm(*m_centroidSurfaceReservoirScratch);
+                                }
+                                else
+                                {
+                                    if(!m_exactSurfaceReservoirScratch)
+                                        throw std::runtime_error(
+                                            "exact surface reservoir scratch was not initialized");
+                                    runSurfaceSrm(*m_exactSurfaceReservoirScratch);
+                                }
+                            }
+                        });
                 }
                 else
                 {
@@ -363,11 +395,22 @@ namespace hase::core
                 enqueueTrace(hase::kernels::forward::tracePolicy::diagnostics::enabled);
             else
                 enqueueTrace(hase::kernels::forward::tracePolicy::diagnostics::none);
+            if(boundaryStatusPriority(m_boundaryResult.boundaryStatus)
+               > boundaryStatusPriority(m_boundaryAggregate.boundaryStatus))
+                m_boundaryAggregate.boundaryStatus = m_boundaryResult.boundaryStatus;
+            m_boundaryAggregate.boundaryPasses
+                = std::max(m_boundaryAggregate.boundaryPasses, m_boundaryResult.boundaryPasses);
+            m_boundaryAggregate.boundaryRemainingFraction
+                = std::max(m_boundaryAggregate.boundaryRemainingFraction, m_boundaryResult.boundaryRemainingFraction);
+            m_boundaryAggregate.boundaryMaxPasses
+                = std::max(m_boundaryAggregate.boundaryMaxPasses, m_boundaryResult.boundaryMaxPasses);
+            m_boundaryAggregate.boundaryDivergenceStreak
+                = std::max(m_boundaryAggregate.boundaryDivergenceStreak, m_boundaryResult.boundaryDivergenceStreak);
         }
 
         /**
          * @brief Wait for the current launch and optionally download raw accumulators.
-         * @param result Host result replaced with current counters and SRM metadata.
+         * @param result Host result replaced with current counters and boundary metadata.
          * @param runtime Wall-clock seconds since `begin`, replaced on return.
          * @param downloadAccumulators Whether to copy score, visit, and dropped-ray arrays.
          */
@@ -376,12 +419,12 @@ namespace hase::core
             result = makeForwardRawResult(m_volumeCount, m_materialVertexCount, m_batchCount);
             result.rayCount = m_accumulatedRayCount;
             result.rseBatchRayCounts = m_rseBatchRayCounts;
-            result.srmStatus = m_srmResult.srmStatus;
-            result.srmPasses = m_srmResult.srmPasses;
-            result.srmRemainingFraction = m_srmResult.srmRemainingFraction;
-            result.srmMaxIterations = m_srmResult.srmMaxIterations;
-            result.srmDivergenceStreak = m_srmResult.srmDivergenceStreak;
-            if(m_rayCount == 0u)
+            result.boundaryStatus = m_boundaryAggregate.boundaryStatus;
+            result.boundaryPasses = m_boundaryAggregate.boundaryPasses;
+            result.boundaryRemainingFraction = m_boundaryAggregate.boundaryRemainingFraction;
+            result.boundaryMaxPasses = m_boundaryAggregate.boundaryMaxPasses;
+            result.boundaryDivergenceStreak = m_boundaryAggregate.boundaryDivergenceStreak;
+            if(m_accumulatedRayCount == 0u)
             {
                 runtime = 0.0f;
                 return;
@@ -416,9 +459,25 @@ namespace hase::core
             unsigned rngSeed,
             unsigned rseBatch,
             double betaVolumeTotal,
-            AseTraceControls const& experiment)
+            AseTraceControls const& experiment,
+            hase::data::AseDomainInterfaceView const interfaceMap = {},
+            hase::data::AseDomainSourceView const domainSources = {},
+            std::span<std::uint32_t const> const domainRayCounts = {},
+            std::span<double const> const domainSourceWeights = {},
+            std::span<std::uint32_t const> const domainPopulationCounts = {})
         {
-            begin(mesh, rayCount, rngSeed, rseBatch, betaVolumeTotal, experiment);
+            begin(
+                mesh,
+                rayCount,
+                rngSeed,
+                rseBatch,
+                betaVolumeTotal,
+                experiment,
+                interfaceMap,
+                domainSources,
+                domainRayCounts,
+                domainSourceWeights,
+                domainPopulationCounts);
             finish(result, runtime);
         }
 
@@ -601,10 +660,11 @@ namespace hase::core
         T_DoubleBuffer m_relativeStandardError;
         T_DoubleBuffer m_volumeDndtAse;
         T_ByteBuffer m_sourceStrengthPrefixScanBuffer;
-        std::unique_ptr<ReflectionResamplingScratch<T_Device>> m_directReflectionScratch;
         std::unique_ptr<ExactSurfaceReservoirScratch> m_exactSurfaceReservoirScratch;
         std::unique_ptr<CentroidSurfaceReservoirScratch> m_centroidSurfaceReservoirScratch;
-        ForwardPhiAseRawResult m_srmResult;
+        std::unique_ptr<DirectBoundaryScratch<T_Device>> m_directScratch;
+        ForwardPhiAseRawResult m_boundaryResult;
+        ForwardPhiAseRawResult m_boundaryAggregate;
         unsigned m_volumeCount;
         unsigned m_materialVertexCount;
         unsigned m_batchCount;

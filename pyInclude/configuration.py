@@ -290,7 +290,7 @@ class _YamlContext:
     def _component(self, registryName, value):
         path = f"optical_components.{registryName}"
         spec = _mapping(value, path)
-        allowed = {"material", "domain", "name", "optical_role", "surface_optics"}
+        allowed = {"material", "domain", "name", "optical_role", "ase_rays", "surface_optics"}
         _rejectUnknown(spec, allowed, path)
         if "domain" not in spec:
             raise ValueError(f"{path} requires domain")
@@ -298,6 +298,7 @@ class _YamlContext:
             "material": self.resolve("materials", spec["material"]),
             "name": spec.get("name", registryName),
             "opticalRole": spec.get("optical_role"),
+            "aseRays": spec.get("ase_rays"),
             "domain": self.resolve("domains", spec["domain"]),
         }
         component = OpticalComponent(**kwargs)
@@ -359,6 +360,7 @@ def _phiAse(spec):
         "srm_position_mode": "srmPositionMode",
         "reflection_max_iterations": "reflectionMaxIterations",
         "reflection_tolerance": "reflectionTolerance",
+        "boundary_max_passes": "boundaryMaxPasses",
         "rng_seed": "rngSeed",
         "openpmd_backend": "openpmdBackend",
         "parallel_mode": "parallelMode",

@@ -68,16 +68,18 @@ namespace hase::internal::openpmd::output
     void writeResultStatus(io::Iteration& iteration, std::string const& root, data::PhiAseResult const& result)
     {
         iteration.setAttribute(
-            "hase__attribute__" + encodePath(root + "/srmStatus"),
-            std::string{data::toString(result.srmStatus)});
-        iteration.setAttribute("hase__attribute__" + encodePath(root + "/srmPasses"), result.srmPasses);
+            "hase__attribute__" + encodePath(root + "/boundaryStatus"),
+            std::string{data::toString(result.boundaryStatus)});
+        iteration.setAttribute("hase__attribute__" + encodePath(root + "/boundaryPasses"), result.boundaryPasses);
         iteration.setAttribute(
-            "hase__attribute__" + encodePath(root + "/srmRemainingFraction"),
-            result.srmRemainingFraction);
-        iteration.setAttribute("hase__attribute__" + encodePath(root + "/srmMaxIterations"), result.srmMaxIterations);
+            "hase__attribute__" + encodePath(root + "/boundaryRemainingFraction"),
+            result.boundaryRemainingFraction);
         iteration.setAttribute(
-            "hase__attribute__" + encodePath(root + "/srmDivergenceStreak"),
-            result.srmDivergenceStreak);
+            "hase__attribute__" + encodePath(root + "/boundaryMaxPasses"),
+            result.boundaryMaxPasses);
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/boundaryDivergenceStreak"),
+            result.boundaryDivergenceStreak);
     }
 
     void setRoot(io::Iteration& iteration, std::string const& root)

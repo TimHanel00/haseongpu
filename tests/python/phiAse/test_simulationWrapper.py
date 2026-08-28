@@ -346,6 +346,22 @@ def testPhiAseSerializesAdaptiveRangeWithoutAnImplicitFixedRayCount():
     assert fixed.openPmdAttributes(numberOfSamples=1)["forwardRayCount"] == 250
     assert fixed.openPmdAttributes(numberOfSamples=1)["enableDiagnostics"] is True
 
+
+def testPhiAseSerializesBoundaryPolicyAndOptionalPassCap():
+    automatic = PhiASE().openPmdAttributes(numberOfSamples=1)
+    assert automatic["reflectionMode"] == "direct"
+    assert automatic["boundaryMaxPasses"] == 0
+
+    explicit = PhiASE(reflectionMode="srm", boundaryMaxPasses=17)
+    attributes = explicit.openPmdAttributes(numberOfSamples=1)
+    assert attributes["reflectionMode"] == "srm"
+    assert attributes["boundaryMaxPasses"] == 17
+
+    with pytest.raises(ValueError, match="reflectionMode"):
+        PhiASE(reflectionMode="unknown")
+    with pytest.raises(ValueError, match="boundaryMaxPasses"):
+        PhiASE(boundaryMaxPasses=0)
+
 def testPhiAseDefaultBackendSerializesAvailableAlpakaBackend():
     phiAse = PhiASE()
     backend = phiAse.openPmdAttributes(numberOfSamples=1)["backend"]

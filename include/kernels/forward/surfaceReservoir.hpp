@@ -157,12 +157,40 @@ namespace hase::kernels::forward
         bool valid = false;
     };
 
+    /** @brief Select one retained slot from a known face. */
+    [[nodiscard]] ALPAKA_FN_ACC SurfaceReservoirSample sampleSurfaceReservoirFace(
+        alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto reservoir,
+        std::uint32_t const faceId,
+        std::uint32_t const rayIndex,
+        bool const stratified,
+        alpaka::rand::concepts::UniformRandomEngine auto& rng)
+    {
+        alpaka::concepts::Vector auto slotsPerFace = reservoir.slotsPerFace;
+        std::uint32_t const filledSlots = alpaka::math::min(reservoir.counts[faceId], slotsPerFace.x());
+        if(filledSlots == 0u)
+            return {};
+        std::uint32_t const offset = faceId * slotsPerFace.x();
+        std::uint32_t localSlot = 0u;
+        if(stratified)
+            localSlot = rayIndex % filledSlots;
+        else
+        {
+            localSlot = static_cast<std::uint32_t>(
+                alpaka::rand::distribution::UniformReal<double>{}(rng) * static_cast<double>(filledSlots));
+            if(localSlot >= filledSlots)
+                localSlot = filledSlots - 1u;
+        }
+        return {faceId, offset + localSlot, true};
+    }
+
     /** @brief Reflected boundary state offered to reservoir sampling. */
     struct SurfaceReservoirBoundarySample
     {
         hase::core::Direction direction;
         double weight = 0.0;
         double wavelength = 0.0;
+        std::uint32_t targetCell = std::numeric_limits<std::uint32_t>::max();
+        std::uint32_t targetFace = std::numeric_limits<std::uint32_t>::max();
         bool valid = true;
     };
 
@@ -249,9 +277,14 @@ namespace hase::kernels::forward
         if(!sample.valid)
             return ray::BoundaryResult::stop;
 
+        auto const targetCell
+            = sample.targetCell == std::numeric_limits<std::uint32_t>::max() ? cell : sample.targetCell;
+        auto const targetFace
+            = sample.targetFace == std::numeric_limits<std::uint32_t>::max() ? localFace : sample.targetFace;
+
         depositSurfaceReservoirSample(
             acc,
-            cell * mesh.numberOfFacesPerCell + localFace,
+            targetCell * mesh.numberOfFacesPerCell + targetFace,
             rayState.position,
             sample.direction,
             sample.weight,
@@ -278,7 +311,6 @@ namespace hase::kernels::forward
         std::uint32_t const rayIndex,
         alpaka::rand::concepts::UniformRandomEngine auto& rng)
     {
-        alpaka::concepts::Vector auto slotsPerFace = reservoir.slotsPerFace;
         if(faceCount == 0u || sampling.totalWeight[0u] <= 0.0)
             return {};
 
@@ -299,21 +331,7 @@ namespace hase::kernels::forward
             faceId = lower < faceCount ? lower : faceCount - 1u;
         }
 
-        std::uint32_t const filledSlots = alpaka::math::min(reservoir.counts[faceId], slotsPerFace.x());
-        if(filledSlots == 0u)
-            return {};
-        std::uint32_t const offset = faceId * slotsPerFace.x();
-        std::uint32_t localSlot = 0u;
-        if(sampling.useFaceStratification)
-            localSlot = rayIndex % filledSlots;
-        else
-        {
-            localSlot = static_cast<std::uint32_t>(
-                alpaka::rand::distribution::UniformReal<double>{}(rng) * static_cast<double>(filledSlots));
-            if(localSlot >= filledSlots)
-                localSlot = filledSlots - 1u;
-        }
-        return {faceId, offset + localSlot, true};
+        return sampleSurfaceReservoirFace(reservoir, faceId, rayIndex, sampling.useFaceStratification, rng);
     }
 
     /** @brief Gather deterministic top-K priority winners into the sampled reservoir slots. */

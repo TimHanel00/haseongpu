@@ -53,7 +53,8 @@ namespace hase::core
             AseTraceControls& experiment,
             ExecutionPolicy& compute,
             data::PhiAseResult& result,
-            hase::data::TraceData& hostMesh)
+            hase::data::TraceData& hostMesh,
+            hase::data::AseDomainGraph& domains)
         {
             auto backends
                 = alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs, alpaka::exec::enabledExecutors);
@@ -107,7 +108,7 @@ namespace hase::core
                     unsigned highRelativeStandardError = 0;
                     unsigned definedRelativeStandardErrors = 0;
                     time_t starttime = time(0);
-                    ForwardPhiAseContext context{std::move(devices), exec, experiment, hostMesh};
+                    ForwardPhiAseContext context{std::move(devices), exec, experiment, hostMesh, domains};
 #ifdef HASE_ENABLE_BACKEND_TIMING
                     auto const preciseBackendStarted = std::chrono::steady_clock::now();
 #endif
@@ -356,7 +357,8 @@ namespace hase::core
     [[nodiscard]] inline data::PhiAseResult runPhiAse(data::Simulation const& simulation)
     {
         auto state = data::prepareSimulation(simulation);
-        int const status = detail::runPreparedPhiAse(state.ase, state.execution, state.result, state.trace);
+        int const status
+            = detail::runPreparedPhiAse(state.ase, state.execution, state.result, state.trace, state.aseDomains);
         if(status != 0)
             throw std::runtime_error("ASE trace failed with return code " + std::to_string(status));
         return std::move(state.result);

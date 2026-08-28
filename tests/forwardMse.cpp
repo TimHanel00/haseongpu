@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <core/calcForwardPhiAse.hpp>
 #include <core/haseWorker.hpp>
+#include <core/reflectionResampling.hpp>
 #include <kernels/forward/rayTransition.hpp>
 #include <kernels/forward/rayWalk.hpp>
 #include <kernels/forward/reflectionResampling.hpp>
@@ -137,6 +138,20 @@ namespace
         view.numberOfMeshPoints = mesh.numberOfMeshPoints;
         return view;
     }
+
+    struct TestInteriorBoundary
+    {
+        unsigned cell;
+        unsigned face;
+
+        [[nodiscard]] ALPAKA_FN_HOST_ACC bool isInteriorBoundary(
+            hase::data::TraceView const&,
+            unsigned const candidateCell,
+            unsigned const candidateFace) const
+        {
+            return candidateCell == cell && candidateFace == face;
+        }
+    };
 } // namespace
 
 TEST_CASE("forward trace policies select compile-time dimensions and default diagnostics off", "[forward][policy]")
@@ -164,6 +179,12 @@ TEST_CASE("forward trace policies select compile-time dimensions and default dia
     static_assert(std::same_as<decltype(Policies::getPosition()), tracePolicy::position::Centroid>);
     static_assert(std::same_as<decltype(Policies::getDiagnostics()), tracePolicy::diagnostics::Enabled>);
     STATIC_REQUIRE(policies.hasPolicy(tracePolicy::diagnostics::enabled));
+
+    using BoundaryPolicies = decltype(TracePolicyList{
+        tracePolicy::source::boundaryCandidates,
+        tracePolicy::boundary::boundaryCandidates});
+    static_assert(std::same_as<decltype(BoundaryPolicies::getSource()), tracePolicy::source::BoundaryCandidates>);
+    static_assert(std::same_as<decltype(BoundaryPolicies::getBoundary()), tracePolicy::boundary::BoundaryCandidates>);
 }
 
 TEST_CASE("forward ray-visit diagnostic dispatches distinct kernel variants", "[forward][policy][backend]")
@@ -203,6 +224,36 @@ TEST_CASE("forward ray-visit diagnostic dispatches distinct kernel variants", "[
         },
         backends);
     CHECK(testedBackendCount > 0u);
+}
+
+TEST_CASE("boundary interaction conserves weight across reflected and transmitted children", "[forward][boundary]")
+{
+    using hase::core::Direction;
+    using hase::kernels::forward::boundaryInteraction;
+    auto const normal = Direction{0.0, 0.0, 1.0};
+    auto const normalIncidence = boundaryInteraction(Direction{0.0, 0.0, 1.0}, normal, 1.5, 1.0, 0.25);
+    CHECK_FALSE(normalIncidence.totalInternalReflection);
+    CHECK(normalIncidence.reflectance == Catch::Approx(0.25));
+    CHECK(normalIncidence.reflected.z == Catch::Approx(-1.0));
+    CHECK(normalIncidence.transmitted.z == Catch::Approx(1.0));
+    auto const split = hase::kernels::forward::splitBoundaryWeights(8.0, normalIncidence, true, true);
+    CHECK(split.reflected == Catch::Approx(2.0));
+    CHECK(split.transmitted == Catch::Approx(6.0));
+    CHECK(split.reflected + split.transmitted == Catch::Approx(8.0));
+
+    auto const noReflection = hase::kernels::forward::splitBoundaryWeights(8.0, normalIncidence, true, false);
+    CHECK(noReflection.reflected == 0.0);
+    CHECK(noReflection.transmitted == Catch::Approx(6.0));
+
+    auto const grazing = hase::kernels::forward::normalize(Direction{1.0, 0.0, 0.1});
+    auto const totalInternalReflection = boundaryInteraction(grazing, normal, 1.5, 1.0, 0.0);
+    CHECK(totalInternalReflection.totalInternalReflection);
+    CHECK(totalInternalReflection.reflectance == Catch::Approx(1.0));
+    CHECK(totalInternalReflection.transmitted.euclidLength() == Catch::Approx(0.0));
+    auto const internalReflection
+        = hase::kernels::forward::splitBoundaryWeights(8.0, totalInternalReflection, false, true);
+    CHECK(internalReflection.reflected == Catch::Approx(8.0));
+    CHECK(internalReflection.transmitted == 0.0);
 }
 
 TEST_CASE("forward gain lookup follows the receiving cell material and ray wavelength", "[forward][material]")
@@ -929,6 +980,42 @@ TEST_CASE("forward Tet4 probe recovery selects an alternate neighbor", "[forward
     CHECK(hitPoint.z == 0.0);
 }
 
+TEST_CASE("forward Tet4 recovery stops at an interior policy boundary", "[forward][traversal][boundary]")
+{
+    constexpr unsigned numberOfCells = 2u;
+    constexpr unsigned faceCount = hase::data::tet4FaceCount;
+    constexpr unsigned planeWidth = hase::data::tet4BarycentricPlaneWidth;
+    std::array<double, numberOfCells * faceCount * planeWidth> planes{};
+    planes[(1u * faceCount + 0u) * planeWidth] = -1.0;
+
+    std::array<int, numberOfCells * faceCount> neighbors{};
+    std::array<int, numberOfCells * faceCount> neighborFaces{};
+    neighbors.fill(-1);
+    neighborFaces.fill(-1);
+    neighbors[0u] = 1;
+    neighborFaces[0u] = 0;
+    neighbors[faceCount] = 0;
+    neighborFaces[faceCount] = 0;
+
+    hase::data::TraceView view{};
+    view.barycentricFacePlanes = planes;
+    view.cellNeighborCells = neighbors;
+    view.cellNeighborLocalFaces = neighborFaces;
+    view.numberOfCells = numberOfCells;
+    view.numberOfFacesPerCell = faceCount;
+
+    auto const transition = hase::kernels::forward::recoverFaceTransition(
+        view,
+        0u,
+        0,
+        hase::core::Point{},
+        hase::core::Point{1.0, 0.0, 0.0},
+        TestInteriorBoundary{1u, 0u});
+    CHECK(transition.status == hase::kernels::forward::Tet4TransitionStatus::reachedBoundary);
+    CHECK(transition.cell == 1u);
+    CHECK(transition.boundaryFace == 0);
+}
+
 TEST_CASE("forward Tet4 recovery remains bounded on cyclic connectivity", "[forward][traversal]")
 {
     std::array<double, hase::data::tet4FaceCount * hase::data::tet4BarycentricPlaneWidth> planes{};
@@ -969,7 +1056,7 @@ TEST_CASE("forward SRM environment controls are strict positive overrides", "[fo
     unsetenv("HASE_SRM_MAX_ITERATIONS");
     unsetenv("HASE_SRM_DIVERGENCE_STREAK");
     hase::core::AseTraceControls experiment{};
-    experiment.reflectionMaxIterations = 8u;
+    experiment.boundaryMaxPasses = 8u;
     auto const defaults = hase::core::resolveSrmControls(experiment);
     CHECK(defaults.maxIterations == 8u);
     CHECK(defaults.divergenceStreak == 3u);

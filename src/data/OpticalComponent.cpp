@@ -10,6 +10,7 @@ namespace hase::data
         OpticalComponent result;
         reader.assign(result.name, prefix, FieldName::name);
         reader.assign(result.opticalRole, prefix, FieldName::opticalRole);
+        reader.assign(result.aseRays, prefix, FieldName::aseRays);
         reader.assign(result.domain, prefix, FieldName::domain);
         reader.assign(result.material, prefix, FieldName::material);
         reader.assign(result.surfaceOptics, prefix, FieldName::surfaceOptics);

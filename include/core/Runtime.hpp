@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -174,7 +175,7 @@ namespace hase::core
         unsigned maxGpusPerNode = 0;
     };
 
-    /** @brief Physical and statistical controls for one domain-local ASE trace. */
+    /** @brief Physical, statistical, and boundary controls for a multi-domain ASE trace. */
     struct AseTraceControls
     {
         AseTraceControls() = default;
@@ -191,6 +192,15 @@ namespace hase::core
             return forwardRayCount == 0u ? minRays : forwardRayCount;
         }
 
+        /** @return Explicit boundary cap, or the topology-dependent default. */
+        [[nodiscard]] unsigned resolvedBoundaryMaxPasses(std::size_t const domainCount) const
+        {
+            if(boundaryMaxPasses != 0u)
+                return boundaryMaxPasses;
+            auto const domains = static_cast<unsigned>(std::max<std::size_t>(1u, domainCount));
+            return std::max(64u, (reflectionMaxIterations + 1u) * domains);
+        }
+
         unsigned minRays = 0u;
         unsigned maxRays = 0u;
         unsigned forwardRayCount = 0u;
@@ -204,6 +214,8 @@ namespace hase::core
         bool monochromatic = false;
         unsigned reflectionMaxIterations = 40u;
         double reflectionTolerance = 1.0e-4;
+        unsigned boundaryMaxPasses = 0u;
+        std::size_t domainCount = 1u;
     };
 
     /**

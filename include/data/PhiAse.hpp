@@ -29,6 +29,7 @@ namespace hase::data
             static constexpr char const* srmPositionMode = "srmPositionMode";
             static constexpr char const* reflectionMaxIterations = "reflectionMaxIterations";
             static constexpr char const* reflectionTolerance = "reflectionTolerance";
+            static constexpr char const* boundaryMaxPasses = "boundaryMaxPasses";
             static constexpr char const* monochromatic = "monochromatic";
             static constexpr char const* backend = "backend";
             static constexpr char const* parallelMode = "parallelMode";
@@ -55,6 +56,7 @@ namespace hase::data
         std::string srmPositionMode;
         std::uint64_t reflectionMaxIterations{};
         double reflectionTolerance{};
+        std::optional<std::uint64_t> boundaryMaxPasses;
         bool monochromatic{};
         std::optional<std::string> backend;
         std::string parallelMode;

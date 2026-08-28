@@ -94,14 +94,17 @@ namespace hase::kernels::forward
      * @param exitFace Candidate local exit face.
      * @param point Fixed intersection position.
      * @param direction Ray direction used for the epsilon ownership probe.
-     * @return Entered-cell, exterior-boundary, or failed transition.
+     * @param boundaryBehaviour Policy that identifies traversable-mesh faces handled as boundaries.
+     * @return Entered-cell, physical/policy-boundary, or failed transition.
      */
+    template<typename T_BoundaryBehaviour>
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition recoverFaceTransition(
         data::TraceView const& mesh,
         unsigned cell,
         int exitFace,
         core::Point const point,
-        core::Point const direction)
+        core::Point const direction,
+        T_BoundaryBehaviour const& boundaryBehaviour)
     {
         Tet4FaceTransition result{cell};
         constexpr unsigned invalidCell = std::numeric_limits<unsigned>::max();
@@ -110,6 +113,13 @@ namespace hase::kernels::forward
         unsigned recentCell2 = invalidCell;
         for(unsigned transition = 0u; transition < maxImmediateFaceTransitions; ++transition)
         {
+            if(boundaryBehaviour.isInteriorBoundary(mesh, cell, static_cast<unsigned>(exitFace)))
+            {
+                result.cell = cell;
+                result.boundaryFace = exitFace;
+                result.status = Tet4TransitionStatus::reachedBoundary;
+                return result;
+            }
             int const neighbor = mesh.getCellNeighbor(cell, static_cast<unsigned>(exitFace));
             if(neighbor < 0)
             {
@@ -178,6 +188,24 @@ namespace hase::kernels::forward
         return result;
     }
 
+    struct NoInteriorBoundary
+    {
+        [[nodiscard]] ALPAKA_FN_ACC bool isInteriorBoundary(data::TraceView const&, unsigned, unsigned) const
+        {
+            return false;
+        }
+    };
+
+    [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition recoverFaceTransition(
+        data::TraceView const& mesh,
+        unsigned const cell,
+        int const exitFace,
+        core::Point const point,
+        core::Point const direction)
+    {
+        return recoverFaceTransition(mesh, cell, exitFace, point, direction, NoInteriorBoundary{});
+    }
+
     /**
      * @param mesh Device trace containing face-neighbor ownership.
      * @param cell Cell owning the completed segment.
@@ -186,12 +214,14 @@ namespace hase::kernels::forward
      * @param direction Ray direction.
      * @return Resolved next-cell or exterior-boundary transition.
      */
+    template<typename T_BoundaryBehaviour>
     [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition transitionAcrossIntersection(
         hase::data::TraceView const& mesh,
         unsigned const cell,
         Tet4FaceIntersection const intersection,
         hase::core::Point const point,
-        hase::core::Point const direction)
+        hase::core::Point const direction,
+        T_BoundaryBehaviour const& boundaryBehaviour)
     {
         if(intersection.localFace < 0)
         {
@@ -199,7 +229,7 @@ namespace hase::kernels::forward
         }
         if(hasMultipleTiedFaces(intersection.tiedFaceMask))
         {
-            return recoverFaceTransition(mesh, cell, intersection.localFace, point, direction);
+            return recoverFaceTransition(mesh, cell, intersection.localFace, point, direction, boundaryBehaviour);
         }
 
         int const neighbor = mesh.getCellNeighbor(cell, static_cast<unsigned>(intersection.localFace));
@@ -218,5 +248,15 @@ namespace hase::kernels::forward
             forbiddenFace,
             -1,
             Tet4TransitionStatus::enteredCell};
+    }
+
+    [[nodiscard]] inline ALPAKA_FN_ACC Tet4FaceTransition transitionAcrossIntersection(
+        hase::data::TraceView const& mesh,
+        unsigned const cell,
+        Tet4FaceIntersection const intersection,
+        hase::core::Point const point,
+        hase::core::Point const direction)
+    {
+        return transitionAcrossIntersection(mesh, cell, intersection, point, direction, NoInteriorBoundary{});
     }
 } // namespace hase::kernels::forward

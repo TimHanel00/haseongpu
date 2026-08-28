@@ -151,9 +151,9 @@ def testCurrentTet4WithoutReflectionsMatchesLegacyWedgeIntegral(
         useCladding=False,
     )
 
-    assert state.aseResult.srmStatus == "disabled"
-    assert state.aseResult.srmPasses == 0
-    assert state.aseResult.srmMaxIterations == 0
+    assert state.aseResult.boundaryStatus == "disabled"
+    assert state.aseResult.boundaryPasses == 0
+    assert state.aseResult.boundaryMaxPasses == 0
     # A stale all-zero beta-volume CDF sends every source history to the final
     # Tet. Keep the source visits dispersed as beta evolves from its zero state.
     assert np.max(state.totalRays) < metadata["parameters"]["maxRaysPerSample"] // 20

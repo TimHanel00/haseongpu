@@ -145,8 +145,9 @@ namespace hase::core
             AseTraceControls& experiment,
             ExecutionPolicy& compute,
             SimulationControls const& run,
-            hase::data::TraceData& hostMesh)
-            : m_forwardAseContext(std::move(devices), executor, experiment, hostMesh)
+            hase::data::TraceData& hostMesh,
+            hase::data::AseDomainGraph& domains)
+            : m_forwardAseContext(std::move(devices), executor, experiment, hostMesh, domains)
             , m_device(m_forwardAseContext.primaryDevice())
             , m_queue(m_device.makeQueue(alpaka::queueKind::nonBlocking))
             , m_devBundle(m_device, executor)
@@ -485,11 +486,11 @@ namespace hase::core
 
         static void copyStatus(data::PhiAseResult const& source, data::PhiAseResult& target)
         {
-            target.srmStatus = source.srmStatus;
-            target.srmPasses = source.srmPasses;
-            target.srmRemainingFraction = source.srmRemainingFraction;
-            target.srmMaxIterations = source.srmMaxIterations;
-            target.srmDivergenceStreak = source.srmDivergenceStreak;
+            target.boundaryStatus = source.boundaryStatus;
+            target.boundaryPasses = source.boundaryPasses;
+            target.boundaryRemainingFraction = source.boundaryRemainingFraction;
+            target.boundaryMaxPasses = source.boundaryMaxPasses;
+            target.boundaryDivergenceStreak = source.boundaryDivergenceStreak;
         }
 
         data::SimulationSnapshot makeSnapshot(unsigned step)
@@ -679,6 +680,7 @@ namespace hase::core
             ExecutionPolicy& compute,
             SimulationControls const& run,
             hase::data::TraceData& hostMesh,
+            hase::data::AseDomainGraph& domains,
             std::function<void(data::SimulationSnapshot const&)> const& callback,
             std::function<data::TraceData(unsigned)> const& receiveControl = {})
         {
@@ -724,7 +726,8 @@ namespace hase::core
                     hase::benchmark::ScopedRunContext benchmarkContext{sampleDevice, exec, compute, experiment};
 #endif
                     BENCH(CompiledBackendSimulation);
-                    CompiledSimulationRunner runner{std::move(devices), exec, experiment, compute, run, hostMesh};
+                    CompiledSimulationRunner
+                        runner{std::move(devices), exec, experiment, compute, run, hostMesh, domains};
                     runner.run(callback, receiveControl);
                     return 0;
                 },
@@ -768,6 +771,7 @@ namespace hase::core
             prepared.state.execution,
             prepared.state.controls,
             prepared.state.trace,
+            prepared.state.aseDomains,
             callback,
             receiveControl
                 ? std::function<data::TraceData(unsigned)>{[&](unsigned const completedStep)

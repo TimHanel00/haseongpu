@@ -151,6 +151,8 @@ class PhiASE:
     """Maximum reflected-source passes after the direct volume-source pass."""
     reflectionTolerance: float = 1e-4
     """Stop reflected passes when their source-weight fraction is below this value."""
+    boundaryMaxPasses: int | None = None
+    """Hard boundary-pass cap; ``None`` selects a domain-count-dependent runtime cap."""
     monochromatic: bool = False
     """Use only the first spectral samples instead of wavelength integration."""
 
@@ -198,6 +200,7 @@ class PhiASE:
                 transportField("srmPositionMode"),
                 transportField("reflectionMaxIterations"),
                 transportField("reflectionTolerance"),
+                transportField("boundaryMaxPasses", optional=True),
                 transportField("monochromatic"),
                 transportField(
                     "backend",
@@ -232,6 +235,14 @@ class PhiASE:
             raise ValueError("PhiASE.surfaceReservoirSize must be positive")
         if self.srmPositionMode not in {"exact", "centroid"}:
             raise ValueError("PhiASE.srmPositionMode must be 'exact' or 'centroid'")
+        if self.boundaryMaxPasses is not None:
+            if isinstance(self.boundaryMaxPasses, bool) or not isinstance(
+                self.boundaryMaxPasses, (int, np.integer)
+            ):
+                raise TypeError("PhiASE.boundaryMaxPasses must be a positive integer or None")
+            if int(self.boundaryMaxPasses) <= 0:
+                raise ValueError("PhiASE.boundaryMaxPasses must be greater than zero")
+            self.boundaryMaxPasses = int(self.boundaryMaxPasses)
         if self.ase_steps is not None:
             if isinstance(self.ase_steps, bool) or not isinstance(self.ase_steps, (int, np.integer)):
                 raise TypeError("PhiASE.ase_steps must be an integer or None")
@@ -284,6 +295,7 @@ class PhiASE:
         parser.add_argument("--reflection-mode", choices=("direct", "srm"), default=None)
         parser.add_argument("--surface-reservoir-size", type=int, default=None)
         parser.add_argument("--srm-position-mode", choices=("exact", "centroid"), default=None)
+        parser.add_argument("--boundary-max-passes", type=int, default=None)
         parser.add_argument("--repetitions", type=int, default=None)
         parser.add_argument("--adaptive-steps", type=int, default=None)
         spectral_mode = parser.add_mutually_exclusive_group()
@@ -325,6 +337,7 @@ class PhiASE:
             "reflection_mode": "reflectionMode",
             "surface_reservoir_size": "surfaceReservoirSize",
             "srm_position_mode": "srmPositionMode",
+            "boundary_max_passes": "boundaryMaxPasses",
             "repetitions": "repetitions",
             "adaptive_steps": "adaptiveSteps",
             "monochromatic": "monochromatic",
@@ -364,6 +377,9 @@ class PhiASE:
             raise ValueError("PhiASE.adaptiveSteps must not be negative")
         if forward_ray_count < 0:
             raise ValueError("PhiASE.forwardRayCount must not be negative")
+        boundary_max_passes = 0 if self.boundaryMaxPasses is None else int(self.boundaryMaxPasses)
+        if boundary_max_passes < 0:
+            raise ValueError("PhiASE.boundaryMaxPasses must not be negative")
         min_sample = 0 if self.minSampleRange is None else int(self.minSampleRange)
         max_sample = int(numberOfSamples) - 1 if self.maxSampleRange is None else int(self.maxSampleRange)
         attributes = {
@@ -378,6 +394,7 @@ class PhiASE:
             "reflectionMode": self.reflectionMode,
             "surfaceReservoirSize": int(self.surfaceReservoirSize),
             "srmPositionMode": self.srmPositionMode,
+            "boundaryMaxPasses": boundary_max_passes,
             "repetitions": self.repetitions,
             "adaptiveSteps": adaptive_steps,
             "useReflections": self.useReflections,

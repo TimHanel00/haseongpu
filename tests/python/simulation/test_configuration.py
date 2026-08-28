@@ -62,6 +62,7 @@ def _config():
             "crystal": {
                 "domain": "crystal_volume",
                 "material": "gain_material",
+                "ase_rays": 7,
                 "surface_optics": [
                     {
                         "domain": "pump_face",
@@ -151,6 +152,7 @@ def testSimulationFromYamlBuildsPublicObjectGraph(tmp_path):
     assert simulation.timeIntegrationSolver.iterations == 3
     assert simulation.phiASE.useReflections is True
     assert simulation.phiASE.forwardRayCount == 12
+    assert simulation.opticalComponents[0].aseRays == 7
     assert simulation.prePump is True
     assert simulation.gainMedium.components[0].surfaceOptics[0].optics.reflectivity == pytest.approx(0.75)
     assert len(simulation.pumps) == 1

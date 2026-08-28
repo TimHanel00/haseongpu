@@ -10,13 +10,17 @@
 #include <alpakaUtils/DevBundle.hpp>
 #include <alpakaUtils/HybridBuffer.hpp>
 #include <concepts/concepts.hpp>
+#include <core/boundaryRayBuffer.hpp>
 #include <core/geometry.hpp>
+#include <core/particleComb.hpp>
+#include <data/AseDomainGraph.hpp>
 #include <kernels/forward/surfaceReservoir.hpp>
 
 #include <array>
 #include <concepts>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -35,9 +39,9 @@ namespace hase::core
         SurfaceReservoirPositionBuffers(
             T_Device& device,
             std::uint32_t const reservoirSlotCount,
-            std::uint32_t const maxRayCount)
+            std::uint32_t const maxCandidateCount)
             : positions(device, reservoirSlotCount)
-            , candidatePositions(device, maxRayCount)
+            , candidatePositions(device, maxCandidateCount)
         {
         }
 
@@ -79,33 +83,38 @@ namespace hase::core
             || std::is_empty_v<SurfaceReservoirPositionBuffers<T_Device, T_PositionPolicy>>);
 
         using T_DoubleBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::uint32_t{1}));
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1u}));
         using T_UnsignedBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::uint32_t{1}));
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::size_t{1u}));
         using T_KeyBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint64_t>(std::declval<T_Device&>(), std::uint32_t{1}));
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint64_t>(std::declval<T_Device&>(), std::size_t{1u}));
 
     public:
         /**
          * @param device Device receiving all reservoir allocations.
          * @param faceCount Number of local cell faces.
-         * @param maxRayCount Largest number of ray-owned candidates.
+         * @param maxCandidateCount Largest number of ray-owned candidates.
          */
         SurfaceReservoirBank(
             T_Device& device,
             std::uint32_t faceCount,
             alpaka::concepts::Vector auto slotsPerFace,
-            std::uint32_t maxRayCount)
-            : counts(alpaka::onHost::alloc<std::uint32_t>(device, faceCount))
-            , positionBuffers(device, faceCount * slotsPerFace.x(), maxRayCount)
-            , directions(device, faceCount * slotsPerFace.x())
-            , weights(alpaka::onHost::alloc<double>(device, faceCount * slotsPerFace.x()))
-            , wavelengths(alpaka::onHost::alloc<double>(device, faceCount * slotsPerFace.x()))
-            , faceWeights(alpaka::onHost::alloc<double>(device, faceCount))
-            , selectionKeys(alpaka::onHost::alloc<std::uint64_t>(device, faceCount * slotsPerFace.x()))
-            , candidateDirections(device, maxRayCount)
-            , candidateWeights(alpaka::onHost::alloc<double>(device, maxRayCount))
-            , candidateWavelengths(alpaka::onHost::alloc<double>(device, maxRayCount))
+            std::uint32_t maxCandidateCount)
+            : counts(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(faceCount)))
+            , positionBuffers(
+                  device,
+                  static_cast<std::uint32_t>(static_cast<std::size_t>(faceCount) * slotsPerFace.x()),
+                  maxCandidateCount)
+            , directions(device, static_cast<std::size_t>(faceCount) * slotsPerFace.x())
+            , weights(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(faceCount) * slotsPerFace.x()))
+            , wavelengths(
+                  alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(faceCount) * slotsPerFace.x()))
+            , faceWeights(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(faceCount)))
+            , selectionKeys(
+                  alpaka::onHost::alloc<std::uint64_t>(device, static_cast<std::size_t>(faceCount) * slotsPerFace.x()))
+            , candidateDirections(device, static_cast<std::size_t>(maxCandidateCount))
+            , candidateWeights(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(maxCandidateCount)))
+            , candidateWavelengths(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(maxCandidateCount)))
         {
         }
 
@@ -154,15 +163,15 @@ namespace hase::core
         /**
          * @param device Device receiving both banks.
          * @param faceCount Number of local cell faces.
-         * @param maxRayCount Largest number of ray-owned candidates per bank.
+         * @param maxCandidateCount Largest number of ray-owned candidates per bank.
          */
         SurfaceReservoir(
             T_Device& device,
             std::uint32_t faceCount,
             alpaka::concepts::Vector auto slotsPerFace,
-            std::uint32_t maxRayCount)
-            : first(device, faceCount, slotsPerFace, maxRayCount)
-            , second(device, faceCount, slotsPerFace, maxRayCount)
+            std::uint32_t maxCandidateCount)
+            : first(device, faceCount, slotsPerFace, maxCandidateCount)
+            , second(device, faceCount, slotsPerFace, maxCandidateCount)
             , faceCount(faceCount)
         {
         }
@@ -180,10 +189,11 @@ namespace hase::core
     class SurfaceReservoirScratch
     {
         using T_DoubleBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::uint32_t{1}));
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::size_t{1u}));
         using T_UnsignedBuffer
-            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::uint32_t{1}));
-        using T_ByteBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), std::uint32_t{1}));
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::size_t{1u}));
+        using T_ByteBuffer = ALPAKA_TYPEOF(alpaka::onHost::alloc<char>(std::declval<T_Device&>(), std::size_t{1u}));
+        using T_TotalWeightTransfer = alpakaUtils::GetHybridBuffer_t<T_Device, std::array<double, 1u>>;
         using T_DoubleView = ALPAKA_TYPEOF(std::declval<T_DoubleBuffer&>().getView());
         using T_UnsignedView = ALPAKA_TYPEOF(std::declval<T_UnsignedBuffer&>().getView());
         using SamplingView
@@ -202,25 +212,30 @@ namespace hase::core
             std::uint32_t faceCount,
             alpaka::concepts::Vector auto slotsPerFace,
             std::uint32_t maxRayCount)
-            : reservoir(device, faceCount, slotsPerFace, maxRayCount)
-            , samplingCdf(alpaka::onHost::alloc<double>(device, faceCount))
-            , samplingTotalWeight(alpaka::onHost::alloc<double>(device, 1u))
-            , systematicOffset(alpaka::onHost::alloc<double>(device, 1u))
-            , stratifiedRayCounts(alpaka::onHost::alloc<std::uint32_t>(device, faceCount))
-            , stratifiedRayOffsets(alpaka::onHost::alloc<std::uint32_t>(device, faceCount))
-            , stratifiedRayFaces(alpaka::onHost::alloc<std::uint32_t>(device, maxRayCount))
+            : reservoir(device, faceCount, slotsPerFace, boundaryCandidateCount(maxRayCount))
+            , domainComb(device, faceCount, maxRayCount)
+            , samplingCdf(alpaka::onHost::alloc<double>(device, static_cast<std::size_t>(faceCount)))
+            , samplingTotalWeight(alpaka::onHost::alloc<double>(device, std::size_t{1u}))
+            , systematicOffset(alpaka::onHost::alloc<double>(device, std::size_t{1u}))
+            , stratifiedRayCounts(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(faceCount)))
+            , stratifiedRayOffsets(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(faceCount)))
+            , stratifiedRayFaces(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(maxRayCount)))
             , samplingCdfScanBuffer(
                   alpaka::onHost::alloc<char>(
                       device,
-                      alpaka::onHost::getScanBufferSize<double>(alpaka::Vec{faceCount})))
+                      alpaka::onHost::getScanBufferSize<double>(alpaka::Vec{static_cast<std::size_t>(faceCount)})))
             , stratifiedCountScanBuffer(
                   alpaka::onHost::alloc<char>(
                       device,
-                      alpaka::onHost::getScanBufferSize<std::uint32_t>(alpaka::Vec{faceCount})))
+                      alpaka::onHost::getScanBufferSize<std::uint32_t>(
+                          alpaka::Vec{static_cast<std::size_t>(faceCount)})))
             , stratifiedFaceScanBuffer(
                   alpaka::onHost::alloc<char>(
                       device,
-                      alpaka::onHost::getScanBufferSize<std::uint32_t>(alpaka::Vec{maxRayCount})))
+                      alpaka::onHost::getScanBufferSize<std::uint32_t>(
+                          alpaka::Vec{static_cast<std::size_t>(maxRayCount)})))
+            , totalWeightHost{}
+            , totalWeightTransfer(alpakaUtils::getHybridBuffer(device, totalWeightHost))
             , maxRayCount(maxRayCount)
         {
         }
@@ -243,8 +258,9 @@ namespace hase::core
          */
         void clear(concepts::Queue auto const& queue, SurfaceReservoirBank<T_Device, T_PositionPolicy>& bank)
         {
-            alpaka::onHost::fill(queue, bank.counts, 0u, alpaka::Vec{reservoir.faceCount});
-            alpaka::onHost::fill(queue, bank.faceWeights, 0.0, alpaka::Vec{reservoir.faceCount});
+            auto const extent = alpaka::Vec{static_cast<std::size_t>(reservoir.faceCount)};
+            alpaka::onHost::fill(queue, bank.counts, 0u, extent);
+            alpaka::onHost::fill(queue, bank.faceWeights, 0.0, extent);
             alpaka::onHost::fill(
                 queue,
                 bank.selectionKeys,
@@ -346,8 +362,9 @@ namespace hase::core
                     stratifiedCountScanBuffer,
                     stratifiedRayOffsets,
                     stratifiedRayCounts);
-                auto rayFaces = stratifiedRayFaces.getView().getSubView(alpaka::Vec{rayCount});
-                alpaka::onHost::fill(queue, rayFaces, 0u, alpaka::Vec{rayCount});
+                auto const rayExtent = alpaka::Vec{static_cast<std::size_t>(rayCount)};
+                auto rayFaces = stratifiedRayFaces.getView().getSubView(rayExtent);
+                alpaka::onHost::fill(queue, rayFaces, 0u, rayExtent);
                 queue.enqueue(
                     faceFrameSpec,
                     alpaka::KernelBundle{
@@ -359,14 +376,64 @@ namespace hase::core
                 alpaka::onHost::inclusiveScanInPlace(queue, devBundle.executor, stratifiedFaceScanBuffer, rayFaces);
             }
 
-            std::array<double, 1u> totalWeightHost{};
-            hase::concepts::HybridBuffer<double> auto totalWeight
-                = hase::alpakaUtils::getHybridBuffer(totalWeightHost, samplingTotalWeight);
-            totalWeight.toHost(queue);
-            return totalWeight.getHostView()[0u];
+            alpaka::onHost::memcpy(queue, totalWeightTransfer.toDeviceView(), samplingTotalWeight);
+            totalWeightTransfer.toHost(queue);
+            return totalWeightTransfer.getHostView()[0u];
+        }
+
+        /** @brief Finalize one bank and enqueue fixed per-domain face populations. */
+        template<alpaka::concepts::Executor T_Executor>
+        [[nodiscard]] double updateDomainSampling(
+            alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
+            concepts::Queue auto const& queue,
+            SurfaceReservoirBank<T_Device, T_PositionPolicy>& bank,
+            alpaka::concepts::Vector auto slotsPerFace,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            std::span<std::uint32_t const> const domainPopulationCounts,
+            std::uint32_t const facesPerCell,
+            std::uint32_t const rngSeed,
+            std::uint32_t const pass)
+        {
+            auto const faceFrameSpec = hase::alpakaUtils::getFrameSpec<std::uint32_t>(
+                devBundle.device,
+                devBundle.executor,
+                alpaka::Vec{reservoir.faceCount});
+            queue.enqueue(
+                faceFrameSpec,
+                alpaka::KernelBundle{
+                    hase::kernels::forward::FinalizeSurfaceReservoir{},
+                    reservoir.faceCount,
+                    bank.view(slotsPerFace)});
+            std::uint32_t outputOffset = 0u;
+            for(std::uint32_t domain = 0u; domain < domainPopulationCounts.size(); ++domain)
+            {
+                auto const count = domainPopulationCounts[domain];
+                if(count == 0u)
+                    continue;
+                domainComb.enqueueFaceDomain(
+                    devBundle,
+                    queue,
+                    bank.faceWeights.getView(),
+                    interfaceMap.cellDomains,
+                    reservoir.faceCount,
+                    facesPerCell,
+                    domain,
+                    outputOffset,
+                    count,
+                    rngSeed,
+                    (static_cast<std::uint64_t>(pass) << 32u) | domain);
+                outputOffset += count;
+            }
+            if(outputOffset > maxRayCount)
+                throw std::runtime_error("SRM domain populations exceed the relaunch capacity");
+            domainComb.enqueueTotal(devBundle, queue, bank.faceWeights.getView(), reservoir.faceCount);
+            alpaka::onHost::memcpy(queue, totalWeightTransfer.toDeviceView(), domainComb.totalWeight);
+            totalWeightTransfer.toHost(queue);
+            return totalWeightTransfer.getHostView()[0u];
         }
 
         SurfaceReservoir<T_Device, T_PositionPolicy> reservoir;
+        ParticleCombWorkspace<T_Device> domainComb;
         T_DoubleBuffer samplingCdf;
         T_DoubleBuffer samplingTotalWeight;
         T_DoubleBuffer systematicOffset;
@@ -376,6 +443,8 @@ namespace hase::core
         T_ByteBuffer samplingCdfScanBuffer;
         T_ByteBuffer stratifiedCountScanBuffer;
         T_ByteBuffer stratifiedFaceScanBuffer;
+        std::array<double, 1u> totalWeightHost;
+        T_TotalWeightTransfer totalWeightTransfer;
         std::uint32_t maxRayCount;
     };
 } // namespace hase::core

@@ -11,8 +11,8 @@ class Result:
     relativeStandardError: Sequence[float] = field(default_factory=list)
     totalRays: Sequence[int] = field(default_factory=list)
     dndtAse: Sequence[float] = field(default_factory=list)
-    srmStatus: str = "disabled"
-    srmPasses: int = 0
-    srmRemainingFraction: float = 0.0
-    srmMaxIterations: int = 0
-    srmDivergenceStreak: int = 0
+    boundaryStatus: str = "disabled"
+    boundaryPasses: int = 0
+    boundaryRemainingFraction: float = 0.0
+    boundaryMaxPasses: int = 0
+    boundaryDivergenceStreak: int = 0

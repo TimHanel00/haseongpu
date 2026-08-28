@@ -9,6 +9,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <core/domainSchedule.hpp>
+
 #include <algorithm>
 #include <concepts>
 #include <stdexcept>
@@ -96,6 +98,18 @@ namespace hase::core
         [[nodiscard]] bool isRoot() const
         {
             return HaseWorkerDispatch<T_WorkerPolicy>::isRoot(m_policy);
+        }
+
+        /** @return Stable worker identity, node locality, capacity, and memory limits. */
+        [[nodiscard]] WorkerDescriptor descriptor() const
+        {
+            return HaseWorkerDispatch<T_WorkerPolicy>::descriptor(m_policy);
+        }
+
+        /** @return Whether this worker needs the final global result resident on its device. */
+        [[nodiscard]] bool requiresFinalizedDeviceState() const
+        {
+            return HaseWorkerDispatch<T_WorkerPolicy>::requiresFinalizedDeviceState(m_policy);
         }
 
         /**

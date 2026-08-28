@@ -110,6 +110,10 @@ TEST_CASE("simulation preparation builds material-local trace data", "[transport
     CHECK(state.trace.numberOfMaterials == 1u);
     CHECK(state.trace.cellMaterialIds == std::vector<unsigned>{0u});
     CHECK(state.trace.materialActiveIonDensities.front() == Catch::Approx(2.76e26));
+    REQUIRE(state.aseDomains.domains.size() == 1u);
+    CHECK(state.aseDomains.domains.front().localToGlobalCells == std::vector<std::uint32_t>{0u});
+    CHECK(state.aseDomains.domains.front().trace.numberOfCells == 1u);
+    CHECK(state.aseDomains.interfaces.empty());
     CHECK(state.trace.materialFluorescenceLifetimes.front() == Catch::Approx(9.5e-4));
     CHECK(state.trace.crossSectionAbsorption.front() == Catch::Approx(1.2e-25));
     CHECK(state.trace.crossSectionEmission.front() == Catch::Approx(2.1e-24));
@@ -249,4 +253,10 @@ TEST_CASE(
     CHECK(state.trace.crossSectionEmission == std::vector<double>{2.0e-24, 4.0e-24});
     CHECK(state.trace.materialActiveIonDensities == std::vector<double>{2.76e26, 3.10e26});
     CHECK(state.trace.materialBulkAttenuations == std::vector<double>{0.5, 1.5});
+    REQUIRE(state.aseDomains.domains.size() == 2u);
+    CHECK(state.aseDomains.domains[0].localToGlobalCells == std::vector<std::uint32_t>{0u});
+    CHECK(state.aseDomains.domains[1].localToGlobalCells == std::vector<std::uint32_t>{1u});
+    CHECK(state.aseDomains.domains[0].trace.numberOfMeshPoints == 4u);
+    CHECK(state.aseDomains.domains[1].trace.numberOfMeshPoints == 4u);
+    CHECK(state.aseDomains.interfaces.empty());
 }

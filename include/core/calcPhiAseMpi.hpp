@@ -70,9 +70,9 @@ namespace hase::core
     /**
      * @brief Worker policy representing one MPI rank that owns one local device.
      *
-     * Each rank executes zero or more complete batches selected by
-     * `hase::mapIdx`. Device state, asynchronous queues, accumulators, and
-     * reflection reservoirs remain rank-private. Only batch results and generic
+     * Each rank executes zero or more scheduler-owned domain/batch assignments.
+     * Device state, asynchronous queues, accumulators, and boundary buffers
+     * remain rank-private. Only batch results and generic
      * collective values cross rank boundaries.
      *
      * @tparam T_Device Alpaka device type.
@@ -91,7 +91,9 @@ namespace hase::core
             double const betaVolumeTotal,
             unsigned const volumeCount,
             unsigned const vertexCount,
-            unsigned const batchCount)
+            unsigned const batchCount,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            hase::data::AseDomainSourceView const domainSources)
             : m_communicator(communicator)
             , m_mesh(mesh)
             , m_deviceContext(deviceContext)
@@ -100,6 +102,8 @@ namespace hase::core
             , m_volumeCount(volumeCount)
             , m_vertexCount(vertexCount)
             , m_batchCount(batchCount)
+            , m_interfaceMap(interfaceMap)
+            , m_domainSources(domainSources)
         {
             int rank = 0;
             int size = 0;
@@ -107,12 +111,23 @@ namespace hase::core
             MPI_Comm_size(m_communicator, &size);
             m_workerIndex = static_cast<unsigned>(rank);
             m_workerCount = static_cast<unsigned>(size);
+            MPI_Comm nodeCommunicator = MPI_COMM_NULL;
+            MPI_Comm_split_type(m_communicator, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &nodeCommunicator);
+            int localRank = 0;
+            MPI_Comm_rank(nodeCommunicator, &localRank);
+            int nodeLeader = rank;
+            MPI_Allreduce(&rank, &nodeLeader, 1, MPI_INT, MPI_MIN, nodeCommunicator);
+            MPI_Comm_free(&nodeCommunicator);
+            m_node = static_cast<NodeId>(nodeLeader);
+            m_localWorker = static_cast<std::uint32_t>(localRank);
         }
 
     private:
         MPI_Comm m_communicator;
         unsigned m_workerIndex = 0u;
         unsigned m_workerCount = 1u;
+        NodeId m_node = 0u;
+        std::uint32_t m_localWorker = 0u;
         hase::data::TraceView m_mesh;
         ForwardPhiAseDeviceContext<T_Device, T_Exec>& m_deviceContext;
         AseTraceControls const& m_experiment;
@@ -120,9 +135,11 @@ namespace hase::core
         unsigned m_volumeCount;
         unsigned m_vertexCount;
         unsigned m_batchCount;
+        hase::data::AseDomainInterfaceView m_interfaceMap;
+        hase::data::AseDomainSourceView m_domainSources;
 
         friend struct HaseWorkerDispatch<MPIRank<T_Device, T_Exec>>;
-        friend struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayBatch>;
+        friend struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayBatchGroup>;
         friend struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, FinalizeForwardAse>;
     };
 
@@ -147,6 +164,21 @@ namespace hase::core
             return policy.m_workerIndex == 0u;
         }
 
+        [[nodiscard]] static WorkerDescriptor descriptor(T_Policy const& policy)
+        {
+            return WorkerDescriptor{
+                static_cast<WorkerId>(policy.m_workerIndex),
+                policy.m_node,
+                policy.m_localWorker,
+                1.0,
+                std::numeric_limits<std::uint64_t>::max()};
+        }
+
+        [[nodiscard]] static bool requiresFinalizedDeviceState(T_Policy const&)
+        {
+            return true;
+        }
+
         template<typename T_Value>
         [[nodiscard]] static T_Value scatter(T_Policy& policy, T_Value value)
         {
@@ -155,97 +187,83 @@ namespace hase::core
             return value;
         }
 
-        [[nodiscard]] static std::shared_ptr<std::vector<ForwardRayBatchResults> const> gather(
+        [[nodiscard]] static std::shared_ptr<std::vector<ForwardWorkerResult> const> gather(
             T_Policy& policy,
-            ForwardRayBatchResults localResults)
+            ForwardWorkerResult local)
         {
-            auto gathered = std::make_shared<std::vector<ForwardRayBatchResults>>(1u);
-            auto& globalResults = gathered->front();
-            globalResults.reserve(policy.m_batchCount);
-            for(unsigned batch = 0u; batch < policy.m_batchCount; ++batch)
-            {
-                auto const local = std::ranges::find(localResults, batch, &ForwardRayBatchResult::index);
-                unsigned const localPresence = local == localResults.end() ? 0u : 1u;
-                unsigned globalPresence = 0u;
-                MPI_Allreduce(&localPresence, &globalPresence, 1, MPI_UNSIGNED, MPI_SUM, policy.m_communicator);
-                if(globalPresence != 1u)
-                    throw std::runtime_error("each forward statistical batch must be produced by exactly one rank");
+            auto gathered = std::make_shared<std::vector<ForwardWorkerResult>>(1u);
+            auto& global = gathered->front();
+            global.raw = makeForwardRawResult(policy.m_volumeCount, policy.m_vertexCount, policy.m_batchCount);
+            MPI_Allreduce(
+                local.raw.vertexBatchScoreSum.data(),
+                global.raw.vertexBatchScoreSum.data(),
+                static_cast<int>(global.raw.vertexBatchScoreSum.size()),
+                MPI_DOUBLE,
+                MPI_SUM,
+                policy.m_communicator);
+            MPI_Allreduce(
+                local.raw.rseBatchRayCounts.data(),
+                global.raw.rseBatchRayCounts.data(),
+                static_cast<int>(global.raw.rseBatchRayCounts.size()),
+                MPI_UNSIGNED,
+                MPI_SUM,
+                policy.m_communicator);
+            MPI_Allreduce(
+                local.raw.totalRays.data(),
+                global.raw.totalRays.data(),
+                static_cast<int>(global.raw.totalRays.size()),
+                MPI_UNSIGNED,
+                MPI_SUM,
+                policy.m_communicator);
+            MPI_Allreduce(
+                local.raw.droppedRays.data(),
+                global.raw.droppedRays.data(),
+                static_cast<int>(global.raw.droppedRays.size()),
+                MPI_UNSIGNED,
+                MPI_SUM,
+                policy.m_communicator);
+            MPI_Allreduce(&local.raw.rayCount, &global.raw.rayCount, 1, MPI_UNSIGNED, MPI_SUM, policy.m_communicator);
 
-                ForwardRayBatchResult global;
-                global.index = batch;
-                global.raw = makeForwardRawResult(policy.m_volumeCount, policy.m_vertexCount, policy.m_batchCount);
-                ForwardPhiAseRawResult localRaw
-                    = makeForwardRawResult(policy.m_volumeCount, policy.m_vertexCount, policy.m_batchCount);
-                float localRuntime = 0.0f;
-                if(localPresence != 0u)
-                {
-                    localRaw = local->raw;
-                    localRuntime = local->runtime;
-                }
-                MPI_Allreduce(
-                    localRaw.vertexBatchScoreSum.data(),
-                    global.raw.vertexBatchScoreSum.data(),
-                    static_cast<int>(global.raw.vertexBatchScoreSum.size()),
-                    MPI_DOUBLE,
-                    MPI_SUM,
-                    policy.m_communicator);
-                MPI_Allreduce(
-                    localRaw.rseBatchRayCounts.data(),
-                    global.raw.rseBatchRayCounts.data(),
-                    static_cast<int>(global.raw.rseBatchRayCounts.size()),
-                    MPI_UNSIGNED,
-                    MPI_SUM,
-                    policy.m_communicator);
-                MPI_Allreduce(
-                    localRaw.totalRays.data(),
-                    global.raw.totalRays.data(),
-                    static_cast<int>(global.raw.totalRays.size()),
-                    MPI_UNSIGNED,
-                    MPI_SUM,
-                    policy.m_communicator);
-                MPI_Allreduce(
-                    localRaw.droppedRays.data(),
-                    global.raw.droppedRays.data(),
-                    static_cast<int>(global.raw.droppedRays.size()),
-                    MPI_UNSIGNED,
-                    MPI_SUM,
-                    policy.m_communicator);
-                MPI_Allreduce(
-                    &localRaw.rayCount,
-                    &global.raw.rayCount,
-                    1,
-                    MPI_UNSIGNED,
-                    MPI_SUM,
-                    policy.m_communicator);
-                MPI_Allreduce(&localRuntime, &global.runtime, 1, MPI_FLOAT, MPI_SUM, policy.m_communicator);
+            std::array localStatus{
+                boundaryStatusPriority(local.raw.boundaryStatus),
+                local.raw.boundaryPasses,
+                local.raw.boundaryMaxPasses,
+                local.raw.boundaryDivergenceStreak};
+            std::array<unsigned, 4u> globalStatus{};
+            MPI_Allreduce(
+                localStatus.data(),
+                globalStatus.data(),
+                static_cast<int>(globalStatus.size()),
+                MPI_UNSIGNED,
+                MPI_MAX,
+                policy.m_communicator);
+            global.raw.boundaryStatus = boundaryStatusFromPriority(globalStatus[0u]);
+            global.raw.boundaryPasses = globalStatus[1u];
+            global.raw.boundaryMaxPasses = globalStatus[2u];
+            global.raw.boundaryDivergenceStreak = globalStatus[3u];
+            MPI_Allreduce(
+                &local.raw.boundaryRemainingFraction,
+                &global.raw.boundaryRemainingFraction,
+                1,
+                MPI_DOUBLE,
+                MPI_MAX,
+                policy.m_communicator);
+            return gathered;
+        }
 
-                std::array localStatus{
-                    localPresence == 0u ? 0u : static_cast<unsigned>(localRaw.srmStatus),
-                    localRaw.srmPasses,
-                    localRaw.srmMaxIterations,
-                    localRaw.srmDivergenceStreak,
-                    localPresence};
-                std::array<unsigned, 5u> globalStatus{};
-                MPI_Allreduce(
-                    localStatus.data(),
-                    globalStatus.data(),
-                    static_cast<int>(globalStatus.size()),
-                    MPI_UNSIGNED,
-                    MPI_SUM,
-                    policy.m_communicator);
-                global.raw.srmStatus = static_cast<data::SrmStatus>(globalStatus[0u]);
-                global.raw.srmPasses = globalStatus[1u];
-                global.raw.srmMaxIterations = globalStatus[2u];
-                global.raw.srmDivergenceStreak = globalStatus[3u];
-                MPI_Allreduce(
-                    &localRaw.srmRemainingFraction,
-                    &global.raw.srmRemainingFraction,
-                    1,
-                    MPI_DOUBLE,
-                    MPI_SUM,
-                    policy.m_communicator);
-                globalResults.emplace_back(std::move(global));
-            }
+        template<typename T_Value>
+        requires std::is_trivially_copyable_v<T_Value>
+        [[nodiscard]] static std::shared_ptr<std::vector<T_Value> const> gather(T_Policy& policy, T_Value value)
+        {
+            auto gathered = std::make_shared<std::vector<T_Value>>(policy.m_workerCount);
+            MPI_Allgather(
+                std::addressof(value),
+                static_cast<int>(sizeof(T_Value)),
+                MPI_BYTE,
+                gathered->data(),
+                static_cast<int>(sizeof(T_Value)),
+                MPI_BYTE,
+                policy.m_communicator);
             return gathered;
         }
 
@@ -272,25 +290,44 @@ namespace hase::core
         }
     };
 
-    /** @brief Execute one complete forward-ray batch on the rank-owned device. */
+    /** @brief Enqueue all rank-local batches and download their shared accumulator once. */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
-    struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayBatch>
+    struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayBatchGroup>
     {
         using T_Policy = MPIRank<T_Device, T_Exec>;
 
-        [[nodiscard]] static ForwardRayBatchResult run(T_Policy& policy, ForwardRayBatch const& batch)
+        [[nodiscard]] static ForwardWorkerResult run(T_Policy& policy, ForwardRayBatchGroup const& group)
         {
-            ForwardRayBatchResult result;
-            result.index = batch.index;
-            policy.m_deviceContext.evaluate(
-                policy.m_mesh,
-                result.raw,
-                result.runtime,
-                batch.rayCount,
-                batch.rngSeed,
-                batch.index,
-                policy.m_betaVolumeTotal,
-                policy.m_experiment);
+            ForwardWorkerResult result;
+            if(group.batches.empty())
+            {
+                result.raw = policy.m_deviceContext.makeEmptyRawResult();
+                return result;
+            }
+
+            auto const started = std::chrono::steady_clock::now();
+            bool resetAccumulators = true;
+            for(auto const& batch : group.batches)
+            {
+                policy.m_deviceContext.begin(
+                    policy.m_mesh,
+                    batch.rayCount,
+                    batch.rngSeed,
+                    batch.index,
+                    policy.m_betaVolumeTotal,
+                    policy.m_experiment,
+                    policy.m_interfaceMap,
+                    policy.m_domainSources,
+                    batch.domainRayCounts,
+                    batch.domainSourceWeights,
+                    batch.domainPopulationCounts,
+                    resetAccumulators);
+                resetAccumulators = false;
+            }
+            float ignoredRuntime = 0.0f;
+            policy.m_deviceContext.finish(result.raw, ignoredRuntime);
+            result.runtime = static_cast<float>(
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
             return result;
         }
     };
@@ -303,14 +340,20 @@ namespace hase::core
 
         [[nodiscard]] static data::PhiAseResult run(T_Policy& policy, FinalizeForwardAse const& item)
         {
-            policy.m_deviceContext.uploadAndFinalize(policy.m_mesh, item.raw, policy.m_betaVolumeTotal);
-            auto result = policy.m_deviceContext.downloadFinalizedResult(true, true, true, true);
-            result.dndtAse = policy.m_deviceContext.downloadVolumeDndtAse();
-            result.srmStatus = item.raw.srmStatus;
-            result.srmPasses = item.raw.srmPasses;
-            result.srmRemainingFraction = item.raw.srmRemainingFraction;
-            result.srmMaxIterations = item.raw.srmMaxIterations;
-            result.srmDivergenceStreak = item.raw.srmDivergenceStreak;
+            if(item.upload)
+                policy.m_deviceContext.uploadAndFinalize(policy.m_mesh, item.raw, policy.m_betaVolumeTotal);
+            auto result = policy.m_deviceContext.downloadFinalizedResult(
+                item.downloadFullResult,
+                item.downloadFullResult,
+                true,
+                item.downloadFullResult);
+            if(item.downloadFullResult)
+                result.dndtAse = policy.m_deviceContext.downloadVolumeDndtAse();
+            result.boundaryStatus = item.raw.boundaryStatus;
+            result.boundaryPasses = item.raw.boundaryPasses;
+            result.boundaryRemainingFraction = item.raw.boundaryRemainingFraction;
+            result.boundaryMaxPasses = item.raw.boundaryMaxPasses;
+            result.boundaryDivergenceStreak = item.raw.boundaryDivergenceStreak;
             return result;
         }
     };

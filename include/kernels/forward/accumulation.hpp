@@ -622,26 +622,40 @@ namespace hase::kernels::forward
         }
     };
 
-    /** @brief Forward ASE walker that deposits reflected states into a bounded per-face reservoir. */
-    struct AccumulateForwardPhiAseSurfaceReservoir
+    /** @brief Kernel launching direct histories while capturing routed boundary states. */
+    struct AccumulateForwardPhiAseReservoir
     {
         template<
             alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> T_Reservoir,
             alpaka::rand::concepts::UniformRandomEngine T_Rng>
-        struct StoreReflectionBoundary : ray::BoundaryPolicySrm<ray::srmPosition::Centroid>
+        struct StoreBoundary : ray::BoundaryPolicySrm<ray::srmPosition::Centroid>
         {
             T_Reservoir reservoir;
             T_Rng rng;
             std::uint32_t candidateIndex;
+            hase::data::AseDomainInterfaceView interfaceMap;
+            bool useReflections;
 
-            ALPAKA_FN_HOST_ACC constexpr StoreReflectionBoundary(
+            ALPAKA_FN_HOST_ACC constexpr StoreBoundary(
                 T_Reservoir reservoirValue,
                 T_Rng rngValue,
-                std::uint32_t const candidateIndexValue)
+                std::uint32_t const candidateIndexValue,
+                hase::data::AseDomainInterfaceView const interfaceMapValue,
+                bool const useReflectionsValue)
                 : reservoir{reservoirValue}
                 , rng{rngValue}
                 , candidateIndex{candidateIndexValue}
+                , interfaceMap{interfaceMapValue}
+                , useReflections{useReflectionsValue}
             {
+            }
+
+            [[nodiscard]] ALPAKA_FN_ACC bool isInteriorBoundary(
+                hase::data::TraceView const&,
+                unsigned const cell,
+                unsigned const localFace) const
+            {
+                return interfaceMap.hasTarget(cell, localFace);
             }
 
             ALPAKA_FN_ACC ray::BoundaryResult operator()(
@@ -651,8 +665,38 @@ namespace hase::kernels::forward
                 unsigned const tet,
                 unsigned const localFace)
             {
-                core::Direction const normal = outwardFaceNormal(mesh, tet, localFace);
-                double const reflectance = boundaryReflectance(mesh, tet, localFace, rayState.direction, normal);
+                auto const normal = outwardFaceNormal(mesh, tet, localFace);
+                auto const faceIndex = tet * mesh.numberOfFacesPerCell + localFace;
+                bool const isInterface = interfaceMap.hasTarget(tet, localFace);
+                auto const interaction = boundaryInteraction(
+                    rayState.direction,
+                    normal,
+                    isInterface ? static_cast<double>(interfaceMap.sourceRefractiveIndices[faceIndex])
+                                : static_cast<double>(mesh.getSurfaceRefractiveIndexInside(tet, localFace)),
+                    isInterface ? static_cast<double>(interfaceMap.targetRefractiveIndices[faceIndex])
+                                : static_cast<double>(mesh.getSurfaceRefractiveIndexOutside(tet, localFace)),
+                    isInterface ? static_cast<double>(interfaceMap.reflectivities[faceIndex])
+                                : static_cast<double>(mesh.getSurfaceReflectivity(tet, localFace)));
+                bool const hasTransmission = isInterface && !interaction.totalInternalReflection;
+                double const boundaryWeight = rayState.weight * rayState.accumulatedGain;
+                auto const weights
+                    = splitBoundaryWeights(boundaryWeight, interaction, hasTransmission, useReflections);
+                storeSurfaceReservoirBoundarySample(
+                    acc,
+                    mesh,
+                    rayState,
+                    tet,
+                    localFace,
+                    SurfaceReservoirBoundarySample{
+                        interaction.reflected,
+                        weights.reflected,
+                        rayState.wavelength,
+                        tet,
+                        localFace,
+                        useReflections},
+                    reservoir,
+                    2u * candidateIndex,
+                    rng);
                 return storeSurfaceReservoirBoundarySample(
                     acc,
                     mesh,
@@ -660,11 +704,16 @@ namespace hase::kernels::forward
                     tet,
                     localFace,
                     SurfaceReservoirBoundarySample{
-                        reflectedDirection(rayState.direction, normal),
-                        rayState.weight * rayState.accumulatedGain * reflectance,
-                        rayState.wavelength},
+                        interaction.transmitted,
+                        weights.transmitted,
+                        rayState.wavelength,
+                        hasTransmission ? interfaceMap.targetCells[faceIndex]
+                                        : std::numeric_limits<std::uint32_t>::max(),
+                        hasTransmission ? interfaceMap.targetFaces[faceIndex]
+                                        : std::numeric_limits<std::uint32_t>::max(),
+                        hasTransmission},
                     reservoir,
-                    candidateIndex,
+                    2u * candidateIndex + 1u,
                     rng);
             }
         };
@@ -683,7 +732,9 @@ namespace hase::kernels::forward
             alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
             alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto reservoir,
             std::uint32_t const candidateIndex,
-            alpaka::rand::concepts::UniformRandomEngine auto rng) const
+            alpaka::rand::concepts::UniformRandomEngine auto& rndEngine,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            bool const useReflections) const
         {
             ForwardAseRayState rayState;
             rayState.position = origin;
@@ -702,10 +753,12 @@ namespace hase::kernels::forward
                 rayState,
                 ray::RayWalkBehaviour{
                     cellBehaviour,
-                    StoreReflectionBoundary<ALPAKA_TYPEOF(reservoir), ALPAKA_TYPEOF(rng)>{
+                    StoreBoundary<ALPAKA_TYPEOF(reservoir), ALPAKA_TYPEOF(rndEngine)>{
                         reservoir,
-                        rng,
-                        candidateIndex},
+                        rndEngine,
+                        candidateIndex,
+                        interfaceMap,
+                        useReflections},
                     failureBehaviour});
         }
 
@@ -718,7 +771,9 @@ namespace hase::kernels::forward
             double const sourceStrengthTotal,
             alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
             alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto reservoir,
-            std::uint32_t const rngSeed) const
+            unsigned const rngSeed,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            bool const useReflections) const
         {
             for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
                     acc,
@@ -759,13 +814,93 @@ namespace hase::kernels::forward
                     accumulation,
                     reservoir,
                     batchRayIndex,
-                    rng);
+                    rng,
+                    interfaceMap,
+                    useReflections);
             }
         }
     };
 
-    /** @brief Relaunch bounded SRM states from either face centroids or retained exact hits. */
-    struct AccumulateSurfaceReservoirForwardPhiAse
+    /** @brief Launch one configured domain population into a routed surface reservoir. */
+    struct AccumulateDomainForwardPhiAseReservoir
+    {
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            concepts::TracePolicyList auto const tracePolicies,
+            hase::data::TraceView const mesh,
+            hase::data::AseDomainSourceView const sources,
+            std::uint32_t const domain,
+            unsigned const domainRayCount,
+            unsigned const candidateOffset,
+            unsigned const batch,
+            double const sourceWeight,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto reservoir,
+            unsigned const rngSeed,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            bool const useReflections) const
+        {
+            AccumulateForwardPhiAseReservoir walker;
+            auto const begin = sources.offsets[domain];
+            auto const end = sources.offsets[domain + 1u];
+            double const total = sources.sourceStrengthTotals[domain];
+            double const prefixBase = begin == 0u ? 0.0 : sources.sourceStrengthPrefix[begin - 1u];
+            for(auto [rayNumber] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{domainRayCount}))
+            {
+                auto rng = alpaka::rand::engine::Philox4x32x10{
+                    rseBatchSeed(rngSeed, batch),
+                    rayHistoryId(0u, candidateOffset + rayNumber)};
+                double const target = stratifiedUnitInterval(
+                                          rayNumber,
+                                          domainRayCount,
+                                          rseBatchSourceStratificationOffset(rngSeed, batch))
+                                          * total
+                                      + prefixBase;
+                std::uint32_t lower = begin;
+                std::uint32_t upper = end;
+                while(lower < upper)
+                {
+                    auto const middle = lower + (upper - lower) / 2u;
+                    if(sources.sourceStrengthPrefix[middle] <= target)
+                        lower = middle + 1u;
+                    else
+                        upper = middle;
+                }
+                auto const sourceIndex = lower < end ? lower : end - 1u;
+                auto const tet = sources.globalCells[sourceIndex];
+                auto const material = mesh.getMaterialId(tet);
+                auto const spectrumSize = mesh.crossSectionCount(material);
+                auto const spectrumIndex = stratifiedSpectrumIndex(
+                    spectrumSize,
+                    rayNumber,
+                    domainRayCount,
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                auto const origin = samplePointInVolume(mesh, tet, rng);
+                auto const direction = sampleIsotropicDirection(rng);
+                walker.walkForwardRay(
+                    acc,
+                    tracePolicies,
+                    mesh,
+                    tet,
+                    origin,
+                    direction,
+                    -1,
+                    sourceWeight,
+                    spectrumSize == 0u ? 0.0 : mesh.emissionWavelength(material, spectrumIndex),
+                    batch,
+                    accumulation,
+                    reservoir,
+                    candidateOffset + rayNumber,
+                    rng,
+                    interfaceMap,
+                    useReflections);
+            }
+        }
+    };
+
+    /** @brief Relaunch weighted histories from either face centroids or retained exact hits. */
+    struct AccumulateReflectedForwardPhiAse
     {
         ALPAKA_FN_HOST_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -775,13 +910,15 @@ namespace hase::kernels::forward
             std::uint32_t const batch,
             double const sourceWeight,
             alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
-            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto input,
-            alpaka::concepts::SpecializationOf<SurfaceReservoirSamplingCdfSpans> auto sampling,
-            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto output,
-            std::uint32_t const rngSeed,
-            std::uint32_t const reflectionPass) const
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto inReservoir,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSamplingCdfSpans> auto samplingCdf,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto outReservoir,
+            unsigned const rngSeed,
+            unsigned const reflectionPass,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            bool const useReflections) const
         {
-            AccumulateForwardPhiAseSurfaceReservoir walker;
+            AccumulateForwardPhiAseReservoir walker;
             for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
                     acc,
                     alpaka::onAcc::worker::threadsInGrid,
@@ -791,8 +928,8 @@ namespace hase::kernels::forward
                 std::uint32_t const batchSeed = rseBatchSeed(rngSeed, batch);
                 auto rng = hase::random::makeRandomEngine(batchSeed, rayHistoryId(reflectionPass, batchRayIndex));
                 SurfaceReservoirSample const sample = sampleSurfaceReservoir(
-                    input,
-                    sampling,
+                    inReservoir,
+                    samplingCdf,
                     mesh.numberOfCells * mesh.numberOfFacesPerCell,
                     batchRayIndex,
                     rng);
@@ -801,23 +938,90 @@ namespace hase::kernels::forward
 
                 std::uint32_t const tet = sample.faceId / mesh.numberOfFacesPerCell;
                 std::uint32_t const localFace = sample.faceId % mesh.numberOfFacesPerCell;
-                core::Point const origin
-                    = restoreSurfaceReservoirPosition(input.positionSpans, mesh, tet, localFace, sample.slotIndex);
+                core::Point const origin = restoreSurfaceReservoirPosition(
+                    inReservoir.positionSpans,
+                    mesh,
+                    tet,
+                    localFace,
+                    sample.slotIndex);
                 walker.walkForwardRay(
                     acc,
                     tracePolicies,
                     mesh,
                     tet,
                     origin,
-                    normalize(input.directions.at(sample.slotIndex)),
+                    normalize(inReservoir.directions.at(sample.slotIndex)),
                     static_cast<std::int32_t>(localFace),
                     sourceWeight,
-                    input.wavelengths[sample.slotIndex],
+                    inReservoir.wavelengths[sample.slotIndex],
                     batch,
                     accumulation,
-                    output,
+                    outReservoir,
                     batchRayIndex,
-                    rng);
+                    rng,
+                    interfaceMap,
+                    useReflections);
+            }
+        }
+    };
+
+    /** @brief Relaunch fixed per-domain populations selected from routed face reservoirs. */
+    struct AccumulateDomainCombedForwardPhiAseReservoir
+    {
+        ALPAKA_FN_HOST_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            concepts::TracePolicyList auto const tracePolicies,
+            hase::data::TraceView const mesh,
+            unsigned const rayCount,
+            unsigned const batch,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto inReservoir,
+            alpaka::concepts::IView<std::uint32_t> auto const selectedFaces,
+            alpaka::concepts::IView<double> auto const selectedWeights,
+            alpaka::concepts::SpecializationOf<SurfaceReservoirSpans> auto outReservoir,
+            unsigned const rngSeed,
+            unsigned const reflectionPass,
+            hase::data::AseDomainInterfaceView const interfaceMap,
+            bool const useReflections) const
+        {
+            AccumulateForwardPhiAseReservoir walker;
+            for(auto [rayNumber] :
+                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{rayCount}))
+            {
+                if(selectedWeights[rayNumber] <= 0.0)
+                    continue;
+                auto rng = alpaka::rand::engine::Philox4x32x10{
+                    rseBatchSeed(rngSeed, batch),
+                    rayHistoryId(reflectionPass, rayNumber)};
+                auto const sample
+                    = sampleSurfaceReservoirFace(inReservoir, selectedFaces[rayNumber], rayNumber, true, rng);
+                if(!sample.valid)
+                    continue;
+                auto const tet = sample.faceId / mesh.numberOfFacesPerCell;
+                auto const localFace = sample.faceId - tet * mesh.numberOfFacesPerCell;
+                auto const origin = restoreSurfaceReservoirPosition(
+                    inReservoir.positionSpans,
+                    mesh,
+                    tet,
+                    localFace,
+                    sample.slotIndex);
+                walker.walkForwardRay(
+                    acc,
+                    tracePolicies,
+                    mesh,
+                    tet,
+                    origin,
+                    normalize(inReservoir.directions.at(sample.slotIndex)),
+                    static_cast<int>(localFace),
+                    selectedWeights[rayNumber],
+                    inReservoir.wavelengths[sample.slotIndex],
+                    batch,
+                    accumulation,
+                    outReservoir,
+                    rayNumber,
+                    rng,
+                    interfaceMap,
+                    useReflections);
             }
         }
     };
