@@ -7,6 +7,7 @@
 
 import os
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,6 +17,15 @@ from hase_units import units
 from material_library import CrossSectionTable, Material
 from openpmd_backend_matrix import openpmd_runtime_test_backends
 from alpaka_backend_matrix import alpaka_runtime_backend
+from pyInclude.geometry.vtk import _parseVtk
+
+
+repoRoot = Path(__file__).resolve().parents[3]
+TERRA_DIAMOND_SPHERE_PATH = (
+    repoRoot / "tests" / "data" / "analyticalSphere" / "terraDiamondSphere.vtk"
+)
+TERRA_DIAMOND_SPHERE_RADIUS = np.float64(0.1)
+TERRA_DIAMOND_SPHERE_GAIN = np.float64(10.0)
 
 
 def analyticalPhiAseSphereCenter(gain, radius, beta, nTot, tauRad):
@@ -254,6 +264,111 @@ def testForwardSphereCenterVolumeMatchesAnalyticalSolution(radius, gain, openpmd
     assert np.isfinite(numerical)
     assert numerical > 0.0
     assert np.isclose(numerical, expected, rtol=0.05)
+
+
+@pytest.mark.parametrize("backend", analyticalSphereBackends())
+@pytest.mark.parametrize("openpmdBackend", openpmd_runtime_test_backends())
+def testForwardTerraDiamondSphereCenterMatchesMonolithicAndAnalyticalSolutions(
+    openpmdBackend,
+    backend,
+):
+    if backend == _NO_ANALYTICAL_SPHERE_BACKEND:
+        pytest.fail("analytical sphere test requires at least one Alpaka backend")
+
+    topology = VolumeTopology.fromFile(TERRA_DIAMOND_SPHERE_PATH)
+    _points, _cells, _types, _point_data, cell_data, _fields = _parseVtk(
+        TERRA_DIAMOND_SPHERE_PATH
+    )
+    diamond_ids = np.asarray(cell_data["diamondId"], dtype=np.uint32)
+    cell_domains = np.asarray(topology.cellDomains, dtype=np.uint32)
+    assert topology.numberOfCells == 40_745
+    np.testing.assert_array_equal(diamond_ids, cell_domains)
+    np.testing.assert_array_equal(np.unique(diamond_ids), np.arange(10, dtype=np.uint32))
+    assert np.all(np.bincount(diamond_ids, minlength=10) > 0)
+
+    beta = calcBetaFromGain(
+        TERRA_DIAMOND_SPHERE_GAIN,
+        nTot,
+        sigmaA=sigmaA,
+        sigmaE=sigmaE,
+    )
+    fluorescence_lifetime = np.float64(9.41e-4)
+    material = Material(
+        materialName="analytical TERRA diamond sphere material",
+        temperature=293.15 * units.K,
+        refractiveIndex=1.0,
+        fluorescenceLifetime=fluorescence_lifetime * units.s,
+        crossSections=CrossSectionTable.monochromatic(
+            wavelength=np.float64(1030e-9) * units.m,
+            absorption=sigmaA * units.m**2,
+            emission=sigmaE * units.m**2,
+        ),
+        active=True,
+        activeIonDensity=nTot / units.m**3,
+    )
+    diamond_domains = [
+        Domain.fromGmsh(topology, diamond_id, entityKind="volume")
+        for diamond_id in range(10)
+    ]
+    coverage = np.zeros(topology.numberOfCells, dtype=np.uint32)
+    for domain in diamond_domains:
+        coverage += domain.maskFor(topology)
+    np.testing.assert_array_equal(coverage, np.ones_like(coverage))
+
+    ray_count = analyticalSphereRayCount()
+
+    def run(components):
+        phi_ase = PhiASE(
+            maxRays=ray_count,
+            forwardRayCount=ray_count,
+            repetitions=1,
+            adaptiveSteps=1,
+            relativeStandardErrorThreshold=0.05,
+            useReflections=False,
+            backend=backend,
+            openpmdBackend=openpmdBackend,
+            parallelMode="single",
+            numDevices=1,
+            monochromatic=True,
+            rngSeed=1234,
+        )
+        phi_ase.run(
+            gainMedium=GainMedium(components),
+            initialExcitation=beta,
+        )
+        return phi_ase.getResults()
+
+    monolithic = run(
+        [OpticalComponent(domain=Domain.fromTopology(topology), material=material)]
+    )
+    decomposed = run(
+        [
+            OpticalComponent(domain=domain, material=material)
+            for domain in diamond_domains
+        ]
+    )
+    center_volume = centeredVolumeIndex(topology, TERRA_DIAMOND_SPHERE_RADIUS)
+    monolithic_value = np.asarray(monolithic.phiAse, dtype=np.float64)[center_volume]
+    decomposed_value = np.asarray(decomposed.phiAse, dtype=np.float64)[center_volume]
+    decomposed_rse = np.asarray(decomposed.relativeStandardError, dtype=np.float64)[
+        center_volume
+    ]
+    expected = analyticalPhiAseSphereCenter(
+        gain=TERRA_DIAMOND_SPHERE_GAIN,
+        radius=TERRA_DIAMOND_SPHERE_RADIUS,
+        beta=beta,
+        nTot=nTot,
+        tauRad=fluorescence_lifetime,
+    )
+    print(
+        f"TERRA diamond sphere center: tets={topology.numberOfCells}, "
+        f"expected={expected}, monolithic={monolithic_value}, "
+        f"decomposed={decomposed_value}, decomposedRse={decomposed_rse}"
+    )
+    assert np.isfinite(decomposed_rse)
+    assert np.isclose(monolithic_value, expected, rtol=0.05)
+    assert np.isclose(decomposed_value, expected, rtol=0.05)
+    assert np.isclose(decomposed_value, monolithic_value, rtol=0.05)
 
 
 if __name__ == "__main__":
