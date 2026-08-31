@@ -143,7 +143,9 @@ def _make_current_medium(reference, bulkAttenuation):
     passive = Material(
         materialName="cladding",
         temperature=293.15 * units.K,
-        refractiveIndex=1.0,
+        # Match the active index intentionally: the legacy reference models
+        # volumetric cladding absorption without a refractive optical interface.
+        refractiveIndex=active.refractiveIndex,
         fluorescenceLifetime=None,
         crossSections=None,
         active=False,
