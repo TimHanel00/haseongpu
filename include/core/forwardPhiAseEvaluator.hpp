@@ -152,32 +152,41 @@ namespace hase::core
                 previousDomainCounts[domain] += launchDomainCounts[domain];
 
             ForwardRayBatchGroup localWork;
-            std::vector<std::vector<std::uint32_t>> workerBatchCounts(
-                workerDescriptors->size(),
-                std::vector<std::uint32_t>(context.batchCount, 0u));
-            for(auto const& assignment : schedule.assignments())
+            bool const usesDynamicDirectPopulation = context.experiment.reflectionMode == "direct";
+            std::vector<std::vector<std::uint32_t>> workerBatchCounts;
+            std::size_t localWorkerIndex = 0u;
+            if(!usesDynamicDirectPopulation)
             {
-                auto const quota
-                    = std::ranges::find(context.finalDomainQuotas, assignment.id.domain, &DomainQuota::id);
-                if(quota == context.finalDomainQuotas.end())
-                    throw std::runtime_error("scheduled domain has no ASE quota");
-                auto const domain = static_cast<std::size_t>(std::distance(context.finalDomainQuotas.begin(), quota));
-                auto const batch = assignment.id.batch;
-                auto const owner = std::ranges::find(*workerDescriptors, assignment.worker, &WorkerDescriptor::id);
-                if(owner == workerDescriptors->end())
-                    throw std::runtime_error("scheduled ASE worker is absent from the worker group");
-                auto const ownerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), owner));
-                auto const domainCount = launchDomainCounts[domain];
-                auto const count
-                    = domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
-                workerBatchCounts[ownerIndex][batch] += count;
+                workerBatchCounts.assign(
+                    workerDescriptors->size(),
+                    std::vector<std::uint32_t>(context.batchCount, 0u));
+                for(auto const& assignment : schedule.assignments())
+                {
+                    auto const quota
+                        = std::ranges::find(context.finalDomainQuotas, assignment.id.domain, &DomainQuota::id);
+                    if(quota == context.finalDomainQuotas.end())
+                        throw std::runtime_error("scheduled domain has no ASE quota");
+                    auto const domain
+                        = static_cast<std::size_t>(std::distance(context.finalDomainQuotas.begin(), quota));
+                    auto const batch = assignment.id.batch;
+                    auto const owner = std::ranges::find(*workerDescriptors, assignment.worker, &WorkerDescriptor::id);
+                    if(owner == workerDescriptors->end())
+                        throw std::runtime_error("scheduled ASE worker is absent from the worker group");
+                    auto const ownerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), owner));
+                    auto const domainCount = launchDomainCounts[domain];
+                    auto const count
+                        = domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
+                    workerBatchCounts[ownerIndex][batch] += count;
+                }
             }
-
             auto const localDescriptor = worker.descriptor();
-            auto const local = std::ranges::find(*workerDescriptors, localDescriptor.id, &WorkerDescriptor::id);
-            if(local == workerDescriptors->end())
-                throw std::runtime_error("local ASE worker is absent from the worker group");
-            auto const localWorkerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), local));
+            if(!usesDynamicDirectPopulation)
+            {
+                auto const local = std::ranges::find(*workerDescriptors, localDescriptor.id, &WorkerDescriptor::id);
+                if(local == workerDescriptors->end())
+                    throw std::runtime_error("local ASE worker is absent from the worker group");
+                localWorkerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), local));
+            }
             for(std::uint32_t batch = 0u; batch < context.batchCount; ++batch)
             {
                 ForwardRayBatch work{batch, 0u, launchSeed};
@@ -204,17 +213,22 @@ namespace hase::core
                 if(work.rayCount == 0u)
                     continue;
 
-                std::vector<std::uint32_t> batchSourceDomainCounts(launchDomainCounts.size(), 0u);
-                for(std::size_t domain = 0u; domain < launchDomainCounts.size(); ++domain)
-                    batchSourceDomainCounts[domain]
-                        = launchDomainCounts[domain] / context.batchCount
-                          + (batch < launchDomainCounts[domain] % context.batchCount ? 1u : 0u);
-                auto const batchDomainCounts = reservePassiveDomainPopulationSlots(batchSourceDomainCounts);
-                std::vector<std::uint32_t> batchWorkerCounts(workerDescriptors->size(), 0u);
-                for(std::size_t workerIndex = 0u; workerIndex < workerDescriptors->size(); ++workerIndex)
-                    batchWorkerCounts[workerIndex] = workerBatchCounts[workerIndex][batch];
-                auto const populations = distributeDomainPopulations(batchDomainCounts, batchWorkerCounts);
-                work.domainPopulationCounts = populations[localWorkerIndex];
+                if(usesDynamicDirectPopulation)
+                    work.domainPopulationCounts.resize(launchDomainCounts.size(), 0u);
+                else
+                {
+                    std::vector<std::uint32_t> batchSourceDomainCounts(launchDomainCounts.size(), 0u);
+                    for(std::size_t domain = 0u; domain < launchDomainCounts.size(); ++domain)
+                        batchSourceDomainCounts[domain]
+                            = launchDomainCounts[domain] / context.batchCount
+                              + (batch < launchDomainCounts[domain] % context.batchCount ? 1u : 0u);
+                    auto const batchDomainCounts = reservePassiveDomainPopulationSlots(batchSourceDomainCounts);
+                    std::vector<std::uint32_t> batchWorkerCounts(workerDescriptors->size(), 0u);
+                    for(std::size_t workerIndex = 0u; workerIndex < workerDescriptors->size(); ++workerIndex)
+                        batchWorkerCounts[workerIndex] = workerBatchCounts[workerIndex][batch];
+                    auto const populations = distributeDomainPopulations(batchDomainCounts, batchWorkerCounts);
+                    work.domainPopulationCounts = populations[localWorkerIndex];
+                }
                 localWork.batches.emplace_back(std::move(work));
             }
             auto localResult = worker(std::move(localWork));

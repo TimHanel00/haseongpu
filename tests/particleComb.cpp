@@ -99,3 +99,76 @@ TEMPLATE_LIST_TEST_CASE(
     CHECK(selectedWeights[2u] == Catch::Approx(3.0));
     CHECK(selectedWeights[3u] == Catch::Approx(3.0));
 }
+
+TEMPLATE_LIST_TEST_CASE(
+    "spatial particle comb retains route weight without duplicating boundary candidates",
+    "[forward][boundary][domain][spatial][backend]",
+    TestBackends)
+{
+    auto const backend = TestType::makeDict();
+    auto deviceSelector = alpaka::onHost::makeDeviceSelector(backend);
+    if(!deviceSelector.isAvailable())
+    {
+        SUCCEED("No device available for " << alpaka::onHost::DeviceSpec{backend}.getName());
+        return;
+    }
+    auto device = deviceSelector.makeDevice(0);
+    auto const executor = alpaka::getExecutor(backend);
+    auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+    hase::alpakaUtils::DevBundle devBundle(device, executor);
+    auto weightBuffer = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.4, 0.4, 0.5, 0.5, 0.3, 0.3});
+    auto domainBuffer = hase::alpakaUtils::toDevice(queue, std::vector<std::uint32_t>{0u, 1u, 0u, 1u, 0u, 1u});
+    auto cellBuffer = hase::alpakaUtils::toDevice(queue, std::vector<std::uint32_t>{0u, 10u, 1u, 11u, 2u, 12u});
+    auto faceBuffer = hase::alpakaUtils::toDevice(queue, std::vector<std::uint32_t>(6u, 0u));
+    auto barycentricX = hase::alpakaUtils::toDevice(queue, std::vector<double>{0.1, 0.1, 0.5, 0.5, 0.9, 0.9});
+    auto barycentricY = hase::alpakaUtils::toDevice(queue, std::vector<double>(6u, 0.0));
+    auto positionZ = hase::alpakaUtils::toDevice(queue, std::vector<double>(6u, 0.0));
+
+    struct Barycentric
+    {
+        ALPAKA_TYPEOF(barycentricX.getView()) x;
+        ALPAKA_TYPEOF(barycentricY.getView()) y;
+    };
+
+    struct Position
+    {
+        ALPAKA_TYPEOF(barycentricX.getView()) x;
+        ALPAKA_TYPEOF(barycentricY.getView()) y;
+        ALPAKA_TYPEOF(positionZ.getView()) z;
+    };
+
+    struct Candidates
+    {
+        ALPAKA_TYPEOF(weightBuffer.getView()) weights;
+        ALPAKA_TYPEOF(domainBuffer.getView()) targetDomains;
+        ALPAKA_TYPEOF(cellBuffer.getView()) targetCells;
+        ALPAKA_TYPEOF(faceBuffer.getView()) targetFaces;
+        Position positions;
+        Barycentric faceBarycentric;
+    };
+
+    auto const candidates = Candidates{
+        weightBuffer.getView(),
+        domainBuffer.getView(),
+        cellBuffer.getView(),
+        faceBuffer.getView(),
+        {barycentricX.getView(), barycentricY.getView(), positionZ.getView()},
+        {barycentricX.getView(), barycentricY.getView()}};
+    hase::core::ParticleCombWorkspace workspace(device, 6u, 3u, 2u);
+
+    workspace.enqueueSpatialDomain(devBundle, queue, candidates, 6u, 3u, 0u, 0u, 2u, 5489u, 0u);
+    workspace.enqueueSpatialDomain(devBundle, queue, candidates, 6u, 3u, 1u, 2u, 1u, 5489u, 1u);
+    std::vector<std::uint32_t> selected(3u);
+    auto selectedTransfer = hase::alpakaUtils::getHybridBuffer(selected, workspace.selectedView(3u));
+    selectedTransfer.toHost(queue);
+    std::vector<double> selectedWeights(3u);
+    auto weightTransfer = hase::alpakaUtils::getHybridBuffer(selectedWeights, workspace.selectedWeightsView(3u));
+    weightTransfer.toHost(queue);
+
+    CHECK(selected[0u] != selected[1u]);
+    CHECK(selected[0u] % 2u == 0u);
+    CHECK(selected[1u] % 2u == 0u);
+    CHECK(selected[2u] % 2u == 1u);
+    CHECK(selectedWeights[0u] + selectedWeights[1u] == Catch::Approx(1.2));
+    CHECK(selectedWeights[2u] == Catch::Approx(1.2));
+}

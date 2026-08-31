@@ -179,8 +179,10 @@ namespace hase::core
                 std::uint32_t const maxRayCount = std::max(experiment.maxRays, experiment.resolvedForwardRayCount());
                 if(experiment.reflectionMode == "direct")
                 {
-                    m_directScratch
-                        = std::make_unique<DirectBoundaryScratch<T_Device>>(m_devBundle.device, maxRayCount);
+                    m_directScratch = std::make_unique<DirectBoundaryScratch<T_Device>>(
+                        m_devBundle.device,
+                        maxRayCount,
+                        static_cast<std::uint32_t>(std::max<std::size_t>(1u, experiment.domainCount)));
                 }
                 else
                 {

@@ -7,7 +7,9 @@
 #include <compare>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <optional>
+#include <queue>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -287,13 +289,108 @@ namespace hase::core
         return result;
     }
 
-    /**
-     * @brief Reserve a minimal relaunch population for initially passive domains.
-     *
-     * The sum is unchanged. When one slot per domain is affordable, zero-source domains receive
-     * one slot so transmitted histories are not discarded solely because that domain emitted no
-     * primary ray in the current batch.
-     */
+    /** @brief Allocate a surviving boundary population among neighbor routes from their weights. */
+    [[nodiscard]] inline std::vector<std::uint32_t> allocateBoundaryRoutePopulations(
+        std::span<double const> const routeWeights,
+        std::uint32_t const survivingRayCount,
+        std::span<std::uint32_t const> const routeCandidateCounts = {})
+    {
+        if(!routeCandidateCounts.empty() && routeCandidateCounts.size() != routeWeights.size())
+            throw std::invalid_argument("boundary route weights and candidate counts must have matching sizes");
+        std::vector<std::uint32_t> result(routeWeights.size(), 0u);
+        double totalWeight = 0.0;
+        std::size_t nonEmptyRoutes = 0u;
+        for(double const weight : routeWeights)
+        {
+            if(!std::isfinite(weight) || weight < 0.0)
+                throw std::invalid_argument("boundary route weights must be finite and non-negative");
+            totalWeight += weight;
+            nonEmptyRoutes += weight > 0.0 ? 1u : 0u;
+        }
+        if(survivingRayCount == 0u || totalWeight == 0.0)
+            return result;
+        if(nonEmptyRoutes > survivingRayCount)
+            throw std::invalid_argument("surviving boundary population cannot represent every non-empty route");
+
+        struct Fraction
+        {
+            std::size_t route;
+            double remainder;
+        };
+
+        std::vector<Fraction> fractions;
+        fractions.reserve(nonEmptyRoutes);
+        std::uint32_t assigned = 0u;
+        for(std::size_t route = 0u; route < routeWeights.size(); ++route)
+        {
+            if(routeWeights[route] == 0.0)
+                continue;
+            double const exact = static_cast<double>(survivingRayCount) * routeWeights[route] / totalWeight;
+            result[route] = std::max<std::uint32_t>(1u, static_cast<std::uint32_t>(std::floor(exact)));
+            assigned += result[route];
+            fractions.push_back({route, exact - std::floor(exact)});
+        }
+        if(assigned > survivingRayCount)
+        {
+            std::ranges::sort(
+                fractions,
+                [](auto const& left, auto const& right)
+                {
+                    return left.remainder != right.remainder ? left.remainder < right.remainder
+                                                             : left.route > right.route;
+                });
+            for(auto const& fraction : fractions)
+                if(assigned > survivingRayCount && result[fraction.route] > 1u)
+                {
+                    --result[fraction.route];
+                    --assigned;
+                }
+        }
+        else
+        {
+            std::ranges::sort(
+                fractions,
+                [](auto const& left, auto const& right)
+                {
+                    return left.remainder != right.remainder ? left.remainder > right.remainder
+                                                             : left.route < right.route;
+                });
+            for(std::uint32_t extra = survivingRayCount - assigned; extra > 0u; --extra)
+                ++result[fractions[(survivingRayCount - assigned - extra) % fractions.size()].route];
+        }
+        if(!routeCandidateCounts.empty())
+        {
+            std::uint32_t overflow = 0u;
+            for(std::size_t route = 0u; route < result.size(); ++route)
+                if(result[route] > routeCandidateCounts[route])
+                {
+                    overflow += result[route] - routeCandidateCounts[route];
+                    result[route] = routeCandidateCounts[route];
+                }
+            using Choice = std::pair<double, std::size_t>;
+            std::priority_queue<Choice> choices;
+            for(std::size_t route = 0u; route < result.size(); ++route)
+                if(routeWeights[route] > 0.0 && result[route] < routeCandidateCounts[route])
+                    choices.emplace(routeWeights[route] / static_cast<double>(result[route] + 1u), route);
+            while(overflow > 0u)
+            {
+                if(choices.empty())
+                    throw std::invalid_argument("surviving boundary population exceeds positive route candidates");
+                auto const [priority, route] = choices.top();
+                static_cast<void>(priority);
+                choices.pop();
+                ++result[route];
+                --overflow;
+                if(result[route] < routeCandidateCounts[route])
+                    choices.emplace(routeWeights[route] / static_cast<double>(result[route] + 1u), route);
+            }
+        }
+        if(std::accumulate(result.begin(), result.end(), std::uint64_t{0u}) != survivingRayCount)
+            throw std::runtime_error("boundary route population allocation did not preserve the surviving count");
+        return result;
+    }
+
+    /** @brief Preserve the fixed passive-domain relaunch slots used by the SRM path. */
     [[nodiscard]] inline std::vector<std::uint32_t> reservePassiveDomainPopulationSlots(
         std::span<std::uint32_t const> const sourceCounts)
     {

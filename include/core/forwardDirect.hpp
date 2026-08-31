@@ -5,6 +5,7 @@
 #include <concepts/concepts.hpp>
 #include <core/Runtime.hpp>
 #include <core/boundaryRayBuffer.hpp>
+#include <core/domainSchedule.hpp>
 #include <core/forwardSrm.hpp>
 #include <core/particleComb.hpp>
 #include <kernels/forward/directBoundary.hpp>
@@ -12,8 +13,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <numeric>
 #include <span>
 #include <stdexcept>
+#include <vector>
 
 namespace hase::core
 {
@@ -22,13 +25,22 @@ namespace hase::core
     struct DirectBoundaryScratch
     {
         using T_TotalWeightBuffer = alpakaUtils::GetHybridBuffer_t<T_Device, std::array<double, 1u>>;
+        using T_LiveCountBuffer = alpakaUtils::GetHybridBuffer_t<T_Device, std::array<std::uint32_t, 1u>>;
+        using T_RouteWeightBuffer = alpakaUtils::GetHybridBuffer_t<T_Device, std::vector<double>>;
+        using T_RouteCountBuffer = alpakaUtils::GetHybridBuffer_t<T_Device, std::vector<std::uint32_t>>;
 
-        DirectBoundaryScratch(T_Device& device, std::uint32_t const capacity)
+        DirectBoundaryScratch(T_Device& device, std::uint32_t const capacity, std::uint32_t const domainCount)
             : first(device, boundaryCandidateCount(capacity))
             , second(device, boundaryCandidateCount(capacity))
-            , comb(device, boundaryCandidateCount(capacity), capacity)
+            , comb(device, boundaryCandidateCount(capacity), capacity, domainCount)
             , totalWeightHost{}
             , totalWeight(alpakaUtils::getHybridBuffer(device, totalWeightHost))
+            , liveCountHost{}
+            , liveCount(alpakaUtils::getHybridBuffer(device, liveCountHost))
+            , routeWeightsHost(domainCount, 0.0)
+            , routeWeights(alpakaUtils::getHybridBuffer(device, routeWeightsHost))
+            , routeCandidateCountsHost(domainCount, 0u)
+            , routeCandidateCounts(alpakaUtils::getHybridBuffer(device, routeCandidateCountsHost))
             , m_capacity(capacity)
         {
         }
@@ -44,6 +56,12 @@ namespace hase::core
         ParticleCombWorkspace<T_Device> comb;
         std::array<double, 1u> totalWeightHost;
         T_TotalWeightBuffer totalWeight;
+        std::array<std::uint32_t, 1u> liveCountHost;
+        T_LiveCountBuffer liveCount;
+        std::vector<double> routeWeightsHost;
+        T_RouteWeightBuffer routeWeights;
+        std::vector<std::uint32_t> routeCandidateCountsHost;
+        T_RouteCountBuffer routeCandidateCounts;
 
     private:
         std::uint32_t m_capacity;
@@ -79,15 +97,8 @@ namespace hase::core
     {
         scratch.validate(rayCount);
         std::uint32_t populationRayCount = rayCount;
-        if(!domainPopulationCounts.empty())
-        {
-            populationRayCount = 0u;
-            for(auto const count : domainPopulationCounts)
-                populationRayCount += count;
-            if(populationRayCount == 0u && rayCount != 0u)
-                throw std::invalid_argument("a non-empty direct launch requires a relaunch population");
-            scratch.validate(populationRayCount);
-        }
+        std::uint32_t const domainCount
+            = domainPopulationCounts.empty() ? 0u : static_cast<std::uint32_t>(domainPopulationCounts.size());
         auto accumulation = hase::kernels::forward::ForwardAccumulationSpans{
             vertexBatchScoreSum.getMdSpan(),
             volumeRayVisits.getMdSpan(),
@@ -100,9 +111,38 @@ namespace hase::core
             return scratch.totalWeight.getHostView()[0u];
         };
 
-        auto enqueueComb = [&](auto& candidates, std::uint32_t const candidateCount, std::uint32_t const pass)
+        auto measureRoutes = [&](auto& candidates, std::uint32_t const parentCount)
         {
-            if(domainPopulationCounts.empty())
+            if(domainCount == 0u)
+                return std::vector<std::uint32_t>{parentCount};
+            scratch.comb.enqueueRouteMeasurements(
+                devBundle,
+                queue,
+                candidates.weights.getView(),
+                candidates.targetDomains.getView(),
+                parentCount,
+                domainCount);
+            alpaka::onHost::memcpy(queue, scratch.liveCount.toDeviceView(), scratch.comb.liveParentCount);
+            alpaka::onHost::memcpy(queue, scratch.routeWeights.toDeviceView(), scratch.comb.routeWeights);
+            alpaka::onHost::memcpy(
+                queue,
+                scratch.routeCandidateCounts.toDeviceView(),
+                scratch.comb.routeCandidateCounts);
+            scratch.liveCount.toHost(queue);
+            scratch.routeWeights.toHost(queue);
+            scratch.routeCandidateCounts.toHost(queue);
+            return allocateBoundaryRoutePopulations(
+                std::span<double const>{scratch.routeWeightsHost},
+                scratch.liveCountHost[0u],
+                std::span<std::uint32_t const>{scratch.routeCandidateCountsHost});
+        };
+
+        auto enqueueComb = [&](auto& candidates,
+                               std::uint32_t const candidateCount,
+                               std::span<std::uint32_t const> const routeCounts,
+                               std::uint32_t const pass)
+        {
+            if(domainCount == 0u)
             {
                 scratch.comb.enqueue(
                     devBundle,
@@ -115,17 +155,17 @@ namespace hase::core
                 return;
             }
             std::uint32_t outputOffset = 0u;
-            for(std::uint32_t domain = 0u; domain < domainPopulationCounts.size(); ++domain)
+            for(std::uint32_t domain = 0u; domain < routeCounts.size(); ++domain)
             {
-                auto const count = domainPopulationCounts[domain];
+                auto const count = routeCounts[domain];
                 if(count == 0u)
                     continue;
-                scratch.comb.enqueueDomain(
+                scratch.comb.enqueueSpatialDomain(
                     devBundle,
                     queue,
-                    candidates.weights.getView(),
-                    candidates.targetDomains.getView(),
+                    candidates.view(),
                     candidateCount,
+                    scratch.routeCandidateCountsHost[domain],
                     domain,
                     outputOffset,
                     count,
@@ -133,7 +173,9 @@ namespace hase::core
                     (static_cast<std::uint64_t>(pass) << 32u) | domain);
                 outputOffset += count;
             }
-            if(outputOffset != populationRayCount)
+            auto const expectedOutputCount
+                = std::accumulate(routeCounts.begin(), routeCounts.end(), std::uint32_t{0u});
+            if(outputOffset != expectedOutputCount)
                 throw std::runtime_error("domain population counts do not match the relaunch population");
             scratch.comb.enqueueTotal(devBundle, queue, candidates.weights.getView(), candidateCount);
         };
@@ -201,7 +243,10 @@ namespace hase::core
             if(candidateOffset != rayCount)
                 throw std::runtime_error("domain batch ray counts do not match the launch total");
         }
-        enqueueComb(scratch.first, initialCandidateCount, 0u);
+        auto routeCounts = measureRoutes(scratch.first, rayCount);
+        populationRayCount = std::accumulate(routeCounts.begin(), routeCounts.end(), std::uint32_t{0u});
+        scratch.validate(populationRayCount);
+        enqueueComb(scratch.first, initialCandidateCount, routeCounts, 0u);
 
         double const initialWeight = readTotalWeight();
         result.boundaryMaxPasses = experiment.resolvedBoundaryMaxPasses(experiment.domainCount);
@@ -218,10 +263,15 @@ namespace hase::core
         result.boundaryDivergenceStreak = divergenceStreak;
         result.boundaryStatus = data::BoundaryStatus::maxPasses;
         result.boundaryRemainingFraction = 1.0;
-        auto const relaunchFrame = getRayFrameSpec(populationRayCount, queue);
-        auto const relaunchCandidateCount = boundaryCandidateCount(populationRayCount);
         for(unsigned pass = 1u; pass <= result.boundaryMaxPasses; ++pass)
         {
+            if(populationRayCount == 0u)
+            {
+                result.boundaryStatus = data::BoundaryStatus::converged;
+                break;
+            }
+            auto const relaunchFrame = getRayFrameSpec(populationRayCount, queue);
+            auto const relaunchCandidateCount = boundaryCandidateCount(populationRayCount);
             auto& output = inputFirst ? scratch.second : scratch.first;
             auto& input = inputFirst ? scratch.first : scratch.second;
             alpaka::onHost::fill(
@@ -249,7 +299,10 @@ namespace hase::core
                     interfaceMap,
                     pass,
                     experiment.useReflections});
-            enqueueComb(output, relaunchCandidateCount, pass);
+            routeCounts = measureRoutes(output, populationRayCount);
+            auto const nextPopulationRayCount
+                = std::accumulate(routeCounts.begin(), routeCounts.end(), std::uint32_t{0u});
+            enqueueComb(output, relaunchCandidateCount, routeCounts, pass);
             double const currentWeight = readTotalWeight();
             result.boundaryPasses = pass;
             result.boundaryRemainingFraction = currentWeight / initialWeight;
@@ -278,6 +331,7 @@ namespace hase::core
                 }
             }
             previousWeight = currentWeight;
+            populationRayCount = nextPopulationRayCount;
             inputFirst = !inputFirst;
         }
     }

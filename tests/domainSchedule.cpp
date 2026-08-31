@@ -95,7 +95,22 @@ TEST_CASE("adaptive domain launches consume remaining quotas monotonically", "[f
     CHECK(completed == std::vector<std::uint64_t>{5u, 3u, 2u});
 }
 
-TEST_CASE("passive domains retain a boundary relaunch slot when capacity permits", "[forward][domain][schedule]")
+TEST_CASE("boundary route populations follow surviving neighbor weight", "[forward][domain][schedule]")
+{
+    using hase::core::allocateBoundaryRoutePopulations;
+    CHECK(
+        allocateBoundaryRoutePopulations(std::vector<double>{50.0, 30.0}, 80u)
+        == std::vector<std::uint32_t>{50u, 30u});
+    CHECK(
+        allocateBoundaryRoutePopulations(std::vector<double>{39.8, 40.2}, 80u)
+        == std::vector<std::uint32_t>{40u, 40u});
+    CHECK(allocateBoundaryRoutePopulations(std::vector<double>{0.0, 12.0}, 7u) == std::vector<std::uint32_t>{0u, 7u});
+    CHECK(
+        allocateBoundaryRoutePopulations(std::vector<double>{90.0, 10.0}, 8u, std::vector<std::uint32_t>{3u, 7u})
+        == std::vector<std::uint32_t>{3u, 5u});
+}
+
+TEST_CASE("SRM passive domains retain a boundary relaunch slot when capacity permits", "[forward][domain][schedule]")
 {
     auto const populations = hase::core::reservePassiveDomainPopulationSlots(std::vector<std::uint32_t>{5u, 0u, 0u});
     CHECK(populations == std::vector<std::uint32_t>{3u, 1u, 1u});
