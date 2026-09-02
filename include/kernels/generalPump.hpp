@@ -626,14 +626,14 @@ namespace hase::kernels
         {
         }
 
-        ALPAKA_FN_ACC hase::kernels::forward::ray::BoundaryResult operator()(
+        ALPAKA_FN_ACC forward::ray::BoundaryResult operator()(
             alpaka::onAcc::concepts::Acc auto const&,
-            hase::data::TraceView const& mesh,
+            data::TraceView const& mesh,
             GeneralPumpRayState& ray,
             unsigned const cell,
             unsigned const localFace)
         {
-            namespace policyRay = hase::kernels::forward::ray;
+            namespace policyRay = forward::ray;
             if(ray.relayIndex >= relayCount)
             {
                 policyRay::captureSrmPosition(this->positionPolicy, mesh, cell, localFace, ray.position, ray);
