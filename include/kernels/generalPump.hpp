@@ -439,7 +439,7 @@ namespace hase::kernels
         template<
             alpaka::concepts::IView<double> T_BetaVolumeView,
             alpaka::concepts::IView<double> T_VertexPumpIntegralView>
-        struct CellPolicy : hase::kernels::forward::ray::behaviourDimension::Cell
+        struct CellPolicy : forward::ray::behaviourDimension::Cell
         {
             T_BetaVolumeView betaVolume;
             T_VertexPumpIntegralView vertexPumpIntegral;
@@ -454,10 +454,10 @@ namespace hase::kernels
 
             ALPAKA_FN_ACC bool operator()(
                 alpaka::onAcc::concepts::Acc auto const& acc,
-                hase::data::TraceView const& mesh,
+                data::TraceView const& mesh,
                 GeneralPumpRayState& ray,
                 unsigned const tet,
-                hase::kernels::forward::Tet4FaceIntersection const intersection)
+                forward::Tet4FaceIntersection const intersection)
             {
                 bool const active = mesh.isActive(tet);
                 auto const crossSections = mesh.crossSectionsForCell(tet, ray.wavelength);
@@ -482,7 +482,7 @@ namespace hase::kernels
                              * hase::core::physicalConstants::speedOfLight * mesh.activeIonDensity(tet));
                     // Clamping and renormalizing protects positivity and exact integral
                     // conservation against round-off at faces.
-                    auto const weights = hase::kernels::forward::segmentMidpointBarycentricVertexWeights(
+                    auto const weights = forward::segmentMidpointBarycentricVertexWeights(
                         mesh,
                         tet,
                         ray.position,
@@ -517,7 +517,7 @@ namespace hase::kernels
             for(auto [rayIndex] :
                 alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{rayCount}))
             {
-                namespace ray = hase::kernels::forward::ray;
+                namespace ray = forward::ray;
                 GeneralPumpRayState rayState;
                 rayState.position = geometry.positions.at(rayIndex);
                 rayState.direction = geometry.directions.at(rayIndex);
@@ -650,11 +650,11 @@ namespace hase::kernels
 
             auto const& descriptor = descriptors[relayIndex];
             policyRay::captureSrmPosition(this->positionPolicy, mesh, cell, localFace, ray.position, ray);
-            hase::core::Point const exitPosition
+            core::Point const exitPosition
                 = policyRay::restoreSrmPosition(this->positionPolicy, mesh, cell, localFace, ray);
-            hase::core::Point const relative = exitPosition - descriptor.exitOrigin;
-            double u = hase::core::dot(relative, descriptor.exitU) * static_cast<double>(descriptor.flipU);
-            double v = hase::core::dot(relative, descriptor.exitV) * static_cast<double>(descriptor.flipV);
+            core::Point const relative = exitPosition - descriptor.exitOrigin;
+            double u = core::dot(relative, descriptor.exitU) * static_cast<double>(descriptor.flipU);
+            double v = core::dot(relative, descriptor.exitV) * static_cast<double>(descriptor.flipV);
             u *= descriptor.magnification;
             v *= descriptor.magnification;
             double const mappedU = descriptor.cosine * u - descriptor.sine * v + descriptor.offsetU;
@@ -1247,7 +1247,7 @@ namespace hase::kernels
          * @param vertexPumpIntegral Material-vertex photon-exchange accumulator.
          */
         template<alpaka::concepts::Executor T_Executor>
-        requires(!hase::core::compileTimeConfig::exactPumpCache)
+        requires(!core::compileTimeConfig::exactPumpCache)
         void enqueue(
             hase::alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
             concepts::Queue auto const& queue,

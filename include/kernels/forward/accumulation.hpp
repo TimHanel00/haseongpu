@@ -22,6 +22,7 @@
 #include <random/randomEngine.hpp>
 
 #include <cassert>
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
@@ -189,9 +190,10 @@ namespace hase::kernels::forward
             unsigned const tet,
             Tet4FaceIntersection const intersection)
         {
-            double const segmentGain = localSegmentGain(mesh, tet, intersection.length, rayState.wavelength);
+            auto const segmentPropagation
+                = localSegmentPropagation(mesh, tet, intersection.length, rayState.wavelength);
             double contribution = rayState.weight * rayState.accumulatedGain;
-            contribution *= localSegmentTrackLengthIntegral(mesh, tet, intersection.length, rayState.wavelength);
+            contribution *= segmentPropagation.trackLengthIntegral;
             if(alpaka::math::isfinite(contribution))
             {
                 RecordCellRayVisit{}(T_TracePolicies::getDiagnostics(), acc, accumulation.cellRayVisits, tet);
@@ -216,7 +218,7 @@ namespace hase::kernels::forward
             {
                 alpaka::onAcc::atomicAdd(acc, &accumulation.cellDroppedRays[tet], 1u);
             }
-            rayState.accumulatedGain *= segmentGain;
+            rayState.accumulatedGain *= segmentPropagation.segmentGain;
             return true;
         }
     };
@@ -240,146 +242,81 @@ namespace hase::kernels::forward
         }
     };
 
+    /** @brief Boundary policy storing one reflected candidate for a forward ASE history. */
+    template<alpaka::concepts::SpecializationOf<ReflectionCandidateSpans> T_Candidates>
+    struct StoreForwardReflectionCandidateBoundary : ray::BoundaryPolicySrm<ray::srmPosition::Centroid>
+    {
+        T_Candidates candidates;
+        std::uint32_t candidateIndex;
+
+        ALPAKA_FN_HOST_ACC constexpr StoreForwardReflectionCandidateBoundary(
+            T_Candidates candidatesValue,
+            std::uint32_t const candidateIndexValue)
+            : candidates{candidatesValue}
+            , candidateIndex{candidateIndexValue}
+        {
+        }
+
+        ALPAKA_FN_ACC ray::BoundaryResult operator()(
+            alpaka::onAcc::concepts::Acc auto const&,
+            hase::data::TraceView const& mesh,
+            ray::State auto& rayState,
+            unsigned const tet,
+            unsigned const localFace)
+        {
+            core::Direction const normal = outwardFaceNormal(mesh, tet, localFace);
+            double const reflectance = boundaryReflectance(mesh, tet, localFace, rayState.direction, normal);
+            return storeReflectionCandidate(
+                mesh,
+                rayState,
+                tet,
+                localFace,
+                ReflectionBoundarySample{
+                    reflectedDirection(rayState.direction, normal),
+                    rayState.weight * rayState.accumulatedGain * reflectance,
+                    rayState.wavelength},
+                candidates,
+                candidateIndex);
+        }
+    };
+
+    /** @brief Factory selecting an escaping boundary for each primary forward ASE history. */
+    struct ForwardAseEscapeBoundaryFactory
+    {
+        ALPAKA_FN_ACC auto operator()(std::uint32_t) const
+        {
+            return ray::BoundaryPolicyEscape{};
+        }
+    };
+
+    /** @brief Factory assigning each forward ASE history its reflected-candidate slot. */
+    template<alpaka::concepts::SpecializationOf<ReflectionCandidateSpans> T_Candidates>
+    struct StoreForwardReflectionCandidateBoundaryFactory
+    {
+        T_Candidates candidates;
+
+        ALPAKA_FN_ACC auto operator()(std::uint32_t const candidateIndex) const
+        {
+            return StoreForwardReflectionCandidateBoundary<T_Candidates>{candidates, candidateIndex};
+        }
+    };
+
     /** @brief Kernel launching direct, source-stratified forward ASE histories. */
     struct AccumulateForwardPhiAse
     {
-        ALPAKA_FN_HOST_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            concepts::TracePolicyList auto const tracePolicies,
-            hase::data::TraceView const mesh,
-            unsigned const forwardRayCount,
-            unsigned const batch,
-            double const sourceStrengthTotal,
-            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
-            unsigned const rngSeed) const
-        {
-            for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{forwardRayCount}))
-            {
-                unsigned const batchRayIndex = rayNumber;
-                unsigned const batchRayCount = forwardRayCount;
-                unsigned const batchSeed = rseBatchSeed(rngSeed, batch);
-                auto rndEngine = hase::random::makeRandomEngine(batchSeed, rayHistoryId(0u, batchRayIndex));
-                unsigned const tet = sampleStratifiedVolumeBySourceStrength(
-                    mesh,
-                    sourceStrengthTotal,
-                    batchRayIndex,
-                    batchRayCount,
-                    rseBatchSourceStratificationOffset(rngSeed, batch),
-                    rndEngine);
-                // Beta-volume sampling carries its importance factor in the
-                // source probability, so the compensating weight is one.
-                double const sourceWeight = sourceStrengthTotal > 0.0 ? 1.0 : 0.0;
-                hase::core::Point origin = samplePointInVolume(mesh, tet, rndEngine);
-                hase::core::Point const direction = sampleIsotropicDirection(rndEngine);
-                unsigned const material = mesh.getMaterialId(tet);
-                unsigned const spectrumSize = mesh.crossSectionCount(material);
-                unsigned const spectrumIndex = stratifiedSpectrumIndex(
-                    spectrumSize,
-                    batchRayIndex,
-                    batchRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
-                walkVolumeSeededForwardRay(
-                    acc,
-                    tracePolicies,
-                    mesh,
-                    tet,
-                    origin,
-                    direction,
-                    sourceWeight,
-                    spectrumSize == 0u ? 0.0 : mesh.emissionWavelength(material, spectrumIndex),
-                    batch,
-                    accumulation);
-            }
-        }
-
-        ALPAKA_FN_HOST_ACC void walkVolumeSeededForwardRay(
+        ALPAKA_FN_HOST_ACC void walkForwardRay(
             alpaka::onAcc::concepts::Acc auto const& acc,
             concepts::TracePolicyList auto const tracePolicies,
             hase::data::TraceView const& mesh,
             unsigned tet,
             hase::core::Point origin,
             hase::core::Point const direction,
-            double const sourceWeight,
-            double const wavelength,
-            unsigned const rseBatch,
-            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation) const
-        {
-            namespace ray = hase::kernels::forward::ray;
-            ForwardAseRayState rayState;
-            rayState.position = origin;
-            rayState.direction = direction;
-            rayState.cell = tet;
-            rayState.forbiddenFace = -1;
-            rayState.weight = sourceWeight;
-            rayState.wavelength = wavelength;
-            rayState.rseBatch = rseBatch;
-            auto const walkResult = ray::walk(
-                acc,
-                mesh,
-                rayState,
-                ray::RayWalkBehaviour{ForwardAseCellPolicy{accumulation, tracePolicies}, ray::BoundaryPolicyEscape{}});
-            if(walkResult == ray::WalkResult::failed)
-                CountDroppedForwardRay<ALPAKA_TYPEOF(accumulation)>{accumulation}(acc, mesh, rayState);
-        }
-    };
-
-    /** @brief Kernel launching direct histories while capturing reflected boundary candidates. */
-    struct AccumulateForwardPhiAseReflections
-    {
-        template<alpaka::concepts::SpecializationOf<ReflectionCandidateSpans> T_Candidates>
-        struct StoreReflectionBoundary : ray::BoundaryPolicySrm<ray::srmPosition::Centroid>
-        {
-            T_Candidates candidates;
-            std::uint32_t candidateIndex;
-
-            ALPAKA_FN_HOST_ACC constexpr StoreReflectionBoundary(
-                T_Candidates candidatesValue,
-                std::uint32_t const candidateIndexValue)
-                : candidates{candidatesValue}
-                , candidateIndex{candidateIndexValue}
-            {
-            }
-
-            ALPAKA_FN_ACC ray::BoundaryResult operator()(
-                alpaka::onAcc::concepts::Acc auto const&,
-                hase::data::TraceView const& mesh,
-                ray::State auto& rayState,
-                unsigned const tet,
-                unsigned const localFace)
-            {
-                core::Direction const normal = outwardFaceNormal(mesh, tet, localFace);
-                double const reflectance = boundaryReflectance(mesh, tet, localFace, rayState.direction, normal);
-                return storeReflectionCandidate(
-                    mesh,
-                    rayState,
-                    tet,
-                    localFace,
-                    ReflectionBoundarySample{
-                        reflectedDirection(rayState.direction, normal),
-                        rayState.weight * rayState.accumulatedGain * reflectance,
-                        rayState.wavelength},
-                    candidates,
-                    candidateIndex);
-            }
-        };
-
-        ALPAKA_FN_HOST_ACC void walkForwardRay(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            concepts::TracePolicyList auto const tracePolicies,
-            data::TraceView const& mesh,
-            unsigned tet,
-            core::Point origin,
-            core::Point const direction,
-            int const initialForbiddenFace,
+            std::int32_t const initialForbiddenFace,
             double const sourceWeight,
             double const wavelength,
             unsigned const rseBatch,
             alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
-            alpaka::concepts::SpecializationOf<ReflectionCandidateSpans> auto candidates,
-            std::uint32_t const candidateIndex) const
+            ray::concepts::BoundaryBehaviour auto boundaryPolicy) const
         {
             ForwardAseRayState rayState;
             rayState.position = origin;
@@ -393,9 +330,7 @@ namespace hase::kernels::forward
                 acc,
                 mesh,
                 rayState,
-                ray::RayWalkBehaviour{
-                    ForwardAseCellPolicy{accumulation, tracePolicies},
-                    StoreReflectionBoundary<ALPAKA_TYPEOF(candidates)>{candidates, candidateIndex}});
+                ray::RayWalkBehaviour{ForwardAseCellPolicy{accumulation, tracePolicies}, boundaryPolicy});
             if(walkResult == ray::WalkResult::failed)
                 CountDroppedForwardRay<ALPAKA_TYPEOF(accumulation)>{accumulation}(acc, mesh, rayState);
         }
@@ -408,7 +343,53 @@ namespace hase::kernels::forward
             unsigned const batch,
             double const sourceStrengthTotal,
             alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
+            unsigned const rngSeed) const
+        {
+            accumulatePrimaryRays(
+                acc,
+                tracePolicies,
+                mesh,
+                forwardRayCount,
+                batch,
+                sourceStrengthTotal,
+                accumulation,
+                ForwardAseEscapeBoundaryFactory{},
+                rngSeed);
+        }
+
+        ALPAKA_FN_HOST_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            concepts::TracePolicyList auto const tracePolicies,
+            hase::data::TraceView const mesh,
+            unsigned const forwardRayCount,
+            unsigned const batch,
+            double const sourceStrengthTotal,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
             alpaka::concepts::SpecializationOf<ReflectionCandidateSpans> auto candidates,
+            unsigned const rngSeed) const
+        {
+            accumulatePrimaryRays(
+                acc,
+                tracePolicies,
+                mesh,
+                forwardRayCount,
+                batch,
+                sourceStrengthTotal,
+                accumulation,
+                StoreForwardReflectionCandidateBoundaryFactory<ALPAKA_TYPEOF(candidates)>{candidates},
+                rngSeed);
+        }
+
+    private:
+        ALPAKA_FN_HOST_ACC void accumulatePrimaryRays(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            concepts::TracePolicyList auto const tracePolicies,
+            hase::data::TraceView const& mesh,
+            unsigned const forwardRayCount,
+            unsigned const batch,
+            double const sourceStrengthTotal,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation,
+            std::invocable<std::uint32_t> auto boundaryPolicyFactory,
             unsigned const rngSeed) const
         {
             for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
@@ -449,14 +430,13 @@ namespace hase::kernels::forward
                     spectrumSize == 0u ? 0.0 : mesh.emissionWavelength(material, spectrumIndex),
                     batch,
                     accumulation,
-                    candidates,
-                    batchRayIndex);
+                    boundaryPolicyFactory(batchRayIndex));
             }
         }
     };
 
     /** @brief Kernel relaunching histories from exact weighted boundary candidates. */
-    struct AccumulateReflectedForwardPhiAse
+    struct AccumulateResampledReflectedPhiAse
     {
         ALPAKA_FN_HOST_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
@@ -472,7 +452,7 @@ namespace hase::kernels::forward
             unsigned const rngSeed,
             unsigned const reflectionPass) const
         {
-            AccumulateForwardPhiAseReflections walker;
+            AccumulateForwardPhiAse walker;
             for(auto [rayNumber] : alpaka::onAcc::makeIdxMap(
                     acc,
                     alpaka::onAcc::worker::threadsInGrid,
@@ -508,8 +488,9 @@ namespace hase::kernels::forward
                     wavelength,
                     batch,
                     accumulation,
-                    outputCandidates,
-                    batchRayIndex);
+                    StoreForwardReflectionCandidateBoundary<ALPAKA_TYPEOF(outputCandidates)>{
+                        outputCandidates,
+                        batchRayIndex});
             }
         }
     };

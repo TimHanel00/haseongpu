@@ -273,8 +273,6 @@ namespace hase::core
                 m_vertexBatchScoreSum.getMdSpan(),
                 m_volumeRayVisits.getMdSpan(),
                 m_droppedRays.getMdSpan()};
-            auto frameSpec
-                = alpakaUtils::getFrameSpec<uint32_t>(m_devBundle.device, m_devBundle.executor, alpaka::Vec{rayCount});
             m_srmResult = makeForwardRawResult(m_volumeCount, m_materialVertexCount, m_batchCount);
             m_srmResult.rayCount = rayCount;
             auto enqueueTrace = [&](hase::kernels::forward::concepts::TracePolicy auto const diagnostics)
@@ -342,9 +340,8 @@ namespace hase::core
                 }
                 else
                 {
-                    BENCH_SYNC(m_queue, AccumulateForwardPhiAse);
                     m_queue.enqueue(
-                        frameSpec,
+                        getRayFrameSpec(rayCount, m_queue),
                         alpaka::KernelBundle{
                             hase::kernels::forward::AccumulateForwardPhiAse{},
                             hase::kernels::forward::TracePolicyList{

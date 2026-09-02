@@ -207,7 +207,6 @@ namespace hase::core
                 auto const started = std::chrono::steady_clock::now();
 #endif
                 {
-                    BENCH_SYNC(m_queue, TimeIntegrationStep);
                     advanceTimeStep(simulationStep, pumpEnabled, aseEnabled);
                 }
 #ifdef HASE_ENABLE_STEP_TIMING
@@ -286,7 +285,6 @@ namespace hase::core
                 }
                 if(pumpEnabled)
                 {
-                    BENCH_SYNC(m_queue, PumpEvaluation);
                     hase::kernels::enqueueGeneralPump(
                         m_devBundle,
                         m_queue,
