@@ -12,22 +12,74 @@
 #include <kernels/forward/policyRay.hpp>
 
 #include <cstdint>
+#include <limits>
 
 namespace hase::kernels::forward
 {
+    inline constexpr std::uint32_t invalidPreparedRayCell = std::numeric_limits<std::uint32_t>::max();
+    inline constexpr std::uint32_t preparedRayTraceComponentCount = 7u;
+    inline constexpr std::uint32_t preparedRayTraceTopologyCount = 2u;
+    inline constexpr std::uint32_t reflectionCandidateComponentCount = 7u;
+
+    /** @brief Prepared launch state consumed by one reflected forward-ASE history. */
+    struct PreparedRayTraceState
+    {
+        hase::core::Point position;
+        hase::core::Direction direction;
+        double wavelength;
+        std::uint32_t cell;
+        std::int32_t forbiddenFace;
+    };
+
+    /** @brief Geometry and spectrum state retained for one reflected boundary candidate. */
+    struct ReflectionCandidateState
+    {
+        hase::core::Point position;
+        hase::core::Direction direction;
+        double wavelength;
+        std::uint32_t faceId;
+    };
+
     /** @brief Ray-indexed reflected boundary candidates for one transport pass. */
     template<
-        alpaka::concepts::IView<double> T_CartesianView,
+        alpaka::concepts::IView<double> T_Components,
         alpaka::concepts::IView<double> T_Weights,
-        alpaka::concepts::IView<double> T_Wavelengths,
         alpaka::concepts::IView<std::uint32_t> T_FaceIds>
     struct ReflectionCandidateSpans
     {
-        hase::core::PositionViewSoA<T_CartesianView> positions;
-        hase::core::DirectionViewSoA<T_CartesianView> directions;
+        ALPAKA_FN_HOST_ACC void store(
+            std::uint32_t const candidateIndex,
+            ReflectionCandidateState const& candidate,
+            double const weight)
+        {
+            components[0u * stride + candidateIndex] = candidate.position.x;
+            components[1u * stride + candidateIndex] = candidate.position.y;
+            components[2u * stride + candidateIndex] = candidate.position.z;
+            components[3u * stride + candidateIndex] = candidate.direction.x;
+            components[4u * stride + candidateIndex] = candidate.direction.y;
+            components[5u * stride + candidateIndex] = candidate.direction.z;
+            components[6u * stride + candidateIndex] = candidate.wavelength;
+            weights[candidateIndex] = weight;
+            faceIds[candidateIndex] = candidate.faceId;
+        }
+
+        [[nodiscard]] ALPAKA_FN_HOST_ACC ReflectionCandidateState load(std::uint32_t const candidateIndex) const
+        {
+            return {
+                {components[0u * stride + candidateIndex],
+                 components[1u * stride + candidateIndex],
+                 components[2u * stride + candidateIndex]},
+                {components[3u * stride + candidateIndex],
+                 components[4u * stride + candidateIndex],
+                 components[5u * stride + candidateIndex]},
+                components[6u * stride + candidateIndex],
+                faceIds[candidateIndex]};
+        }
+
+        T_Components components;
         T_Weights weights;
-        T_Wavelengths wavelengths;
         T_FaceIds faceIds;
+        std::uint32_t stride;
     };
 
     /** @brief Ordered cumulative weights and their total for reflected candidates. */
@@ -36,6 +88,47 @@ namespace hase::kernels::forward
     {
         T_Cdf cdf;
         T_TotalWeight totalWeight;
+    };
+
+    /** @brief Device-resident launch state shared by the reflected forward-ASE subkernels. */
+    template<alpaka::concepts::IView<double> T_Components, alpaka::concepts::IView<std::uint32_t> T_Topology>
+    struct PreparedRayTraceSpans
+    {
+        ALPAKA_FN_HOST_ACC void store(std::uint32_t const rayIndex, PreparedRayTraceState const& ray)
+        {
+            components[0u * stride + rayIndex] = ray.position.x;
+            components[1u * stride + rayIndex] = ray.position.y;
+            components[2u * stride + rayIndex] = ray.position.z;
+            components[3u * stride + rayIndex] = ray.direction.x;
+            components[4u * stride + rayIndex] = ray.direction.y;
+            components[5u * stride + rayIndex] = ray.direction.z;
+            components[6u * stride + rayIndex] = ray.wavelength;
+            topology[0u * stride + rayIndex] = ray.cell;
+            topology[1u * stride + rayIndex] = static_cast<std::uint32_t>(ray.forbiddenFace + 1);
+        }
+
+        ALPAKA_FN_HOST_ACC void invalidate(std::uint32_t const rayIndex)
+        {
+            topology[0u * stride + rayIndex] = invalidPreparedRayCell;
+        }
+
+        [[nodiscard]] ALPAKA_FN_HOST_ACC PreparedRayTraceState load(std::uint32_t const rayIndex) const
+        {
+            return {
+                {components[0u * stride + rayIndex],
+                 components[1u * stride + rayIndex],
+                 components[2u * stride + rayIndex]},
+                {components[3u * stride + rayIndex],
+                 components[4u * stride + rayIndex],
+                 components[5u * stride + rayIndex]},
+                components[6u * stride + rayIndex],
+                topology[0u * stride + rayIndex],
+                static_cast<std::int32_t>(topology[1u * stride + rayIndex]) - 1};
+        }
+
+        T_Components components;
+        T_Topology topology;
+        std::uint32_t stride;
     };
 
     /** @brief Reflected boundary state offered to the next transport pass. */
@@ -96,15 +189,14 @@ namespace hase::kernels::forward
         if(!sample.valid || sample.weight <= 0.0 || !alpaka::math::isfinite(sample.weight))
             return ray::BoundaryResult::stop;
 
-        candidates.positions.x[candidateIndex] = rayState.position.x;
-        candidates.positions.y[candidateIndex] = rayState.position.y;
-        candidates.positions.z[candidateIndex] = rayState.position.z;
-        candidates.directions.x[candidateIndex] = sample.direction.x;
-        candidates.directions.y[candidateIndex] = sample.direction.y;
-        candidates.directions.z[candidateIndex] = sample.direction.z;
-        candidates.weights[candidateIndex] = sample.weight;
-        candidates.wavelengths[candidateIndex] = sample.wavelength;
-        candidates.faceIds[candidateIndex] = cell * mesh.numberOfFacesPerCell + localFace;
+        candidates.store(
+            candidateIndex,
+            ReflectionCandidateState{
+                rayState.position,
+                sample.direction,
+                sample.wavelength,
+                cell * mesh.numberOfFacesPerCell + localFace},
+            sample.weight);
         return ray::BoundaryResult::stop;
     }
 

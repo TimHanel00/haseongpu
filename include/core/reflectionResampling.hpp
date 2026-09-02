@@ -21,6 +21,48 @@
 
 namespace hase::core
 {
+    /** @brief Device buffers for forward-ASE ray states prepared before traversal. */
+    template<alpaka::onHost::concepts::Device T_Device>
+    class PreparedRayTraceBank
+    {
+        using T_DoubleBuffer
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::uint32_t{1u}));
+        using T_UnsignedBuffer
+            = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::uint32_t{1u}));
+
+    public:
+        /**
+         * @param device Device receiving all prepared-ray allocations.
+         * @param maxRayCount Largest number of prepared ray states.
+         */
+        PreparedRayTraceBank(T_Device& device, std::uint32_t const maxRayCount)
+            : components(
+                  alpaka::onHost::alloc<double>(
+                      device,
+                      hase::kernels::forward::preparedRayTraceComponentCount * maxRayCount))
+            , topology(
+                  alpaka::onHost::alloc<std::uint32_t>(
+                      device,
+                      hase::kernels::forward::preparedRayTraceTopologyCount * maxRayCount))
+            , maxRayCount(maxRayCount)
+        {
+        }
+
+        /** @return Trivially-copyable non-owning view for device kernels. */
+        [[nodiscard]] auto view()
+        {
+            auto result
+                = hase::kernels::forward::PreparedRayTraceSpans{components.getView(), topology.getView(), maxRayCount};
+            static_assert(std::is_trivially_copyable_v<ALPAKA_TYPEOF(result)>);
+            static_assert(alpaka::concepts::KernelArg<ALPAKA_TYPEOF(result)>);
+            return result;
+        }
+
+        T_DoubleBuffer components;
+        T_UnsignedBuffer topology;
+        std::uint32_t maxRayCount;
+    };
+
     /** @brief Device buffers for one ray-indexed reflected-candidate bank. */
     template<alpaka::onHost::concepts::Device T_Device>
     class ReflectionCandidateBank
@@ -29,9 +71,6 @@ namespace hase::core
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<double>(std::declval<T_Device&>(), std::uint32_t{1u}));
         using T_UnsignedBuffer
             = ALPAKA_TYPEOF(alpaka::onHost::alloc<std::uint32_t>(std::declval<T_Device&>(), std::uint32_t{1u}));
-        using T_DoubleView = ALPAKA_TYPEOF(std::declval<T_DoubleBuffer&>().getView());
-        using T_UnsignedView = ALPAKA_TYPEOF(std::declval<T_UnsignedBuffer&>().getView());
-        using T_CartesianView = ALPAKA_TYPEOF(std::declval<hase::core::CartesianBufferSoA<T_Device>&>().view().x);
 
     public:
         /**
@@ -39,11 +78,13 @@ namespace hase::core
          * @param maxRayCount Largest number of ray-owned candidates.
          */
         ReflectionCandidateBank(T_Device& device, std::uint32_t const maxRayCount)
-            : positions(device, maxRayCount)
-            , directions(device, maxRayCount)
+            : components(
+                  alpaka::onHost::alloc<double>(
+                      device,
+                      hase::kernels::forward::reflectionCandidateComponentCount * maxRayCount))
             , weights(alpaka::onHost::alloc<double>(device, maxRayCount))
-            , wavelengths(alpaka::onHost::alloc<double>(device, maxRayCount))
             , faceIds(alpaka::onHost::alloc<std::uint32_t>(device, maxRayCount))
+            , maxRayCount(maxRayCount)
         {
         }
 
@@ -51,21 +92,19 @@ namespace hase::core
         [[nodiscard]] auto view()
         {
             auto result = hase::kernels::forward::ReflectionCandidateSpans{
-                positions.view(),
-                directions.view(),
+                components.getView(),
                 weights.getView(),
-                wavelengths.getView(),
-                faceIds.getView()};
+                faceIds.getView(),
+                maxRayCount};
             static_assert(std::is_trivially_copyable_v<ALPAKA_TYPEOF(result)>);
             static_assert(alpaka::concepts::KernelArg<ALPAKA_TYPEOF(result)>);
             return result;
         }
 
-        PositionBufferSoA<T_Device> positions;
-        DirectionBufferSoA<T_Device> directions;
+        T_DoubleBuffer components;
         T_DoubleBuffer weights;
-        T_DoubleBuffer wavelengths;
         T_UnsignedBuffer faceIds;
+        std::uint32_t maxRayCount;
     };
 
     /** @brief Persistent exact candidate and ordered-resampling storage for reflected ASE. */
@@ -86,7 +125,8 @@ namespace hase::core
          * @param maxRayCount Largest supported launch ray count.
          */
         ReflectionResamplingScratch(T_Device device, std::uint32_t const maxRayCount)
-            : first(device, maxRayCount)
+            : preparedRays(device, maxRayCount)
+            , first(device, maxRayCount)
             , second(device, maxRayCount)
             , samplingCdf(alpaka::onHost::alloc<double>(device, maxRayCount))
             , samplingTotalWeight(alpaka::onHost::alloc<double>(device, 1u))
@@ -163,6 +203,7 @@ namespace hase::core
             return totalWeight.getHostView()[0u];
         }
 
+        PreparedRayTraceBank<T_Device> preparedRays;
         ReflectionCandidateBank<T_Device> first;
         ReflectionCandidateBank<T_Device> second;
         T_DoubleBuffer samplingCdf;
