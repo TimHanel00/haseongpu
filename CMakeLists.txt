@@ -51,6 +51,11 @@ project(
         ${HASEONGPU_VERSION_MAJOR}.${HASEONGPU_VERSION_MINOR}.${HASEONGPU_VERSION_PATCH}
 )
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE
+    ON
+    CACHE BOOL
+    "Build position-independent code"
+)
 set(CMAKE_CXX_STANDARD 20)
 include(CMakePrintHelpers)
 include(CMakePackageConfigHelpers)

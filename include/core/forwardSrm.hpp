@@ -17,6 +17,7 @@
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
 
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -39,6 +40,88 @@ namespace hase::core
         unsigned srmMaxIterations = 0u;
         unsigned srmDivergenceStreak = 0u;
     };
+
+    /** @brief Customization point for distributing a scalar frame limit over a fixed dimensionality. */
+    struct GetScalarDistribution
+    {
+        template<std::uint32_t T_dim>
+        struct Op
+        {
+            auto operator()(std::unsigned_integral auto const scalarLimit) const
+            {
+                static_assert(T_dim > 0u);
+                using Index = ALPAKA_TYPEOF(scalarLimit);
+                using NumFrames = alpaka::Vec<Index, T_dim>;
+
+                Index remainingFactor = scalarLimit;
+                auto frameLimit = NumFrames::fill(Index{1u});
+
+                // Put the complete power-of-two factor into the fastest-running extent.
+                while(remainingFactor > Index{1u} && remainingFactor % Index{2u} == Index{0u})
+                {
+                    frameLimit[T_dim - 1u] *= Index{2u};
+                    remainingFactor /= Index{2u};
+                }
+
+                std::vector<Index> oddPrimeFactors;
+                for(Index factor = Index{3u}; factor <= remainingFactor / factor; factor += Index{2u})
+                {
+                    while(remainingFactor % factor == Index{0u})
+                    {
+                        oddPrimeFactors.push_back(factor);
+                        remainingFactor /= factor;
+                    }
+                }
+                if(remainingFactor > Index{1u})
+                    oddPrimeFactors.push_back(remainingFactor);
+
+                if constexpr(T_dim == 1u)
+                {
+                    for(Index const factor : oddPrimeFactors)
+                        frameLimit[0u] *= factor;
+                }
+                else
+                {
+                    std::uint32_t slowDimension = T_dim - 2u;
+                    for(auto factor = oddPrimeFactors.rbegin(); factor != oddPrimeFactors.rend(); ++factor)
+                    {
+                        frameLimit[slowDimension] *= *factor;
+                        slowDimension = slowDimension == 0u ? T_dim - 2u : slowDimension - 1u;
+                    }
+                }
+                return frameLimit;
+            }
+        };
+    };
+
+    /**
+     * @brief Distribute a scalar frame limit over a requested dimensionality.
+     * @param scalarLimit Maximum product of the returned frame extents.
+     * @param anyWithDim Object selecting the dimensionality of the returned vector.
+     * @return Per-dimension frame limits selected by the matching customization.
+     */
+    auto getScalarDistribution(
+        std::unsigned_integral auto const scalarLimit,
+        alpaka::concepts::HasStaticDim auto const& anyWithDim)
+    {
+        constexpr auto dim = alpaka::getDim(ALPAKA_TYPEOF(anyWithDim){});
+        return GetScalarDistribution::Op<dim>{}(scalarLimit);
+    }
+
+    /**
+     * @brief Construct a one-dimensional ray frame specification with 128 threads per frame.
+     * @param rayCount Number of rays covered by the frame specification.
+     * @param queue Queue whose device limits the number of frames to four full waves.
+     * @return Ray frame specification clamped to the queue's device.
+     */
+    auto getRayFrameSpec(unsigned const rayCount, hase::concepts::Queue auto const& queue)
+    {
+        auto const numMultiprocessors = queue.getDevice().getDeviceProperties().multiProcessorCount;
+        auto const numFrames = getScalarDistribution(alpaka::divCeil(rayCount, 128u), alpaka::Vec{1u});
+        // auto const numClamped = getScalarDistribution(4u * numMultiprocessors, alpaka::Vec{1u});
+        auto const numClamped = getScalarDistribution(8u * numMultiprocessors, alpaka::Vec{1u});
+        return alpaka::onHost::FrameSpec{numFrames.min(numClamped), alpaka::Vec{128u}};
+    }
 
     /**
      * @brief Trace direct and recursively reflected forward histories with weighted resampling.
@@ -63,7 +146,7 @@ namespace hase::core
     void runForwardSrm(
         alpakaUtils::DevBundle<T_Device, T_Exec>& devBundle,
         concepts::Queue auto const& queue,
-        hase::data::TraceView const mesh,
+        data::TraceView const mesh,
         AseTraceControls const& experiment,
         ForwardPhiAseRawResult& result,
         unsigned const rayCount,
@@ -85,16 +168,11 @@ namespace hase::core
         scratch.clear(queue, scratch.first);
         scratch.clear(queue, scratch.second);
         alpaka::onHost::wait(queue);
-
-        constexpr unsigned rayFrameExtent = 128u;
-        auto const rayFrameSpec = alpaka::onHost::FrameSpec{
-            alpaka::Vec{(rayCount + rayFrameExtent - 1u) / rayFrameExtent},
-            alpaka::Vec{rayFrameExtent},
-            devBundle.executor};
+        auto const rayFrameSpec = getRayFrameSpec(rayCount, queue);
         queue.enqueue(
             rayFrameSpec,
             alpaka::KernelBundle{
-                hase::kernels::forward::AccumulateForwardPhiAseReflections{},
+                hase::kernels::forward::AccumulateForwardPhiAse{},
                 hase::kernels::forward::TracePolicyList{
                     hase::kernels::forward::tracePolicy::source::volume,
                     hase::kernels::forward::tracePolicy::cell::forwardAse,
@@ -133,7 +211,7 @@ namespace hase::core
                 queue.enqueue(
                     rayFrameSpec,
                     alpaka::KernelBundle{
-                        hase::kernels::forward::AccumulateReflectedForwardPhiAse{},
+                        hase::kernels::forward::AccumulateResampledReflectedPhiAse{},
                         hase::kernels::forward::TracePolicyList{
                             hase::kernels::forward::tracePolicy::source::reflectionCandidates,
                             hase::kernels::forward::tracePolicy::cell::forwardAse,
@@ -158,7 +236,7 @@ namespace hase::core
                 queue.enqueue(
                     rayFrameSpec,
                     alpaka::KernelBundle{
-                        hase::kernels::forward::AccumulateReflectedForwardPhiAse{},
+                        hase::kernels::forward::AccumulateResampledReflectedPhiAse{},
                         hase::kernels::forward::TracePolicyList{
                             hase::kernels::forward::tracePolicy::source::reflectionCandidates,
                             hase::kernels::forward::tracePolicy::cell::forwardAse,
@@ -250,11 +328,7 @@ namespace hase::core
         scratch.clear(queue, scratch.reservoir.first);
         scratch.clear(queue, scratch.reservoir.second);
         alpaka::onHost::wait(queue);
-
-        auto const rayFrameSpec = hase::alpakaUtils::getFrameSpec<std::uint32_t>(
-            devBundle.device,
-            devBundle.executor,
-            alpaka::Vec{rayCount});
+        auto const rayFrameSpec = getRayFrameSpec(rayCount, queue);
         queue.enqueue(
             rayFrameSpec,
             alpaka::KernelBundle{

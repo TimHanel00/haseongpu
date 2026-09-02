@@ -381,6 +381,21 @@ def test_thinFrontendPropagatesBuildSettingsToResidentRuntime(tmp_path):
     assert (
         runtime_dir / "python" / "pyInclude" / "_runtime" / "calcPhiASE"
     ).is_file()
+    compile_commands = json.loads(
+        (runtime_dir / "compile_commands.json").read_text(encoding="utf-8")
+    )
+    logging_source = (repoRoot / "src" / "core" / "logging.cpp").resolve()
+    logging_compile_command = next(
+        command
+        for command in compile_commands
+        if Path(command["file"]).resolve() == logging_source
+    )
+    logging_compile_arguments = logging_compile_command.get("arguments")
+    if logging_compile_arguments is None:
+        logging_compile_arguments = shlex.split(
+            logging_compile_command["command"]
+        )
+    assert "-fPIC" in logging_compile_arguments
 
 
 @pytest.mark.skipif(

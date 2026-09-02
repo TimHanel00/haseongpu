@@ -234,6 +234,15 @@ TEST_CASE("forward gain lookup follows the receiving cell material and ray wavel
     CHECK(hase::kernels::forward::localGainCoefficient(trace, 0u, 1.0) == Catch::Approx(1.9));
     CHECK(hase::kernels::forward::localGainCoefficient(trace, 0u, 1.5) == Catch::Approx(2.4));
     CHECK(hase::kernels::forward::localGainCoefficient(trace, 1u, 1.5) == Catch::Approx(-0.7));
+
+    double const length = 0.25;
+    auto const propagation = hase::kernels::forward::localSegmentPropagation(trace, 0u, length, 1.5);
+    double const expectedSegmentGain = std::exp(2.4 * length);
+    CHECK(propagation.segmentGain == Catch::Approx(expectedSegmentGain));
+    CHECK(propagation.trackLengthIntegral == Catch::Approx((expectedSegmentGain - 1.0) / 2.4));
+
+    auto const shortPropagation = hase::kernels::forward::localSegmentPropagation(trace, 0u, 1.0e-10, 1.5);
+    CHECK(shortPropagation.trackLengthIntegral == 1.0e-10);
 }
 
 TEST_CASE("forward PhiASE RSE includes zero-score histories", "[forward][rse]")

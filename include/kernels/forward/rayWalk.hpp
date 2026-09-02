@@ -233,30 +233,21 @@ namespace hase::kernels::forward
         return stimulatedCoefficient - mesh.bulkAttenuation(tet);
     }
 
-    /**
-     * @param mesh Device trace containing local optical coefficients.
-     * @param tet Current cell index.
-     * @param length Traversed segment length in metres.
-     * @param wavelength Ray wavelength in metres.
-     * @return Multiplicative power gain `exp(g * length)`.
-     */
-    [[nodiscard]] inline ALPAKA_FN_ACC double localSegmentGain(
-        hase::data::TraceView const& mesh,
-        unsigned const tet,
-        double const length,
-        double const wavelength)
+    /** @brief Gain and track-length integral for one ray segment. */
+    struct LocalSegmentPropagation
     {
-        return alpaka::math::exp(localGainCoefficient(mesh, tet, wavelength) * length);
-    }
+        double segmentGain;
+        double trackLengthIntegral;
+    };
 
     /**
      * @param mesh Device trace containing local optical coefficients.
      * @param tet Current cell index.
      * @param length Traversed segment length in metres.
      * @param wavelength Ray wavelength in metres.
-     * @return Integral of exponential gain along the segment, in metres.
+     * @return Multiplicative gain and exponential track-length integral.
      */
-    [[nodiscard]] inline ALPAKA_FN_ACC double localSegmentTrackLengthIntegral(
+    [[nodiscard]] inline ALPAKA_FN_ACC LocalSegmentPropagation localSegmentPropagation(
         hase::data::TraceView const& mesh,
         unsigned const tet,
         double const length,
@@ -264,11 +255,12 @@ namespace hase::kernels::forward
     {
         double const gainCoefficient = localGainCoefficient(mesh, tet, wavelength);
         double const gainLength = gainCoefficient * length;
+        double const segmentGain = alpaka::math::exp(gainLength);
         if(alpaka::math::abs(gainLength) < 1.0e-8)
         {
-            return length;
+            return {segmentGain, length};
         }
-        return (alpaka::math::exp(gainLength) - 1.0) / gainCoefficient;
+        return {segmentGain, (segmentGain - 1.0) / gainCoefficient};
     }
 
     /**
