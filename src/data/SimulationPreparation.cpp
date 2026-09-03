@@ -764,7 +764,7 @@ namespace hase::data
         ase.minRays = narrow<unsigned>(simulation.phiAse->minRays, "phiAse.minRays");
         ase.maxRays = narrow<unsigned>(simulation.phiAse->maxRays, "phiAse.maxRays");
         ase.relativeStandardErrorThreshold = simulation.phiAse->relativeStandardErrorThreshold;
-        ase.trackRayVisits = simulation.phiAse->trackRayVisits;
+        ase.enableDiagnostics = simulation.phiAse->enableDiagnostics;
         ase.useReflections = simulation.phiAse->useReflections;
         ase.reflectionMode = simulation.phiAse->reflectionMode;
         ase.surfaceReservoirSize

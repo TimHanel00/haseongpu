@@ -138,12 +138,12 @@ namespace hase::kernels::forward::tracePolicy
         {
         };
 
-        struct CellRayVisits : category::Diagnostics
+        struct Enabled : category::Diagnostics
         {
         };
 
         inline constexpr None none;
-        inline constexpr CellRayVisits cellRayVisits;
+        inline constexpr Enabled enabled;
     } // namespace diagnostics
 } // namespace hase::kernels::forward::tracePolicy
 

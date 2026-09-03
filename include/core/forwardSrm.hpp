@@ -127,6 +127,24 @@ namespace hase::core
         return alpaka::onHost::FrameSpec{numFrames.min(numClamped), alpaka::Vec{threadsPerFrame}};
     }
 
+    /** @brief Select the forward-trace block size for the compile-time diagnostics path. */
+    ALPAKA_FN_HOST_ACC constexpr unsigned forwardRayThreadsPerFrame(
+        hase::kernels::forward::tracePolicy::diagnostics::None)
+    {
+        // The performance specialization carries no dropped-ray failure state and uses
+        // the wider launch selected for throughput.
+        return 512u;
+    }
+
+    /** @brief Keep diagnostic forward traces within their larger resource envelope. */
+    ALPAKA_FN_HOST_ACC constexpr unsigned forwardRayThreadsPerFrame(
+        hase::kernels::forward::tracePolicy::diagnostics::Enabled)
+    {
+        // Visit and dropped-ray accounting add atomics and state, so diagnostics use
+        // the conservative launch shape intended for safe validation runs.
+        return 128u;
+    }
+
     /**
      * @brief Trace direct and recursively reflected forward histories with weighted resampling.
      * @tparam T_Device Device type owned by `devBundle` and `scratch`.
@@ -172,9 +190,10 @@ namespace hase::core
         scratch.clear(queue, scratch.first);
         scratch.clear(queue, scratch.second);
         alpaka::onHost::wait(queue);
-        auto const rayFrameSpec = getRayFrameSpec(rayCount, queue, 512u);
+        auto const auxiliaryRayFrameSpec = getRayFrameSpec(rayCount, queue, 512u);
+        auto const forwardRayFrameSpec = getRayFrameSpec(rayCount, queue, forwardRayThreadsPerFrame(diagnostics));
         queue.enqueue(
-            rayFrameSpec,
+            auxiliaryRayFrameSpec,
             alpaka::KernelBundle{
                 hase::kernels::forward::PrepareRayTrace{},
                 mesh,
@@ -184,7 +203,7 @@ namespace hase::core
                 scratch.preparedRays.view(),
                 threadLocalStridingRNG});
         queue.enqueue(
-            rayFrameSpec,
+            forwardRayFrameSpec,
             alpaka::KernelBundle{
                 hase::kernels::forward::RayTrace{},
                 hase::kernels::forward::TracePolicyList{
@@ -223,7 +242,7 @@ namespace hase::core
             scratch.clear(queue, outputCandidates);
             alpaka::onHost::wait(queue);
             queue.enqueue(
-                rayFrameSpec,
+                auxiliaryRayFrameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::ResampleCandidateRays{},
                     rayCount,
@@ -235,7 +254,7 @@ namespace hase::core
                     threadLocalStridingRNG,
                     pass});
             queue.enqueue(
-                rayFrameSpec,
+                forwardRayFrameSpec,
                 alpaka::KernelBundle{
                     hase::kernels::forward::RayTrace{},
                     hase::kernels::forward::TracePolicyList{
@@ -324,7 +343,7 @@ namespace hase::core
         scratch.clear(queue, scratch.reservoir.first);
         scratch.clear(queue, scratch.reservoir.second);
         alpaka::onHost::wait(queue);
-        auto const rayFrameSpec = getRayFrameSpec(rayCount, queue);
+        auto const rayFrameSpec = getRayFrameSpec(rayCount, queue, forwardRayThreadsPerFrame(diagnostics));
         queue.enqueue(
             rayFrameSpec,
             alpaka::KernelBundle{

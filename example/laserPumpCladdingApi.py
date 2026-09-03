@@ -187,7 +187,7 @@ def buildSimulation(
         "minRays": 100000,
         "maxRays": 1000000,
         "relativeStandardErrorThreshold": 0.1,
-        "trackRayVisits": False,
+        "enableDiagnostics": False,
         "repetitions": 4,
         "adaptiveSteps": 2,
         "useReflections": True,

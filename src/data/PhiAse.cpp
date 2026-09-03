@@ -11,8 +11,10 @@ namespace hase::data
         reader.assign(result.maxRays, prefix, FieldName::maxRays);
         reader.assign(result.forwardRayCount, prefix, FieldName::forwardRayCount);
         reader.assign(result.relativeStandardErrorThreshold, prefix, FieldName::relativeStandardErrorThreshold);
-        if(reader.contains(prefix, FieldName::trackRayVisits))
-            reader.assign(result.trackRayVisits, prefix, FieldName::trackRayVisits);
+        if(reader.contains(prefix, FieldName::enableDiagnostics))
+            reader.assign(result.enableDiagnostics, prefix, FieldName::enableDiagnostics);
+        else if(reader.contains(prefix, FieldName::legacyTrackRayVisits))
+            reader.assign(result.enableDiagnostics, prefix, FieldName::legacyTrackRayVisits);
         reader.assign(result.repetitions, prefix, FieldName::repetitions);
         reader.assign(result.adaptiveSteps, prefix, FieldName::adaptiveSteps);
         reader.assign(result.useReflections, prefix, FieldName::useReflections);
