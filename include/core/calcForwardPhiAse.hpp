@@ -341,7 +341,7 @@ namespace hase::core
                 else
                 {
                     m_queue.enqueue(
-                        getRayFrameSpec(rayCount, m_queue),
+                        getRayFrameSpec(rayCount, m_queue, forwardRayThreadsPerFrame(diagnostics)),
                         alpaka::KernelBundle{
                             hase::kernels::forward::AccumulateForwardPhiAse{},
                             hase::kernels::forward::TracePolicyList{
@@ -359,8 +359,8 @@ namespace hase::core
                 }
             };
 
-            if(experiment.trackRayVisits)
-                enqueueTrace(hase::kernels::forward::tracePolicy::diagnostics::cellRayVisits);
+            if(experiment.enableDiagnostics)
+                enqueueTrace(hase::kernels::forward::tracePolicy::diagnostics::enabled);
             else
                 enqueueTrace(hase::kernels::forward::tracePolicy::diagnostics::none);
         }

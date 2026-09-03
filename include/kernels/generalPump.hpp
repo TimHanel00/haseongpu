@@ -526,11 +526,11 @@ namespace hase::kernels
                 rayState.power = power[rayIndex];
                 rayState.wavelength = wavelength[rayIndex];
                 auto boundaryPolicy = boundaryPolicyFactory(rayIndex);
-                static_cast<void>(ray::walk(
+                ray::walk(
                     acc,
                     mesh,
                     rayState,
-                    ray::RayWalkBehaviour{CellPolicy{betaVolume, vertexPumpIntegral}, boundaryPolicy}));
+                    ray::RayWalkBehaviour{CellPolicy{betaVolume, vertexPumpIntegral}, boundaryPolicy});
             }
         }
     };
@@ -911,7 +911,7 @@ namespace hase::kernels
                 ray.wavelength = input.wavelengths[sample.slotIndex];
                 ray.cell = cell;
                 ray.forbiddenFace = static_cast<std::int32_t>(localFace);
-                static_cast<void>(hase::kernels::forward::ray::walk(
+                hase::kernels::forward::ray::walk(
                     acc,
                     mesh,
                     ray,
@@ -925,7 +925,7 @@ namespace hase::kernels
                             faceCount,
                             reflectionIndex,
                             rayIndex,
-                            captureOutput}}));
+                            captureOutput}});
             }
         }
     };

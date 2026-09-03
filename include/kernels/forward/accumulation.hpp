@@ -161,7 +161,7 @@ namespace hase::kernels::forward
         }
 
         ALPAKA_FN_ACC void operator()(
-            tracePolicy::diagnostics::CellRayVisits,
+            tracePolicy::diagnostics::Enabled,
             alpaka::onAcc::concepts::Acc auto const& acc,
             alpaka::concepts::IMdSpan<std::uint32_t> auto cellRayVisits,
             unsigned const tet) const
@@ -170,15 +170,50 @@ namespace hase::kernels::forward
         }
     };
 
-    /** @brief Cell behavior accumulating track-length scores for one ASE ray. */
+    /** @brief Empty per-cell diagnostic state for the performance specialization. */
+    struct IgnoreForwardCellDiagnostics
+    {
+        ALPAKA_FN_ACC void recordVisit(alpaka::onAcc::concepts::Acc auto const&, unsigned)
+        {
+        }
+
+        ALPAKA_FN_ACC void recordDropped(alpaka::onAcc::concepts::Acc auto const&, unsigned)
+        {
+        }
+    };
+
+    /** @brief Per-cell counters retained only by the diagnostic specialization. */
     template<
-        alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> T_Accumulation,
-        concepts::TracePolicyList T_TracePolicies>
+        alpaka::concepts::IMdSpan<std::uint32_t> T_CellRayVisits,
+        alpaka::concepts::IMdSpan<std::uint32_t> T_CellDroppedRays>
+    struct RecordForwardCellDiagnostics
+    {
+        T_CellRayVisits cellRayVisits;
+        T_CellDroppedRays cellDroppedRays;
+
+        ALPAKA_FN_ACC void recordVisit(alpaka::onAcc::concepts::Acc auto const& acc, unsigned const tet)
+        {
+            alpaka::onAcc::atomicAdd(acc, &cellRayVisits[tet], 1u);
+        }
+
+        ALPAKA_FN_ACC void recordDropped(alpaka::onAcc::concepts::Acc auto const& acc, unsigned const tet)
+        {
+            alpaka::onAcc::atomicAdd(acc, &cellDroppedRays[tet], 1u);
+        }
+    };
+
+    /** @brief Cell behavior accumulating track-length scores for one ASE ray. */
+    template<alpaka::concepts::IMdSpan<double> T_VertexBatchScoreSum, typename T_CellDiagnostics>
     struct ForwardAseCellPolicy : ray::behaviourDimension::Cell
     {
-        T_Accumulation accumulation;
+        T_VertexBatchScoreSum vertexBatchScoreSum;
+        T_CellDiagnostics cellDiagnostics;
 
-        ALPAKA_FN_HOST_ACC constexpr ForwardAseCellPolicy(T_Accumulation value, T_TracePolicies) : accumulation{value}
+        ALPAKA_FN_HOST_ACC constexpr ForwardAseCellPolicy(
+            T_VertexBatchScoreSum vertexBatchScoreSumValue,
+            T_CellDiagnostics cellDiagnosticsValue)
+            : vertexBatchScoreSum{vertexBatchScoreSumValue}
+            , cellDiagnostics{cellDiagnosticsValue}
         {
         }
 
@@ -195,7 +230,7 @@ namespace hase::kernels::forward
             contribution *= segmentPropagation.trackLengthIntegral;
             if(alpaka::math::isfinite(contribution))
             {
-                RecordCellRayVisit{}(T_TracePolicies::getDiagnostics(), acc, accumulation.cellRayVisits, tet);
+                cellDiagnostics.recordVisit(acc, tet);
                 auto const weights = segmentMidpointBarycentricVertexWeights(
                     mesh,
                     tet,
@@ -209,26 +244,56 @@ namespace hase::kernels::forward
                         = materialVertexOffset + mesh.cellPointIndices[tet * mesh.numberOfCellVertices + localVertex];
                     unsigned const vertex
                         = rayState.rseBatch * (mesh.numberOfMaterials * mesh.numberOfMeshPoints) + materialVertex;
-                    double const weight = weights[localVertex];
-                    alpaka::onAcc::atomicAdd(acc, &accumulation.vertexBatchScoreSum[vertex], contribution * weight);
+                    alpaka::onAcc::atomicAdd(acc, &vertexBatchScoreSum[vertex], contribution * weights[localVertex]);
                 }
             }
             else
             {
-                alpaka::onAcc::atomicAdd(acc, &accumulation.cellDroppedRays[tet], 1u);
+                cellDiagnostics.recordDropped(acc, tet);
             }
             rayState.accumulatedGain *= segmentPropagation.segmentGain;
             return true;
         }
     };
 
-    /** @brief Failure handler incrementing the dropped-ray count for the last cell. */
-    template<alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> T_Accumulation>
-    struct CountDroppedForwardRay
+    /** @brief Build a cell policy whose performance form contains no diagnostic spans. */
+    struct MakeForwardAseCellPolicy
     {
-        T_Accumulation accumulation;
+        ALPAKA_FN_HOST_ACC constexpr auto operator()(
+            tracePolicy::diagnostics::None,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation) const
+        {
+            return ForwardAseCellPolicy{accumulation.vertexBatchScoreSum, IgnoreForwardCellDiagnostics{}};
+        }
 
-        ALPAKA_FN_HOST_ACC constexpr explicit CountDroppedForwardRay(T_Accumulation value) : accumulation{value}
+        ALPAKA_FN_HOST_ACC constexpr auto operator()(
+            tracePolicy::diagnostics::Enabled,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation) const
+        {
+            return ForwardAseCellPolicy{
+                accumulation.vertexBatchScoreSum,
+                RecordForwardCellDiagnostics{accumulation.cellRayVisits, accumulation.cellDroppedRays}};
+        }
+    };
+
+    /** @brief Compile-time no-op used when forward diagnostics are disabled. */
+    struct IgnoreForwardRayFailure : ray::behaviourDimension::Failure
+    {
+        ALPAKA_FN_ACC void operator()(
+            alpaka::onAcc::concepts::Acc auto const&,
+            hase::data::TraceView const&,
+            ray::State auto&) const
+        {
+        }
+    };
+
+    /** @brief Diagnostic failure behavior incrementing the last cell's dropped-ray count. */
+    template<alpaka::concepts::IMdSpan<std::uint32_t> T_CellDroppedRays>
+    struct RecordDroppedForwardRay : ray::behaviourDimension::Failure
+    {
+        T_CellDroppedRays cellDroppedRays;
+
+        ALPAKA_FN_HOST_ACC constexpr explicit RecordDroppedForwardRay(T_CellDroppedRays value) : cellDroppedRays{value}
         {
         }
 
@@ -237,7 +302,25 @@ namespace hase::kernels::forward
             hase::data::TraceView const&,
             ray::State auto& rayState)
         {
-            alpaka::onAcc::atomicAdd(acc, &accumulation.cellDroppedRays[rayState.cell], 1u);
+            alpaka::onAcc::atomicAdd(acc, &cellDroppedRays[rayState.cell], 1u);
+        }
+    };
+
+    /** @brief Select a failure behavior without retaining diagnostic state in performance kernels. */
+    struct MakeForwardRayFailureBehaviour
+    {
+        ALPAKA_FN_HOST_ACC constexpr auto operator()(
+            tracePolicy::diagnostics::None,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto) const
+        {
+            return IgnoreForwardRayFailure{};
+        }
+
+        ALPAKA_FN_HOST_ACC constexpr auto operator()(
+            tracePolicy::diagnostics::Enabled,
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation) const
+        {
+            return RecordDroppedForwardRay{accumulation.cellDroppedRays};
         }
     };
 
@@ -313,13 +396,10 @@ namespace hase::kernels::forward
             rayState.weight = sourceWeight;
             rayState.wavelength = wavelength;
             rayState.rseBatch = rseBatch;
-            auto const walkResult = ray::walk(
-                acc,
-                mesh,
-                rayState,
-                ray::RayWalkBehaviour{ForwardAseCellPolicy{accumulation, tracePolicies}, boundaryPolicy});
-            if(walkResult == ray::WalkResult::failed)
-                CountDroppedForwardRay<ALPAKA_TYPEOF(accumulation)>{accumulation}(acc, mesh, rayState);
+            auto const cellBehaviour = MakeForwardAseCellPolicy{}(tracePolicies.getDiagnostics(), accumulation);
+            auto const failureBehaviour
+                = MakeForwardRayFailureBehaviour{}(tracePolicies.getDiagnostics(), accumulation);
+            ray::walk(acc, mesh, rayState, ray::RayWalkBehaviour{cellBehaviour, boundaryPolicy, failureBehaviour});
         }
 
         ALPAKA_FN_HOST_ACC void operator()(
@@ -613,18 +693,20 @@ namespace hase::kernels::forward
             rayState.weight = sourceWeight;
             rayState.wavelength = wavelength;
             rayState.rseBatch = rseBatch;
-            auto const walkResult = ray::walk(
+            auto const cellBehaviour = MakeForwardAseCellPolicy{}(tracePolicies.getDiagnostics(), accumulation);
+            auto const failureBehaviour
+                = MakeForwardRayFailureBehaviour{}(tracePolicies.getDiagnostics(), accumulation);
+            ray::walk(
                 acc,
                 mesh,
                 rayState,
                 ray::RayWalkBehaviour{
-                    ForwardAseCellPolicy{accumulation, tracePolicies},
+                    cellBehaviour,
                     StoreReflectionBoundary<ALPAKA_TYPEOF(reservoir), ALPAKA_TYPEOF(rng)>{
                         reservoir,
                         rng,
-                        candidateIndex}});
-            if(walkResult == ray::WalkResult::failed)
-                CountDroppedForwardRay<ALPAKA_TYPEOF(accumulation)>{accumulation}(acc, mesh, rayState);
+                        candidateIndex},
+                    failureBehaviour});
         }
 
         ALPAKA_FN_HOST_ACC void operator()(

@@ -213,7 +213,7 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
     assert phiAse.reflectionMode == "direct"
     assert phiAse.surfaceReservoirSize == 64
     assert phiAse.srmPositionMode == "exact"
-    assert phiAse.trackRayVisits is False
+    assert phiAse.enableDiagnostics is False
 
     parser = argparse.ArgumentParser()
     PhiASE.addArguments(parser)
@@ -222,7 +222,7 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
         str(phiAseTestConfigPath),
         "--min-rays",
         "32",
-        "--track-ray-visits",
+        "--enable-diagnostics",
         "--openpmd-backend",
         "adios-sst",
         "--use-reflections",
@@ -248,7 +248,7 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
     fromArgs = PhiASE.fromArgs(args)
 
     assert fromArgs.minRays == 32
-    assert fromArgs.trackRayVisits is True
+    assert fromArgs.enableDiagnostics is True
     assert fromArgs.maxRays == 10000
     assert fromArgs.openpmdBackend == "adios-sst"
     assert fromArgs.useReflections is True
@@ -261,6 +261,26 @@ def testPhiAseLoadsYamlAndArgumentOverrides(phiAseTestConfigPath):
     assert fromArgs.minSampleRange == 3
     assert fromArgs.maxSampleRange == 11
     assert fromArgs.ase_steps == 7
+
+
+def testPhiAseAcceptsLegacyDiagnosticsInputs(tmp_path):
+    assert PhiASE(trackRayVisits=True).enableDiagnostics is True
+
+    path = tmp_path / "legacy-diagnostics.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 3,
+                "simulation": {"phi_ase": {"track_ray_visits": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert PhiASE.fromYaml(path).enableDiagnostics is True
+
+    parser = argparse.ArgumentParser()
+    PhiASE.addArguments(parser)
+    assert PhiASE.fromArgs(parser.parse_args(["--track-ray-visits"])).enableDiagnostics is True
 
 
 @pytest.mark.parametrize(
@@ -320,11 +340,11 @@ def testPhiAseSerializesAdaptiveRangeWithoutAnImplicitFixedRayCount():
     assert attributes["maxRays"] == 1600
     assert attributes["adaptiveSteps"] == 4
     assert attributes["forwardRayCount"] == 0
-    assert attributes["trackRayVisits"] is False
+    assert attributes["enableDiagnostics"] is False
 
-    fixed = PhiASE(minRays=100, maxRays=1600, forwardRayCount=250, trackRayVisits=True)
+    fixed = PhiASE(minRays=100, maxRays=1600, forwardRayCount=250, enableDiagnostics=True)
     assert fixed.openPmdAttributes(numberOfSamples=1)["forwardRayCount"] == 250
-    assert fixed.openPmdAttributes(numberOfSamples=1)["trackRayVisits"] is True
+    assert fixed.openPmdAttributes(numberOfSamples=1)["enableDiagnostics"] is True
 
 def testPhiAseDefaultBackendSerializesAvailableAlpakaBackend():
     phiAse = PhiASE()

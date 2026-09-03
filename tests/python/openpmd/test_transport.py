@@ -1416,7 +1416,7 @@ def test_calcPhiAseSingleOpenPmdRoundTrip(tmp_path):
 
 
 @pytest.mark.integration
-def test_calcPhiAseDisablesRayVisitDiagnosticByDefault(tmp_path):
+def test_calcPhiAseDisablesDiagnosticsByDefault(tmp_path):
     if _backend_execution_parallel_mode() == "mpi":
         pytest.skip("MPI CI rows exercise backend launches with parallelMode='mpi'")
 
@@ -1440,7 +1440,7 @@ def test_calcPhiAseAdaptiveRangeReachesMaxForUnconvergedCell(tmp_path):
     phi_ase.adaptiveSteps = 3
     phi_ase.forwardRayCount = None
     phi_ase.relativeStandardErrorThreshold = 0.0
-    phi_ase.trackRayVisits = True
+    phi_ase.enableDiagnostics = True
 
     result = transport.runPhiASE(
         launch_smoke_request(phi_ase),

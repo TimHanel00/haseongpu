@@ -15,7 +15,7 @@ evolving excitation state.
        maxRays=1_000_000,
        adaptiveSteps=4,
        relativeStandardErrorThreshold=0.05,
-       trackRayVisits=False,
+       enableDiagnostics=True,
        useReflections=True,
        reflectionMode="srm",
        surfaceReservoirSize=256,
@@ -71,11 +71,16 @@ Sampling controls
    requests 5%. It measures sampling uncertainty, not discretization or model
    error.
 
-``trackRayVisits``
-   Enable the per-cell ray-visit diagnostic returned as ``totalRays``. It is
-   disabled by default to remove one atomic operation from every finite
-   track-length contribution. When disabled, ``totalRays`` retains the normal
-   cell-shaped result layout and contains zeros.
+``enableDiagnostics``
+   Enable per-cell ray visits in ``totalRays`` and failed-ray counts used to
+   validate the trace. Use diagnostics for a first run on a new or refined
+   mesh, then disable them for performance after confirming that no rays are
+   dropped. Diagnostics use 128 threads per block and retain the counters and
+   atomics needed to report failures. The performance specialization uses 512
+   threads per block and compiles those diagnostics out; ``totalRays`` and the
+   dropped-ray array then retain their normal cell-shaped layouts but contain
+   zeros. ``trackRayVisits`` remains accepted as a deprecated constructor and
+   transport input alias, but new output contains only ``enableDiagnostics``.
 
 ``rngSeed``
    Unsigned seed for reproducible ASE histories. If omitted, each invocation
@@ -91,6 +96,12 @@ and an isotropic direction. It then deposits a gain-weighted track-length score
 in every traversed cell. Spectral bins and source cells are stratified over the
 global batch, including when devices or MPI ranks split that batch. See
 :ref:`forward-ase-model` for normalization and uncertainty equations.
+
+Forward traversal has no fixed cell-crossing limit. A valid ray continues until
+it reaches a physical boundary or a cell policy terminates it, so increasing
+mesh resolution cannot make a ray fail merely because it requires more
+crossings. With diagnostics enabled, invalid geometric transitions and
+non-finite contributions are counted as dropped rays.
 
 Reflections
 -----------
@@ -167,7 +178,7 @@ YAML and CLI helpers
        min_rays: 100000
        max_rays: 1000000
        relative_standard_error_threshold: 0.05
-       track_ray_visits: false
+       enable_diagnostics: true
        adaptive_steps: 4
        ase_steps: 150
        use_reflections: true
@@ -195,10 +206,13 @@ loaded YAML value to be overridden explicitly:
 .. code-block:: console
 
    --use-reflections | --no-reflections
-   --track-ray-visits | --no-track-ray-visits
+   --enable-diagnostics | --disable-diagnostics
    --monochromatic | --polychromatic
    --write-vtk | --no-write-vtk
 
 Explicit device IDs use ``--devices ID [ID ...]``. Inclusive sample bounds use
 ``--min-sample-range`` and ``--max-sample-range``; ``--ase-steps`` controls the
 outer ASE-active step count.
+The deprecated ``track_ray_visits`` YAML key and
+``--track-ray-visits``/``--no-track-ray-visits`` CLI spellings remain accepted
+as input aliases.

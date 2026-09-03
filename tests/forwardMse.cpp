@@ -155,15 +155,15 @@ TEST_CASE("forward trace policies select compile-time dimensions and default dia
         tracePolicy::cell::forwardAse,
         tracePolicy::boundary::surfaceReservoir,
         tracePolicy::position::centroid,
-        tracePolicy::diagnostics::cellRayVisits};
+        tracePolicy::diagnostics::enabled};
     using Policies = decltype(policies);
     static_assert(concepts::TracePolicyList<Policies>);
     static_assert(std::same_as<decltype(Policies::getSource()), tracePolicy::source::SurfaceReservoir>);
     static_assert(std::same_as<decltype(Policies::getCell()), tracePolicy::cell::ForwardAse>);
     static_assert(std::same_as<decltype(Policies::getBoundary()), tracePolicy::boundary::SurfaceReservoir>);
     static_assert(std::same_as<decltype(Policies::getPosition()), tracePolicy::position::Centroid>);
-    static_assert(std::same_as<decltype(Policies::getDiagnostics()), tracePolicy::diagnostics::CellRayVisits>);
-    STATIC_REQUIRE(policies.hasPolicy(tracePolicy::diagnostics::cellRayVisits));
+    static_assert(std::same_as<decltype(Policies::getDiagnostics()), tracePolicy::diagnostics::Enabled>);
+    STATIC_REQUIRE(policies.hasPolicy(tracePolicy::diagnostics::enabled));
 }
 
 TEST_CASE("forward ray-visit diagnostic dispatches distinct kernel variants", "[forward][policy][backend]")
@@ -194,8 +194,7 @@ TEST_CASE("forward ray-visit diagnostic dispatches distinct kernel variants", "[
                 frameSpec,
                 alpaka::KernelBundle{
                     RecordOneCellRayVisit{},
-                    hase::kernels::forward::TracePolicyList{
-                        hase::kernels::forward::tracePolicy::diagnostics::cellRayVisits},
+                    hase::kernels::forward::TracePolicyList{hase::kernels::forward::tracePolicy::diagnostics::enabled},
                     visits.toDeviceView()});
             visits.toHost(queue);
             CHECK(visits.getHostView()[0u] == 1u);

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import os
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
 from time import perf_counter
 
@@ -131,8 +131,10 @@ class PhiASE:
     """Explicit fixed forward-ray count; disables adaptive refinement when set."""
     relativeStandardErrorThreshold: float = 0.1
     """Target one-sigma relative sampling uncertainty for ASE flux estimates."""
-    trackRayVisits: bool = False
-    """Count per-cell ray visits in ``totalRays`` for diagnostics."""
+    enableDiagnostics: bool = False
+    """Collect forward-ray visit and failure diagnostics using the safe launch shape."""
+    trackRayVisits: InitVar[bool | None] = None
+    """Deprecated constructor alias for ``enableDiagnostics``."""
     repetitions: int = 4
     """Maximum repeated ASE estimates at a fixed ray count."""
     adaptiveSteps: int = 4
@@ -187,7 +189,7 @@ class PhiASE:
                 transportField("maxRays"),
                 transportField("forwardRayCount", optional=True),
                 transportField("relativeStandardErrorThreshold"),
-                transportField("trackRayVisits"),
+                transportField("enableDiagnostics"),
                 transportField("repetitions"),
                 transportField("adaptiveSteps"),
                 transportField("useReflections"),
@@ -217,7 +219,9 @@ class PhiASE:
             ),
         )
 
-    def __post_init__(self):
+    def __post_init__(self, trackRayVisits=None):
+        if trackRayVisits is not None:
+            self.enableDiagnostics = bool(trackRayVisits)
         if self.reflectionMode not in {"direct", "srm"}:
             raise ValueError("PhiASE.reflectionMode must be 'direct' or 'srm'")
         if isinstance(self.surfaceReservoirSize, bool) or not isinstance(
@@ -258,9 +262,20 @@ class PhiASE:
         parser.add_argument("--propagation-mode", choices=("forward",), default=None)
         parser.add_argument("--forward-ray-count", type=int, default=None)
         parser.add_argument("--relative-standard-error-threshold", type=float, default=None)
-        ray_visits = parser.add_mutually_exclusive_group()
-        ray_visits.add_argument("--track-ray-visits", dest="track_ray_visits", action="store_true", default=None)
-        ray_visits.add_argument("--no-track-ray-visits", dest="track_ray_visits", action="store_false")
+        diagnostics = parser.add_mutually_exclusive_group()
+        diagnostics.add_argument(
+            "--enable-diagnostics",
+            "--track-ray-visits",
+            dest="enable_diagnostics",
+            action="store_true",
+            default=None,
+        )
+        diagnostics.add_argument(
+            "--disable-diagnostics",
+            "--no-track-ray-visits",
+            dest="enable_diagnostics",
+            action="store_false",
+        )
         parser.add_argument("--reflection-max-iterations", type=int, default=None)
         parser.add_argument("--reflection-tolerance", type=float, default=None)
         reflections = parser.add_mutually_exclusive_group()
@@ -302,7 +317,8 @@ class PhiASE:
             "propagation_mode": "propagationMode",
             "forward_ray_count": "forwardRayCount",
             "relative_standard_error_threshold": "relativeStandardErrorThreshold",
-            "track_ray_visits": "trackRayVisits",
+            "enable_diagnostics": "enableDiagnostics",
+            "track_ray_visits": "enableDiagnostics",
             "reflection_max_iterations": "reflectionMaxIterations",
             "reflection_tolerance": "reflectionTolerance",
             "use_reflections": "useReflections",
@@ -356,7 +372,7 @@ class PhiASE:
             "propagationMode": self.propagationMode,
             "forwardRayCount": forward_ray_count,
             "relativeStandardErrorThreshold": self.relativeStandardErrorThreshold,
-            "trackRayVisits": self.trackRayVisits,
+            "enableDiagnostics": self.enableDiagnostics,
             "reflectionMaxIterations": self.reflectionMaxIterations,
             "reflectionTolerance": self.reflectionTolerance,
             "reflectionMode": self.reflectionMode,

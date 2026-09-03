@@ -113,6 +113,10 @@ namespace hase::kernels::forward::ray
         struct Boundary
         {
         };
+
+        struct Failure
+        {
+        };
     } // namespace behaviourDimension
 
     namespace trait
@@ -127,6 +131,11 @@ namespace hase::kernels::forward::ray
         {
         };
 
+        template<typename T>
+        struct IsFailureBehaviour : std::bool_constant<std::derived_from<T, behaviourDimension::Failure>>
+        {
+        };
+
     } // namespace trait
 
     template<typename T>
@@ -134,6 +143,9 @@ namespace hase::kernels::forward::ray
 
     template<typename T>
     inline constexpr bool isBoundaryBehaviour_v = trait::IsBoundaryBehaviour<std::remove_cvref_t<T>>::value;
+
+    template<typename T>
+    inline constexpr bool isFailureBehaviour_v = trait::IsFailureBehaviour<std::remove_cvref_t<T>>::value;
 
     namespace concepts
     {
@@ -144,7 +156,10 @@ namespace hase::kernels::forward::ray
         concept BoundaryBehaviour = isBoundaryBehaviour_v<T>;
 
         template<typename T>
-        concept BehaviourTerm = CellBehaviour<T> || BoundaryBehaviour<T>;
+        concept FailureBehaviour = isFailureBehaviour_v<T>;
+
+        template<typename T>
+        concept BehaviourTerm = CellBehaviour<T> || BoundaryBehaviour<T> || FailureBehaviour<T>;
 
     } // namespace concepts
 
@@ -199,6 +214,13 @@ namespace hase::kernels::forward::ray
               unsigned const cell,
               unsigned const localFace) {
                  { term(acc, mesh, rayState, cell, localFace) } -> std::same_as<BoundaryResult>;
+             };
+
+    template<typename T_Term, typename T_Acc, typename T_RayState>
+    concept HasOnFailure
+        = concepts::FailureBehaviour<T_Term> && alpaka::onAcc::concepts::Acc<T_Acc> && State<T_RayState>
+          && requires(T_Term& term, T_Acc const& acc, hase::data::TraceView const& mesh, T_RayState& rayState) {
+                 { term(acc, mesh, rayState) } -> std::same_as<void>;
              };
 
     inline constexpr BoundaryPolicySrm aseSrmPolicy{};
@@ -307,6 +329,9 @@ namespace hase::kernels::forward::ray
         static_assert(
             (std::size_t{0u} + ... + static_cast<std::size_t>(concepts::BoundaryBehaviour<T_Terms>)) == 1u,
             "ray walk requires exactly one boundary behaviour");
+        static_assert(
+            (std::size_t{0u} + ... + static_cast<std::size_t>(concepts::FailureBehaviour<T_Terms>)) <= 1u,
+            "ray walk accepts at most one failure behaviour");
 
         ALPAKA_FN_HOST_ACC constexpr RayWalkBehaviour(T_Terms... terms) : T_Terms{terms}...
         {
@@ -334,6 +359,14 @@ namespace hase::kernels::forward::ray
                     == BoundaryResult::continueTraversal)
                    && ...);
             return continueTraversal ? BoundaryResult::continueTraversal : BoundaryResult::stop;
+        }
+
+        ALPAKA_FN_ACC void onFailure(
+            alpaka::onAcc::concepts::Acc auto const& acc,
+            hase::data::TraceView const& mesh,
+            State auto& rayState)
+        {
+            (invokeFailure(static_cast<T_Terms&>(*this), acc, mesh, rayState), ...);
         }
 
     private:
@@ -388,6 +421,23 @@ namespace hase::kernels::forward::ray
         {
             return BoundaryResult::continueTraversal;
         }
+
+        template<concepts::FailureBehaviour T_Term, alpaka::onAcc::concepts::Acc T_Acc, State T_RayState>
+        requires HasOnFailure<T_Term, T_Acc, T_RayState>
+        ALPAKA_FN_ACC static void invokeFailure(
+            T_Term& term,
+            T_Acc const& acc,
+            hase::data::TraceView const& mesh,
+            T_RayState& rayState)
+        {
+            term(acc, mesh, rayState);
+        }
+
+        template<concepts::BehaviourTerm T_Term, alpaka::onAcc::concepts::Acc T_Acc, State T_RayState>
+        requires(!HasOnFailure<T_Term, T_Acc, T_RayState>)
+        ALPAKA_FN_ACC static void invokeFailure(T_Term&, T_Acc const&, hase::data::TraceView const&, T_RayState&)
+        {
+        }
     };
 
     template<typename... T_Terms>
@@ -403,25 +453,21 @@ namespace hase::kernels::forward::ray
      * @param acc Accelerator context supplied to behavior terms.
      * @param mesh Device-resident Tet4 trace.
      * @param rayState Mutable position, direction, cell, and entry-face state.
-     * @param behaviour Compile-time cell and boundary policy composition.
-     * @return Reason the walk ended or failed.
+     * @param behaviour Compile-time cell, boundary, and optional failure-policy composition.
+     *
+     * Traversal intentionally has no fixed step count: a valid physical path
+     * can cross arbitrarily many cells as the mesh is refined. Failure policies
+     * report geometric non-progress or invalid transitions without imposing a
+     * mesh-resolution-dependent termination condition.
      */
-    enum class WalkResult : std::uint8_t
-    {
-        reachedBoundary,
-        terminatedInCell,
-        failed
-    };
-
     template<State T_Ray, alpaka::concepts::SpecializationOf<RayWalkBehaviour> T_Behaviour>
-    [[nodiscard]] ALPAKA_FN_ACC WalkResult walk(
+    ALPAKA_FN_ACC void walk(
         alpaka::onAcc::concepts::Acc auto const& acc,
         hase::data::TraceView const& mesh,
         T_Ray& rayState,
         T_Behaviour behaviour)
     {
-        constexpr unsigned maxTraversalSteps = 10000u;
-        for(unsigned step = 0u; step < maxTraversalSteps; ++step)
+        while(true)
         {
             unsigned const currentCell = rayState.cell;
             assert(currentCell < mesh.numberOfCells);
@@ -443,14 +489,16 @@ namespace hase::kernels::forward::ray
                                              : -1;
                 if(recoveryFace < 0)
                 {
-                    return WalkResult::failed;
+                    behaviour.onFailure(acc, mesh, rayState);
+                    return;
                 }
                 auto const transition
                     = recoverFaceTransition(mesh, currentCell, recoveryFace, rayState.position, rayState.direction);
                 if(transition.status == Tet4TransitionStatus::failed)
                 {
                     rayState.cell = transition.cell;
-                    return WalkResult::failed;
+                    behaviour.onFailure(acc, mesh, rayState);
+                    return;
                 }
                 if(transition.status == Tet4TransitionStatus::reachedBoundary)
                 {
@@ -463,7 +511,7 @@ namespace hase::kernels::forward::ray
                         static_cast<unsigned>(transition.boundaryFace));
                     if(boundaryResult == BoundaryResult::continueTraversal)
                         continue;
-                    return WalkResult::reachedBoundary;
+                    return;
                 }
                 rayState.cell = transition.cell;
                 rayState.forbiddenFace = transition.forbiddenFace;
@@ -472,7 +520,7 @@ namespace hase::kernels::forward::ray
 
             if(!behaviour.onCell(acc, mesh, rayState, currentCell, intersection))
             {
-                return WalkResult::terminatedInCell;
+                return;
             }
             rayState.position = advance(rayState.position, rayState.direction, intersection.length);
             auto const transition
@@ -480,7 +528,8 @@ namespace hase::kernels::forward::ray
             if(transition.status == Tet4TransitionStatus::failed)
             {
                 rayState.cell = transition.cell;
-                return WalkResult::failed;
+                behaviour.onFailure(acc, mesh, rayState);
+                return;
             }
             if(transition.status == Tet4TransitionStatus::reachedBoundary)
             {
@@ -493,11 +542,10 @@ namespace hase::kernels::forward::ray
                     static_cast<unsigned>(transition.boundaryFace));
                 if(boundaryResult == BoundaryResult::continueTraversal)
                     continue;
-                return WalkResult::reachedBoundary;
+                return;
             }
             rayState.cell = transition.cell;
             rayState.forbiddenFace = transition.forbiddenFace;
         }
-        return WalkResult::failed;
     }
 } // namespace hase::kernels::forward::ray
