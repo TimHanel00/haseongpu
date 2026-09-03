@@ -239,6 +239,9 @@ def main() -> int:
         source_repository = github_repository_environment("HASE_SOURCE_REPOSITORY")
 
         variables = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.version",
+            "GIT_CONFIG_VALUE_0": "HTTP/1.1",
             "HASE_SOURCE_SHA": source_sha,
             "HASE_SOURCE_REPOSITORY": source_repository,
             "HASE_SOURCE_EVENT": os.environ.get("HASE_SOURCE_EVENT", "unknown"),

@@ -158,6 +158,9 @@ def test_success_updates_pending_status_and_pipeline_result(monkeypatch):
     assert triggered["pipeline_ref"] == "master"
     assert triggered["trigger_token"] == "trigger-token"
     assert triggered["variables"] == {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.version",
+        "GIT_CONFIG_VALUE_0": "HTTP/1.1",
         "HASE_SOURCE_SHA": SOURCE_SHA,
         "HASE_SOURCE_REPOSITORY": "contributor/haseongpu",
         "HASE_SOURCE_EVENT": "pull_request",
