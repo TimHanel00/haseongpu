@@ -467,6 +467,14 @@ namespace hase::kernels::forward::ray
         T_Ray& rayState,
         T_Behaviour behaviour)
     {
+        /* this while(true) is of course a bit optimistic - it means a ray terminates only when:
+            - the ray reaches a physical boundary,
+            - the cell policy terminates it
+            - an invalid geometric transition occurs.
+            @TODO determine whether there are other undetected cases that can cause a endless spinning loop -
+            !any hard limit would impose a restriction on the geometry in use or would require a cache state relaunch
+           behavior!
+         */
         while(true)
         {
             unsigned const currentCell = rayState.cell;
