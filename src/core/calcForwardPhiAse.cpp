@@ -33,7 +33,6 @@ namespace hase::core
             0.0,
             0u,
             0u,
-            data::BoundaryTailStatus::none,
             0.0,
             0.0,
             0.0,
@@ -61,9 +60,6 @@ namespace hase::core
             = std::max(target.boundaryRemainingFraction, source.boundaryRemainingFraction);
         target.boundaryMaxPasses = std::max(target.boundaryMaxPasses, source.boundaryMaxPasses);
         target.boundaryDivergenceStreak = std::max(target.boundaryDivergenceStreak, source.boundaryDivergenceStreak);
-        if(boundaryTailStatusPriority(source.boundaryTailStatus)
-           > boundaryTailStatusPriority(target.boundaryTailStatus))
-            target.boundaryTailStatus = source.boundaryTailStatus;
         target.boundaryGamma = std::max(target.boundaryGamma, source.boundaryGamma);
         target.boundaryGammaStandardError
             = std::max(target.boundaryGammaStandardError, source.boundaryGammaStandardError);
@@ -170,7 +166,6 @@ namespace hase::core
             rawResult.boundaryRemainingFraction,
             rawResult.boundaryMaxPasses,
             rawResult.boundaryDivergenceStreak,
-            rawResult.boundaryTailStatus,
             rawResult.boundaryGamma,
             rawResult.boundaryGammaStandardError,
             rawResult.boundaryTailFactor,

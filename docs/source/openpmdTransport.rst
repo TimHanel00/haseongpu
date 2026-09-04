@@ -204,7 +204,7 @@ cell-centered flux, standard error, relative standard error, total ray count,
 ASE depletion, and boundary-termination metadata. Boundary metadata uses the
 policy-neutral ``boundaryStatus``, ``boundaryPasses``,
 ``boundaryRemainingFraction``, ``boundaryMaxPasses``,
-``boundaryDivergenceStreak``, ``boundaryTailStatus``, ``boundaryGamma``,
+``boundaryDivergenceStreak``, ``boundaryGamma``,
 ``boundaryGammaStandardError``, ``boundaryTailFactor``, and
 ``boundaryTailClosure`` attributes.
 

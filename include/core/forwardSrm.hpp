@@ -40,7 +40,6 @@ namespace hase::core
         double boundaryRemainingFraction = 0.0;
         unsigned boundaryMaxPasses = 0u;
         unsigned boundaryDivergenceStreak = 0u;
-        data::BoundaryTailStatus boundaryTailStatus = data::BoundaryTailStatus::none;
         double boundaryGamma = 0.0;
         double boundaryGammaStandardError = 0.0;
         double boundaryTailFactor = 0.0;
@@ -390,7 +389,6 @@ namespace hase::core
         if(result.boundaryStatus == data::BoundaryStatus::diverged || tail.divergent)
         {
             result.boundaryStatus = data::BoundaryStatus::diverged;
-            result.boundaryTailStatus = data::BoundaryTailStatus::refused;
         }
         else if(
             result.boundaryStatus == data::BoundaryStatus::stable
@@ -404,11 +402,7 @@ namespace hase::core
                     vertexBatchScoreSum,
                     boundaryTailSnapshot,
                     tail.tailFactor);
-                result.boundaryTailStatus = data::BoundaryTailStatus::applied;
-            }
-            else
-            {
-                result.boundaryTailStatus = data::BoundaryTailStatus::refused;
+                result.boundaryStatus = data::BoundaryStatus::converged;
             }
         }
     }

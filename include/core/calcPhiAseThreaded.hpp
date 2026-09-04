@@ -304,7 +304,6 @@ namespace hase::core
             result.boundaryRemainingFraction = item.raw.boundaryRemainingFraction;
             result.boundaryMaxPasses = item.raw.boundaryMaxPasses;
             result.boundaryDivergenceStreak = item.raw.boundaryDivergenceStreak;
-            result.boundaryTailStatus = item.raw.boundaryTailStatus;
             result.boundaryGamma = item.raw.boundaryGamma;
             result.boundaryGammaStandardError = item.raw.boundaryGammaStandardError;
             result.boundaryTailFactor = item.raw.boundaryTailFactor;

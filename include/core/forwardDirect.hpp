@@ -351,7 +351,6 @@ namespace hase::core
         if(result.boundaryStatus == data::BoundaryStatus::diverged || tail.divergent)
         {
             result.boundaryStatus = data::BoundaryStatus::diverged;
-            result.boundaryTailStatus = data::BoundaryTailStatus::refused;
         }
         else if(
             result.boundaryStatus == data::BoundaryStatus::stable
@@ -365,11 +364,7 @@ namespace hase::core
                     vertexBatchScoreSum,
                     boundaryTailSnapshot,
                     tail.tailFactor);
-                result.boundaryTailStatus = data::BoundaryTailStatus::applied;
-            }
-            else
-            {
-                result.boundaryTailStatus = data::BoundaryTailStatus::refused;
+                result.boundaryStatus = data::BoundaryStatus::converged;
             }
         }
     }

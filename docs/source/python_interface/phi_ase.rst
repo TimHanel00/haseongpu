@@ -147,11 +147,10 @@ there is no configurable forward ray-length cutoff.
    falls below this fraction.
 
 The runtime reports ``boundaryStatus``, ``boundaryPasses``,
-``boundaryRemainingFraction``, ``boundaryMaxPasses``, and
-``boundaryDivergenceStreak``. It also reports ``boundaryTailStatus``,
-``boundaryGamma``, ``boundaryGammaStandardError``, ``boundaryTailFactor``, and
-``boundaryTailClosure`` for analytical completion of a truncated reflected
-series. Terminal status can be ``converged``, ``stable``,
+``boundaryRemainingFraction``, ``boundaryMaxPasses``,
+``boundaryDivergenceStreak``, ``boundaryGamma``,
+``boundaryGammaStandardError``, ``boundaryTailFactor``, and
+``boundaryTailClosure``. Terminal status can be ``converged``, ``stable``,
 ``diverged``, or ``maxPasses``; ``disabled`` means neither reflections nor
 inter-component routing required boundary passes.
 ``HASE_SRM_DIVERGENCE_STREAK`` controls how many consecutive growing SRM passes
@@ -161,9 +160,12 @@ For a truncated series, HASE fits the recent reflected population as
 :math:`W_p \simeq W_0\Gamma^p`. When the multiplier is confidently below one,
 stationary over a longer window, and consistent with the weight removed by the
 last pass, the remaining Neumann series is added as the final pass contribution
-times :math:`\Gamma/(1-\Gamma)`. ``boundaryTailStatus="applied"`` identifies
-that completion. ``"refused"`` means the frozen-inversion field has not
-established a finite stationary continuation; no analytical tail is added.
+times :math:`\Gamma/(1-\Gamma)` and ``boundaryStatus`` becomes ``converged``.
+Otherwise the original stopping status is retained and no analytical tail is
+added. ``Simulation`` stops before updating excitation when the status is
+``diverged`` or ``maxPasses``; standalone ``PhiASE.run`` returns those partial
+tallies and diagnostics for analysis. Increasing the pass limit can provide
+more evidence, but does not by itself establish a finite steady-state field.
 
 With ``useReflections`` enabled, each eligible interface hit creates both
 histories: the reflected child has weight ``R W`` and the transmitted child has
