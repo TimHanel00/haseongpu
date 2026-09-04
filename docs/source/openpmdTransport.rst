@@ -203,8 +203,10 @@ One-shot ASE output uses the ``phiAseResult`` namespace. It contains
 cell-centered flux, standard error, relative standard error, total ray count,
 ASE depletion, and boundary-termination metadata. Boundary metadata uses the
 policy-neutral ``boundaryStatus``, ``boundaryPasses``,
-``boundaryRemainingFraction``, ``boundaryMaxPasses``, and
-``boundaryDivergenceStreak`` attributes.
+``boundaryRemainingFraction``, ``boundaryMaxPasses``,
+``boundaryDivergenceStreak``, ``boundaryTailStatus``, ``boundaryGamma``,
+``boundaryGammaStandardError``, ``boundaryTailFactor``, and
+``boundaryTailClosure`` attributes.
 
 Compiled simulation output uses one ``simulationSnapshot`` iteration for each
 selected completed step. A snapshot contains only the evolving fields selected

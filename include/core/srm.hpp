@@ -45,4 +45,10 @@ namespace hase::core
     /** @return Boundary status represented by a merged ordering priority. */
     [[nodiscard]] data::BoundaryStatus boundaryStatusFromPriority(unsigned priority);
 
+    /** @return Ordering priority used to merge analytical tail states. */
+    [[nodiscard]] unsigned boundaryTailStatusPriority(data::BoundaryTailStatus status);
+
+    /** @return Analytical tail state represented by a merged ordering priority. */
+    [[nodiscard]] data::BoundaryTailStatus boundaryTailStatusFromPriority(unsigned priority);
+
 } // namespace hase::core

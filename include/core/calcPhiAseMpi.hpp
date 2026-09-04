@@ -228,8 +228,9 @@ namespace hase::core
                 boundaryStatusPriority(local.raw.boundaryStatus),
                 local.raw.boundaryPasses,
                 local.raw.boundaryMaxPasses,
-                local.raw.boundaryDivergenceStreak};
-            std::array<unsigned, 4u> globalStatus{};
+                local.raw.boundaryDivergenceStreak,
+                boundaryTailStatusPriority(local.raw.boundaryTailStatus)};
+            std::array<unsigned, 5u> globalStatus{};
             MPI_Allreduce(
                 localStatus.data(),
                 globalStatus.data(),
@@ -241,6 +242,7 @@ namespace hase::core
             global.raw.boundaryPasses = globalStatus[1u];
             global.raw.boundaryMaxPasses = globalStatus[2u];
             global.raw.boundaryDivergenceStreak = globalStatus[3u];
+            global.raw.boundaryTailStatus = boundaryTailStatusFromPriority(globalStatus[4u]);
             MPI_Allreduce(
                 &local.raw.boundaryRemainingFraction,
                 &global.raw.boundaryRemainingFraction,
@@ -248,6 +250,23 @@ namespace hase::core
                 MPI_DOUBLE,
                 MPI_MAX,
                 policy.m_communicator);
+            std::array localTail{
+                local.raw.boundaryGamma,
+                local.raw.boundaryGammaStandardError,
+                local.raw.boundaryTailFactor,
+                local.raw.boundaryTailClosure};
+            std::array<double, 4u> globalTail{};
+            MPI_Allreduce(
+                localTail.data(),
+                globalTail.data(),
+                static_cast<int>(globalTail.size()),
+                MPI_DOUBLE,
+                MPI_MAX,
+                policy.m_communicator);
+            global.raw.boundaryGamma = globalTail[0u];
+            global.raw.boundaryGammaStandardError = globalTail[1u];
+            global.raw.boundaryTailFactor = globalTail[2u];
+            global.raw.boundaryTailClosure = globalTail[3u];
             return gathered;
         }
 
@@ -354,6 +373,11 @@ namespace hase::core
             result.boundaryRemainingFraction = item.raw.boundaryRemainingFraction;
             result.boundaryMaxPasses = item.raw.boundaryMaxPasses;
             result.boundaryDivergenceStreak = item.raw.boundaryDivergenceStreak;
+            result.boundaryTailStatus = item.raw.boundaryTailStatus;
+            result.boundaryGamma = item.raw.boundaryGamma;
+            result.boundaryGammaStandardError = item.raw.boundaryGammaStandardError;
+            result.boundaryTailFactor = item.raw.boundaryTailFactor;
+            result.boundaryTailClosure = item.raw.boundaryTailClosure;
             return result;
         }
     };

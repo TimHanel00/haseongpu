@@ -1505,6 +1505,11 @@ def test_read_simulation_output_uses_cell_layout(tmp_path):
     iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryRemainingFraction"), 0.25)
     iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryMaxPasses"), 8)
     iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryDivergenceStreak"), 3)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryTailStatus"), "applied")
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryGamma"), 0.9)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryGammaStandardError"), 0.01)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryTailFactor"), 9.0)
+    iteration.set_attribute(transport.attributeName("simulationSnapshot/boundaryTailClosure"), 1.0)
     iteration.time = 0.25
 
     root = "simulationSnapshot"
@@ -1532,6 +1537,11 @@ def test_read_simulation_output_uses_cell_layout(tmp_path):
     assert state.aseResult.boundaryRemainingFraction == pytest.approx(0.25)
     assert state.aseResult.boundaryMaxPasses == 8
     assert state.aseResult.boundaryDivergenceStreak == 3
+    assert state.aseResult.boundaryTailStatus == "applied"
+    assert state.aseResult.boundaryGamma == pytest.approx(0.9)
+    assert state.aseResult.boundaryGammaStandardError == pytest.approx(0.01)
+    assert state.aseResult.boundaryTailFactor == pytest.approx(9.0)
+    assert state.aseResult.boundaryTailClosure == pytest.approx(1.0)
 
 
 def test_streaming_simulation_uses_receiver_thread_before_input_writer(monkeypatch, tmp_path):

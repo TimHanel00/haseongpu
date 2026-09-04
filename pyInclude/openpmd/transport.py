@@ -740,6 +740,11 @@ def _result_status_values(iteration, root="phiAseResult"):
         "boundaryRemainingFraction": (0.0, float),
         "boundaryMaxPasses": (0, int),
         "boundaryDivergenceStreak": (0, int),
+        "boundaryTailStatus": ("none", str),
+        "boundaryGamma": (0.0, float),
+        "boundaryGammaStandardError": (0.0, float),
+        "boundaryTailFactor": (0.0, float),
+        "boundaryTailClosure": (0.0, float),
     }
     result = {}
     for field_name, (default, cast) in fields.items():

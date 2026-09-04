@@ -491,6 +491,11 @@ namespace hase::core
             target.boundaryRemainingFraction = source.boundaryRemainingFraction;
             target.boundaryMaxPasses = source.boundaryMaxPasses;
             target.boundaryDivergenceStreak = source.boundaryDivergenceStreak;
+            target.boundaryTailStatus = source.boundaryTailStatus;
+            target.boundaryGamma = source.boundaryGamma;
+            target.boundaryGammaStandardError = source.boundaryGammaStandardError;
+            target.boundaryTailFactor = source.boundaryTailFactor;
+            target.boundaryTailClosure = source.boundaryTailClosure;
         }
 
         data::SimulationSnapshot makeSnapshot(unsigned step)

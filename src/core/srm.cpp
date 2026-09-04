@@ -88,4 +88,31 @@ namespace hase::core
         }
     }
 
+    unsigned boundaryTailStatusPriority(data::BoundaryTailStatus const status)
+    {
+        switch(status)
+        {
+        case data::BoundaryTailStatus::none:
+            return 0u;
+        case data::BoundaryTailStatus::applied:
+            return 1u;
+        case data::BoundaryTailStatus::refused:
+            return 2u;
+        }
+        return 2u;
+    }
+
+    data::BoundaryTailStatus boundaryTailStatusFromPriority(unsigned const priority)
+    {
+        switch(priority)
+        {
+        case 0u:
+            return data::BoundaryTailStatus::none;
+        case 1u:
+            return data::BoundaryTailStatus::applied;
+        default:
+            return data::BoundaryTailStatus::refused;
+        }
+    }
+
 } // namespace hase::core

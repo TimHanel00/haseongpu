@@ -32,7 +32,12 @@ namespace hase::core
             0u,
             0.0,
             0u,
-            0u};
+            0u,
+            data::BoundaryTailStatus::none,
+            0.0,
+            0.0,
+            0.0,
+            0.0};
     }
 
     double calcForwardSourceStrengthTotal(hase::data::TraceData const& trace)
@@ -56,6 +61,14 @@ namespace hase::core
             = std::max(target.boundaryRemainingFraction, source.boundaryRemainingFraction);
         target.boundaryMaxPasses = std::max(target.boundaryMaxPasses, source.boundaryMaxPasses);
         target.boundaryDivergenceStreak = std::max(target.boundaryDivergenceStreak, source.boundaryDivergenceStreak);
+        if(boundaryTailStatusPriority(source.boundaryTailStatus)
+           > boundaryTailStatusPriority(target.boundaryTailStatus))
+            target.boundaryTailStatus = source.boundaryTailStatus;
+        target.boundaryGamma = std::max(target.boundaryGamma, source.boundaryGamma);
+        target.boundaryGammaStandardError
+            = std::max(target.boundaryGammaStandardError, source.boundaryGammaStandardError);
+        target.boundaryTailFactor = std::max(target.boundaryTailFactor, source.boundaryTailFactor);
+        target.boundaryTailClosure = std::max(target.boundaryTailClosure, source.boundaryTailClosure);
         if(target.vertexBatchScoreSum.size() != source.vertexBatchScoreSum.size())
             throw std::runtime_error("cannot merge forward ASE results with different vertex counts");
         for(unsigned vertex = 0u; vertex < target.vertexBatchScoreSum.size(); ++vertex)
@@ -156,7 +169,12 @@ namespace hase::core
             rawResult.boundaryPasses,
             rawResult.boundaryRemainingFraction,
             rawResult.boundaryMaxPasses,
-            rawResult.boundaryDivergenceStreak);
+            rawResult.boundaryDivergenceStreak,
+            rawResult.boundaryTailStatus,
+            rawResult.boundaryGamma,
+            rawResult.boundaryGammaStandardError,
+            rawResult.boundaryTailFactor,
+            rawResult.boundaryTailClosure);
         for(unsigned volume = 0u; volume < volumeCount; ++volume)
         {
             double const volumeSize = hostMesh.cellVolumes.at(volume);

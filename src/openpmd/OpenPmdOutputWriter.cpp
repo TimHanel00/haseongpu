@@ -80,6 +80,19 @@ namespace hase::internal::openpmd::output
         iteration.setAttribute(
             "hase__attribute__" + encodePath(root + "/boundaryDivergenceStreak"),
             result.boundaryDivergenceStreak);
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/boundaryTailStatus"),
+            std::string{data::toString(result.boundaryTailStatus)});
+        iteration.setAttribute("hase__attribute__" + encodePath(root + "/boundaryGamma"), result.boundaryGamma);
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/boundaryGammaStandardError"),
+            result.boundaryGammaStandardError);
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/boundaryTailFactor"),
+            result.boundaryTailFactor);
+        iteration.setAttribute(
+            "hase__attribute__" + encodePath(root + "/boundaryTailClosure"),
+            result.boundaryTailClosure);
     }
 
     void setRoot(io::Iteration& iteration, std::string const& root)

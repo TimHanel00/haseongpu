@@ -84,6 +84,7 @@ namespace hase::core
         unsigned const rseBatch,
         double const sourceStrengthTotal,
         alpaka::concepts::IBuffer<double> auto& vertexBatchScoreSum,
+        alpaka::concepts::IBuffer<double> auto& boundaryTailSnapshot,
         alpaka::concepts::IBuffer<std::uint32_t> auto& volumeRayVisits,
         alpaka::concepts::IBuffer<std::uint32_t> auto& droppedRays,
         unsigned const rngSeed,
@@ -258,6 +259,7 @@ namespace hase::core
 
         bool inputFirst = true;
         double previousWeight = initialWeight;
+        std::vector<double> residualWeightFractions{1.0};
         unsigned growCount = 0u;
         constexpr unsigned divergenceStreak = 3u;
         result.boundaryDivergenceStreak = divergenceStreak;
@@ -274,6 +276,7 @@ namespace hase::core
             auto const relaunchCandidateCount = boundaryCandidateCount(populationRayCount);
             auto& output = inputFirst ? scratch.second : scratch.first;
             auto& input = inputFirst ? scratch.first : scratch.second;
+            alpaka::onHost::memcpy(queue, boundaryTailSnapshot, vertexBatchScoreSum);
             alpaka::onHost::fill(
                 queue,
                 output.weights,
@@ -306,6 +309,7 @@ namespace hase::core
             double const currentWeight = readTotalWeight();
             result.boundaryPasses = pass;
             result.boundaryRemainingFraction = currentWeight / initialWeight;
+            residualWeightFractions.push_back(result.boundaryRemainingFraction);
             if(currentWeight <= 0.0 || result.boundaryRemainingFraction < experiment.reflectionTolerance)
             {
                 result.boundaryStatus = data::BoundaryStatus::converged;
@@ -316,8 +320,12 @@ namespace hase::core
                 ++growCount;
                 if(growCount >= divergenceStreak)
                 {
-                    result.boundaryStatus = data::BoundaryStatus::diverged;
-                    break;
+                    auto const tail = estimateBoundaryTail(residualWeightFractions);
+                    if(tail.divergent)
+                    {
+                        result.boundaryStatus = data::BoundaryStatus::diverged;
+                        break;
+                    }
                 }
             }
             else
@@ -333,6 +341,36 @@ namespace hase::core
             previousWeight = currentWeight;
             populationRayCount = nextPopulationRayCount;
             inputFirst = !inputFirst;
+        }
+
+        auto const tail = estimateBoundaryTail(residualWeightFractions);
+        result.boundaryGamma = tail.gamma;
+        result.boundaryGammaStandardError = tail.gammaStandardError;
+        result.boundaryTailFactor = tail.tailFactor;
+        result.boundaryTailClosure = tail.tailClosure;
+        if(result.boundaryStatus == data::BoundaryStatus::diverged || tail.divergent)
+        {
+            result.boundaryStatus = data::BoundaryStatus::diverged;
+            result.boundaryTailStatus = data::BoundaryTailStatus::refused;
+        }
+        else if(
+            result.boundaryStatus == data::BoundaryStatus::stable
+            || result.boundaryStatus == data::BoundaryStatus::maxPasses)
+        {
+            if(tail.applicable)
+            {
+                applyBoundaryTail(
+                    queue,
+                    devBundle.executor,
+                    vertexBatchScoreSum,
+                    boundaryTailSnapshot,
+                    tail.tailFactor);
+                result.boundaryTailStatus = data::BoundaryTailStatus::applied;
+            }
+            else
+            {
+                result.boundaryTailStatus = data::BoundaryTailStatus::refused;
+            }
         }
     }
 } // namespace hase::core

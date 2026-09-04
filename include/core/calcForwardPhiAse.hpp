@@ -149,6 +149,11 @@ namespace hase::core
                       m_devBundle.device,
                       hase::kernels::forward::defaultForwardRseBatchCount * hostMesh.numberOfMaterials
                           * static_cast<std::size_t>(hostMesh.numberOfMeshPoints)))
+            , m_boundaryTailSnapshot(
+                  alpaka::onHost::alloc<double>(
+                      m_devBundle.device,
+                      hase::kernels::forward::defaultForwardRseBatchCount * hostMesh.numberOfMaterials
+                          * static_cast<std::size_t>(hostMesh.numberOfMeshPoints)))
             , m_volumeRayVisits(
                   alpaka::onHost::alloc<std::uint32_t>(
                       m_devBundle.device,
@@ -220,6 +225,9 @@ namespace hase::core
                 return;
             alpaka::onHost::wait(m_queue);
             m_vertexBatchScoreSum = alpaka::onHost::alloc<double>(
+                m_devBundle.device,
+                batchCount * static_cast<std::size_t>(m_materialVertexCount));
+            m_boundaryTailSnapshot = alpaka::onHost::alloc<double>(
                 m_devBundle.device,
                 batchCount * static_cast<std::size_t>(m_materialVertexCount));
             m_batchCount = batchCount;
@@ -315,6 +323,7 @@ namespace hase::core
                                     rseBatch,
                                     betaVolumeTotal,
                                     m_vertexBatchScoreSum,
+                                    m_boundaryTailSnapshot,
                                     m_volumeRayVisits,
                                     m_droppedRays,
                                     rngSeed,
@@ -343,6 +352,7 @@ namespace hase::core
                                         rseBatch,
                                         betaVolumeTotal,
                                         m_vertexBatchScoreSum,
+                                        m_boundaryTailSnapshot,
                                         m_volumeRayVisits,
                                         m_droppedRays,
                                         rngSeed,
@@ -408,6 +418,18 @@ namespace hase::core
                 = std::max(m_boundaryAggregate.boundaryMaxPasses, m_boundaryResult.boundaryMaxPasses);
             m_boundaryAggregate.boundaryDivergenceStreak
                 = std::max(m_boundaryAggregate.boundaryDivergenceStreak, m_boundaryResult.boundaryDivergenceStreak);
+            if(boundaryTailStatusPriority(m_boundaryResult.boundaryTailStatus)
+               > boundaryTailStatusPriority(m_boundaryAggregate.boundaryTailStatus))
+                m_boundaryAggregate.boundaryTailStatus = m_boundaryResult.boundaryTailStatus;
+            m_boundaryAggregate.boundaryGamma
+                = std::max(m_boundaryAggregate.boundaryGamma, m_boundaryResult.boundaryGamma);
+            m_boundaryAggregate.boundaryGammaStandardError = std::max(
+                m_boundaryAggregate.boundaryGammaStandardError,
+                m_boundaryResult.boundaryGammaStandardError);
+            m_boundaryAggregate.boundaryTailFactor
+                = std::max(m_boundaryAggregate.boundaryTailFactor, m_boundaryResult.boundaryTailFactor);
+            m_boundaryAggregate.boundaryTailClosure
+                = std::max(m_boundaryAggregate.boundaryTailClosure, m_boundaryResult.boundaryTailClosure);
         }
 
         /**
@@ -426,6 +448,11 @@ namespace hase::core
             result.boundaryRemainingFraction = m_boundaryAggregate.boundaryRemainingFraction;
             result.boundaryMaxPasses = m_boundaryAggregate.boundaryMaxPasses;
             result.boundaryDivergenceStreak = m_boundaryAggregate.boundaryDivergenceStreak;
+            result.boundaryTailStatus = m_boundaryAggregate.boundaryTailStatus;
+            result.boundaryGamma = m_boundaryAggregate.boundaryGamma;
+            result.boundaryGammaStandardError = m_boundaryAggregate.boundaryGammaStandardError;
+            result.boundaryTailFactor = m_boundaryAggregate.boundaryTailFactor;
+            result.boundaryTailClosure = m_boundaryAggregate.boundaryTailClosure;
             if(m_accumulatedRayCount == 0u)
             {
                 runtime = 0.0f;
@@ -655,6 +682,7 @@ namespace hase::core
         std::array<double, 1u> m_sourceStrengthTotalHost;
         T_BetaVolumeTotalBuffer m_sourceStrengthTotal;
         T_DoubleBuffer m_vertexBatchScoreSum;
+        T_DoubleBuffer m_boundaryTailSnapshot;
         T_UnsignedBuffer m_volumeRayVisits;
         T_UnsignedBuffer m_droppedRays;
         T_FloatBuffer m_volumePhiAse;

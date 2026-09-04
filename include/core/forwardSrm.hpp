@@ -10,10 +10,12 @@
 #include <alpakaUtils/DevBundle.hpp>
 #include <concepts/concepts.hpp>
 #include <core/Runtime.hpp>
+#include <core/reflectionTail.hpp>
 #include <core/srm.hpp>
 #include <core/surfaceReservoir.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
+#include <kernels/reflectionTail.hpp>
 
 #include <algorithm>
 #include <concepts>
@@ -38,6 +40,11 @@ namespace hase::core
         double boundaryRemainingFraction = 0.0;
         unsigned boundaryMaxPasses = 0u;
         unsigned boundaryDivergenceStreak = 0u;
+        data::BoundaryTailStatus boundaryTailStatus = data::BoundaryTailStatus::none;
+        double boundaryGamma = 0.0;
+        double boundaryGammaStandardError = 0.0;
+        double boundaryTailFactor = 0.0;
+        double boundaryTailClosure = 0.0;
     };
 
     /** @brief Customization point for distributing a scalar frame limit over a fixed dimensionality. */
@@ -159,6 +166,7 @@ namespace hase::core
         std::uint32_t const rseBatch,
         double const sourceStrengthTotal,
         alpaka::concepts::IBuffer<double> auto& vertexBatchScoreSum,
+        alpaka::concepts::IBuffer<double> auto& boundaryTailSnapshot,
         alpaka::concepts::IBuffer<std::uint32_t> auto& volumeRayVisits,
         alpaka::concepts::IBuffer<std::uint32_t> auto& droppedRays,
         std::uint32_t const rngSeed,
@@ -279,6 +287,7 @@ namespace hase::core
         }
 
         double previousWeight = initialWeight;
+        std::vector<double> residualWeightFractions{1.0};
         std::uint32_t growCount = 0u;
         result.boundaryStatus = data::BoundaryStatus::maxPasses;
         result.boundaryRemainingFraction = 1.0;
@@ -288,6 +297,7 @@ namespace hase::core
             auto const relaunchFrameSpec = getRayFrameSpec(populationRayCount, queue);
             auto& input = inputFirst ? scratch.reservoir.first : scratch.reservoir.second;
             auto& output = inputFirst ? scratch.reservoir.second : scratch.reservoir.first;
+            alpaka::onHost::memcpy(queue, boundaryTailSnapshot, vertexBatchScoreSum);
             scratch.clear(queue, output);
             if(domainPopulationCounts.empty())
                 queue.enqueue(
@@ -340,13 +350,18 @@ namespace hase::core
             double const currentWeight = updateSampling(output, pass);
             result.boundaryPasses = pass;
             result.boundaryRemainingFraction = currentWeight / initialWeight;
+            residualWeightFractions.push_back(result.boundaryRemainingFraction);
             if(currentWeight > previousWeight)
             {
                 ++growCount;
                 if(growCount >= srmControls.divergenceStreak)
                 {
-                    result.boundaryStatus = data::BoundaryStatus::diverged;
-                    break;
+                    auto const tail = estimateBoundaryTail(residualWeightFractions);
+                    if(tail.divergent)
+                    {
+                        result.boundaryStatus = data::BoundaryStatus::diverged;
+                        break;
+                    }
                 }
             }
             else
@@ -365,6 +380,36 @@ namespace hase::core
                 break;
             }
             previousWeight = currentWeight;
+        }
+
+        auto const tail = estimateBoundaryTail(residualWeightFractions);
+        result.boundaryGamma = tail.gamma;
+        result.boundaryGammaStandardError = tail.gammaStandardError;
+        result.boundaryTailFactor = tail.tailFactor;
+        result.boundaryTailClosure = tail.tailClosure;
+        if(result.boundaryStatus == data::BoundaryStatus::diverged || tail.divergent)
+        {
+            result.boundaryStatus = data::BoundaryStatus::diverged;
+            result.boundaryTailStatus = data::BoundaryTailStatus::refused;
+        }
+        else if(
+            result.boundaryStatus == data::BoundaryStatus::stable
+            || result.boundaryStatus == data::BoundaryStatus::maxPasses)
+        {
+            if(tail.applicable)
+            {
+                applyBoundaryTail(
+                    queue,
+                    devBundle.executor,
+                    vertexBatchScoreSum,
+                    boundaryTailSnapshot,
+                    tail.tailFactor);
+                result.boundaryTailStatus = data::BoundaryTailStatus::applied;
+            }
+            else
+            {
+                result.boundaryTailStatus = data::BoundaryTailStatus::refused;
+            }
         }
     }
 } // namespace hase::core
