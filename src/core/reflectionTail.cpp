@@ -104,9 +104,15 @@ namespace hase::core
 
     void requireUsableBoundaryAseForIntegration(data::PhiAseResult const& result, unsigned const simulationStep)
     {
+        for(std::size_t cell = 0u; cell < result.phiAse.size(); ++cell)
+            if(!std::isfinite(result.phiAse[cell]) || !std::isfinite(result.dndtAse.at(cell))
+               || result.droppedRays.at(cell) != 0u)
+                throw std::runtime_error(
+                    "Invalid ASE tally in cell " + std::to_string(cell) + " before material step "
+                    + std::to_string(simulationStep + 1u)
+                    + ": non-finite output or dropped histories; the partial PhiASE tally was not integrated.");
         bool const finite = result.boundaryStatus == data::BoundaryStatus::disabled
-                            || result.boundaryStatus == data::BoundaryStatus::converged
-                            || result.boundaryStatus == data::BoundaryStatus::stable;
+                            || result.boundaryStatus == data::BoundaryStatus::converged;
         if(finite)
             return;
 

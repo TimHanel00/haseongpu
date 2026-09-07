@@ -84,7 +84,6 @@ namespace hase::core
         unsigned const rseBatch,
         double const sourceStrengthTotal,
         alpaka::concepts::IBuffer<double> auto& vertexBatchScoreSum,
-        alpaka::concepts::IBuffer<double> auto& boundaryTailSnapshot,
         alpaka::concepts::IBuffer<std::uint32_t> auto& volumeRayVisits,
         alpaka::concepts::IBuffer<std::uint32_t> auto& droppedRays,
         unsigned const rngSeed,
@@ -282,7 +281,6 @@ namespace hase::core
             auto const relaunchCandidateCount = boundaryCandidateCount(populationRayCount);
             auto& output = inputFirst ? scratch.second : scratch.first;
             auto& input = inputFirst ? scratch.first : scratch.second;
-            alpaka::onHost::memcpy(queue, boundaryTailSnapshot, vertexBatchScoreSum);
             alpaka::onHost::fill(
                 queue,
                 output.weights,
@@ -358,20 +356,6 @@ namespace hase::core
         {
             result.boundaryStatus = data::BoundaryStatus::diverged;
         }
-        else if(
-            result.boundaryStatus == data::BoundaryStatus::stable
-            || result.boundaryStatus == data::BoundaryStatus::maxPasses)
-        {
-            if(tail.applicable)
-            {
-                applyBoundaryTail(
-                    queue,
-                    devBundle.executor,
-                    vertexBatchScoreSum,
-                    boundaryTailSnapshot,
-                    tail.tailFactor);
-                result.boundaryStatus = data::BoundaryStatus::converged;
-            }
-        }
+        // A scalar residual fit is diagnostic only: it cannot establish a spatial field tail.
     }
 } // namespace hase::core

@@ -179,15 +179,19 @@ namespace hase::kernels::forward
         }
     };
 
-    /** @brief Empty per-cell diagnostic state for the performance specialization. */
-    struct IgnoreForwardCellDiagnostics
+    /** @brief Essential failure accounting; optional visit diagnostics remain disabled. */
+    template<alpaka::concepts::IMdSpan<std::uint32_t> T_CellDroppedRays>
+    struct RecordForwardCellFailures
     {
+        T_CellDroppedRays cellDroppedRays;
+
         ALPAKA_FN_ACC void recordVisit(alpaka::onAcc::concepts::Acc auto const&, unsigned)
         {
         }
 
-        ALPAKA_FN_ACC void recordDropped(alpaka::onAcc::concepts::Acc auto const&, unsigned)
+        ALPAKA_FN_ACC void recordDropped(alpaka::onAcc::concepts::Acc auto const& acc, unsigned const cell)
         {
+            alpaka::onAcc::atomicAdd(acc, &cellDroppedRays[cell], 1u);
         }
     };
 
@@ -265,14 +269,16 @@ namespace hase::kernels::forward
         }
     };
 
-    /** @brief Build a cell policy whose performance form contains no diagnostic spans. */
+    /** @brief Retain failure accounting in both forms and visit accounting only when requested. */
     struct MakeForwardAseCellPolicy
     {
         ALPAKA_FN_HOST_ACC constexpr auto operator()(
             tracePolicy::diagnostics::None,
             alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation) const
         {
-            return ForwardAseCellPolicy{accumulation.vertexBatchScoreSum, IgnoreForwardCellDiagnostics{}};
+            return ForwardAseCellPolicy{
+                accumulation.vertexBatchScoreSum,
+                RecordForwardCellFailures{accumulation.cellDroppedRays}};
         }
 
         ALPAKA_FN_HOST_ACC constexpr auto operator()(
@@ -282,17 +288,6 @@ namespace hase::kernels::forward
             return ForwardAseCellPolicy{
                 accumulation.vertexBatchScoreSum,
                 RecordForwardCellDiagnostics{accumulation.cellRayVisits, accumulation.cellDroppedRays}};
-        }
-    };
-
-    /** @brief Compile-time no-op used when forward diagnostics are disabled. */
-    struct IgnoreForwardRayFailure : ray::behaviourDimension::Failure
-    {
-        ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const&,
-            hase::data::TraceView const&,
-            ray::State auto&) const
-        {
         }
     };
 
@@ -315,14 +310,14 @@ namespace hase::kernels::forward
         }
     };
 
-    /** @brief Select a failure behavior without retaining diagnostic state in performance kernels. */
+    /** @brief Failure accounting is mandatory independently of optional diagnostics. */
     struct MakeForwardRayFailureBehaviour
     {
         ALPAKA_FN_HOST_ACC constexpr auto operator()(
             tracePolicy::diagnostics::None,
-            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto) const
+            alpaka::concepts::SpecializationOf<ForwardAccumulationSpans> auto accumulation) const
         {
-            return IgnoreForwardRayFailure{};
+            return RecordDroppedForwardRay{accumulation.cellDroppedRays};
         }
 
         ALPAKA_FN_HOST_ACC constexpr auto operator()(

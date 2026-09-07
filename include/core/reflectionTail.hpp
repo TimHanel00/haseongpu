@@ -27,14 +27,14 @@ namespace hase::core
         bool valid = false;
     };
 
-    /** @brief Decision and diagnostics for completing a truncated reflected-pass series. */
+    /** @brief Scalar residual-fit diagnostics, not evidence of a converged spatial field. */
     struct BoundaryTailEstimate
     {
         double gamma = 0.0;
         double gammaStandardError = 0.0;
         double tailFactor = 0.0;
         double tailClosure = 0.0;
-        bool applicable = false;
+        bool applicable = false; //!< Scalar fit passes its checks; does not authorize field extrapolation.
         bool divergent = false;
     };
 
@@ -50,9 +50,11 @@ namespace hase::core
     /**
      * @brief Assess whether a truncated reflected-pass series has a stationary finite tail.
      *
-     * A Neumann completion is accepted only when the recent multiplier is confidently
+     * The scalar fit is accepted only when the recent multiplier is confidently
      * below one, agrees with a longer-window fit, and the final pass closes the parked
-     * reflected weight. A multiplier confidently above one reports divergence.
+     * reflected weight. This does not establish stationarity of the spatial or spectral
+     * distribution and must not be used alone to complete a field. A multiplier
+     * confidently above one reports divergence.
      *
      * @param residualFractions Reflected weight divided by initial reflected weight.
      * @return Tail factor and classification derived from the pass history.
@@ -63,12 +65,12 @@ namespace hase::core
      * @brief Reject failed reflected-ASE fields before coupling them to material evolution.
      *
      * Direct one-state PhiASE calculations may inspect unresolved partial tallies. A time
-     * integrator must not consume one: only residual convergence or an accepted analytical
-     * tail establishes a finite frozen-inversion field.
+     * integrator must not consume one: the current solver requires residual convergence,
+     * finite representable output, and no dropped histories.
      *
      * @param result Reflected-ASE termination diagnostics.
      * @param simulationStep Zero-based material step at which the field was evaluated.
-     * @throws std::runtime_error If the reflected field diverged or exhausted its pass limit.
+     * @throws std::runtime_error If the tally is invalid or boundary propagation is unresolved.
      */
     void requireUsableBoundaryAseForIntegration(data::PhiAseResult const& result, unsigned simulationStep);
 

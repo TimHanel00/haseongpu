@@ -149,11 +149,6 @@ namespace hase::core
                       m_devBundle.device,
                       hase::kernels::forward::defaultForwardRseBatchCount * hostMesh.numberOfMaterials
                           * static_cast<std::size_t>(hostMesh.numberOfMeshPoints)))
-            , m_boundaryTailSnapshot(
-                  alpaka::onHost::alloc<double>(
-                      m_devBundle.device,
-                      hase::kernels::forward::defaultForwardRseBatchCount * hostMesh.numberOfMaterials
-                          * static_cast<std::size_t>(hostMesh.numberOfMeshPoints)))
             , m_volumeRayVisits(
                   alpaka::onHost::alloc<std::uint32_t>(
                       m_devBundle.device,
@@ -225,9 +220,6 @@ namespace hase::core
                 return;
             alpaka::onHost::wait(m_queue);
             m_vertexBatchScoreSum = alpaka::onHost::alloc<double>(
-                m_devBundle.device,
-                batchCount * static_cast<std::size_t>(m_materialVertexCount));
-            m_boundaryTailSnapshot = alpaka::onHost::alloc<double>(
                 m_devBundle.device,
                 batchCount * static_cast<std::size_t>(m_materialVertexCount));
             m_batchCount = batchCount;
@@ -323,7 +315,6 @@ namespace hase::core
                                     rseBatch,
                                     betaVolumeTotal,
                                     m_vertexBatchScoreSum,
-                                    m_boundaryTailSnapshot,
                                     m_volumeRayVisits,
                                     m_droppedRays,
                                     rngSeed,
@@ -352,7 +343,6 @@ namespace hase::core
                                         rseBatch,
                                         betaVolumeTotal,
                                         m_vertexBatchScoreSum,
-                                        m_boundaryTailSnapshot,
                                         m_volumeRayVisits,
                                         m_droppedRays,
                                         rngSeed,
@@ -678,7 +668,6 @@ namespace hase::core
         std::array<double, 1u> m_sourceStrengthTotalHost;
         T_BetaVolumeTotalBuffer m_sourceStrengthTotal;
         T_DoubleBuffer m_vertexBatchScoreSum;
-        T_DoubleBuffer m_boundaryTailSnapshot;
         T_UnsignedBuffer m_volumeRayVisits;
         T_UnsignedBuffer m_droppedRays;
         T_FloatBuffer m_volumePhiAse;

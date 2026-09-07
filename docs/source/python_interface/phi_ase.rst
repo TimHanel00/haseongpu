@@ -72,14 +72,12 @@ Sampling controls
    error.
 
 ``enableDiagnostics``
-   Enable per-cell ray visits in ``totalRays`` and failed-ray counts used to
-   validate the trace. Use diagnostics for a first run on a new or refined
-   mesh, then disable them for performance after confirming that no rays are
-   dropped. Diagnostics use 128 threads per block and retain the counters and
-   atomics needed to report failures. The performance specialization uses 512
-   threads per block and compiles those diagnostics out; ``totalRays`` and the
-   dropped-ray array then retain their normal cell-shaped layouts but contain
-   zeros. ``trackRayVisits`` remains accepted as a deprecated constructor and
+   Enable optional per-cell ray visits in ``totalRays``. Diagnostics use 128
+   threads per block; the performance specialization uses 512 and omits visit
+   counters. Essential failed-ray accounting remains enabled in both modes.
+   With diagnostics disabled, ``totalRays`` retains its cell-shaped layout but
+   contains zeros; dropped-ray counts still report failures.
+   ``trackRayVisits`` remains accepted as a deprecated constructor and
    transport input alias, but new output contains only ``enableDiagnostics``.
 
 ``rngSeed``
@@ -108,8 +106,9 @@ One active batch cannot estimate RSE and reports the maximum error sentinel. See
 Forward traversal has no fixed cell-crossing limit. A valid ray continues until
 it reaches a physical boundary or a cell policy terminates it, so increasing
 mesh resolution cannot make a ray fail merely because it requires more
-crossings. With diagnostics enabled, invalid geometric transitions and
-non-finite contributions are counted as dropped rays.
+crossings. Invalid geometric transitions and non-finite contributions are
+always counted as dropped rays. ``Simulation`` rejects dropped histories and
+non-finite or unrepresentable ASE output before updating excitation.
 
 Domain boundaries
 -----------------
@@ -163,12 +162,11 @@ inter-component routing required boundary passes.
 report divergence.
 
 For a truncated series, HASE fits the recent reflected population as
-:math:`W_p \simeq W_0\Gamma^p`. When the multiplier is confidently below one,
-stationary over a longer window, and consistent with the weight removed by the
-last pass, the remaining Neumann series is added as the final pass contribution
-times :math:`\Gamma/(1-\Gamma)` and ``boundaryStatus`` becomes ``converged``.
-Otherwise the original stopping status is retained and no analytical tail is
-added. ``Simulation`` stops before updating excitation when the status is
+:math:`W_p \simeq W_0\Gamma^p`. The scalar fit and candidate tail factor are
+diagnostics only: geometric decay of total weight does not establish a
+geometric spatial or spectral field. No analytical tail is added and the fit
+does not promote an unresolved result to ``converged``.
+``Simulation`` stops before updating excitation when the status is ``stable``,
 ``diverged`` or ``maxPasses``; standalone ``PhiASE.run`` returns those partial
 tallies and diagnostics for analysis. Increasing the pass limit can provide
 more evidence, but does not by itself establish a finite steady-state field.

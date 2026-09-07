@@ -296,12 +296,12 @@ safety limits for either boundary policy.
 
 A stable or pass-limited exit is a truncated Neumann series, not by itself a
 finite steady field. HASE fits the residual reflected weights to a per-pass
-multiplier :math:`\Gamma`. It completes the series from the final pass only
-when :math:`\Gamma` is confidently below one, agrees with a longer-window fit,
-and the last-pass loss closes the residual-weight ledger. The added field is
-the final-pass increment multiplied by :math:`\Gamma/(1-\Gamma)`. A confidently
-supercritical multiplier reports ``diverged``; an uncertain or non-stationary
-tail is refused and the returned field remains a partial tally.
+multiplier :math:`\Gamma`, but retains the candidate tail factor only as a
+diagnostic. Even perfect scalar decay does not establish stationarity of the
+spatial or spectral distribution, so the final-pass field is not extrapolated.
+A confidently supercritical multiplier reports ``diverged``. ``stable`` and
+``maxPasses`` remain unresolved partial tallies and are rejected by material
+integration, as are dropped histories and non-finite ASE outputs.
 
 The ASE boundary model does not calculate angle- or polarization-dependent
 Fresnel coefficients. Transmission is available only across prepared,
