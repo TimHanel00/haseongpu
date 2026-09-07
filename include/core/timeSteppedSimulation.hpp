@@ -16,6 +16,7 @@
 #include <benchmark.hpp>
 #include <core/Runtime.hpp>
 #include <core/SimulationControls.hpp>
+#include <core/excitationValidity.hpp>
 #include <core/forwardPhiAseEvaluator.hpp>
 #include <core/logging.hpp>
 #include <core/reflectionTail.hpp>
@@ -174,6 +175,7 @@ namespace hase::core
                       static_cast<std::size_t>(m_mesh.numberOfMaterials) * m_mesh.numberOfMeshPoints))
             , m_generalPumpSources(
                   hase::kernels::prepareGeneralPumpDeviceSources<T_Device>(m_queue, hostMesh, m_run.pump))
+            , m_excitationValidity(m_device)
         {
             if(hostMesh.betaVolume.size() != hostMesh.numberOfCells)
                 throw std::runtime_error("simulation beta_volume must contain exactly one value per cell");
@@ -278,6 +280,7 @@ namespace hase::core
         {
             auto evaluateStage = [&](alpaka::concepts::IBuffer<double> auto& beta, bool const refreshAse = true)
             {
+                m_excitationValidity.requireFinite(m_queue, m_devBundle.executor, beta.getView());
                 if(refreshAse && aseEnabled)
                 {
                     // ASE owns a separate asynchronous queue. Complete the
@@ -607,6 +610,7 @@ namespace hase::core
             alpaka::concepts::IBuffer<double> auto& beta,
             alpaka::concepts::IBuffer<double> auto& stageDerivativeOut)
         {
+            m_excitationValidity.requireFinite(m_queue, m_devBundle.executor, beta.getView());
             alpaka::onHost::transform(
                 m_queue,
                 m_devBundle.executor,
@@ -638,6 +642,7 @@ namespace hase::core
 
         void enqueueClip(alpaka::concepts::IBuffer<double> auto& beta)
         {
+            m_excitationValidity.requireFinite(m_queue, m_devBundle.executor, beta.getView());
             alpaka::onHost::transform(m_queue, m_devBundle.executor, beta, hase::kernels::ClipBeta{}, beta);
         }
 
@@ -664,6 +669,7 @@ namespace hase::core
         T_DoubleBuffer m_k4;
         T_DoubleBuffer m_vertexPumpIntegral;
         std::vector<hase::kernels::GeneralPumpDeviceSource<T_Device>> m_generalPumpSources;
+        ExcitationValidity<T_Device> m_excitationValidity;
         data::PhiAseResult m_lastAseResult;
         std::size_t m_nextOutputStep = 0u;
         bool m_phiAseDeviceResident = false;

@@ -34,6 +34,12 @@ attenuation data without selecting or averaging between materials.
 Physical validation
 -------------------
 
+Time integration rejects non-finite excitation values before consuming a stage
+or clipping the completed update. NaN and infinity therefore fail the step
+instead of being converted into an apparently valid excitation. Finite final
+values outside ``[0, 1]`` retain the existing clipping behavior. This check is
+independent of ASE ray diagnostics and also applies when ASE is disabled.
+
 Component volume domains in one simulation must be disjoint. A scalar
 ``initial_excitation`` covers the complete gain domain. Domain/value mappings
 must cover that domain exactly once; gaps, overlap, out-of-range values, and
