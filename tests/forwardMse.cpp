@@ -547,7 +547,7 @@ TEST_CASE("forward spectrum stratification balances discrete bins", "[forward][s
     std::array<unsigned, spectrumSize> visits{};
     for(unsigned ray = 0u; ray < rayCount; ++ray)
     {
-        ++visits.at(hase::kernels::forward::stratifiedSpectrumIndex(spectrumSize, ray, rayCount, 3u));
+        ++visits.at(hase::kernels::forward::stratifiedSpectrumIndex(spectrumSize, ray, rayCount, 3u, 1234u));
     }
 
     auto const [minimum, maximum] = std::ranges::minmax_element(visits);

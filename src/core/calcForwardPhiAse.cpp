@@ -8,6 +8,7 @@
 #include <alpaka/math.hpp>
 
 #include <core/calcForwardPhiAse.hpp>
+#include <kernels/forward/batchStatistics.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -33,7 +34,6 @@ namespace hase::core
             0.0,
             0u,
             0u,
-            data::BoundaryTailStatus::none,
             0.0,
             0.0,
             0.0,
@@ -61,9 +61,6 @@ namespace hase::core
             = std::max(target.boundaryRemainingFraction, source.boundaryRemainingFraction);
         target.boundaryMaxPasses = std::max(target.boundaryMaxPasses, source.boundaryMaxPasses);
         target.boundaryDivergenceStreak = std::max(target.boundaryDivergenceStreak, source.boundaryDivergenceStreak);
-        if(boundaryTailStatusPriority(source.boundaryTailStatus)
-           > boundaryTailStatusPriority(target.boundaryTailStatus))
-            target.boundaryTailStatus = source.boundaryTailStatus;
         target.boundaryGamma = std::max(target.boundaryGamma, source.boundaryGamma);
         target.boundaryGammaStandardError
             = std::max(target.boundaryGammaStandardError, source.boundaryGammaStandardError);
@@ -170,7 +167,6 @@ namespace hase::core
             rawResult.boundaryRemainingFraction,
             rawResult.boundaryMaxPasses,
             rawResult.boundaryDivergenceStreak,
-            rawResult.boundaryTailStatus,
             rawResult.boundaryGamma,
             rawResult.boundaryGammaStandardError,
             rawResult.boundaryTailFactor,
@@ -180,45 +176,14 @@ namespace hase::core
             double const volumeSize = hostMesh.cellVolumes.at(volume);
             if(volumeSize > 0.0 && rawResult.rayCount > 0u)
             {
-                double scoreSum = 0.0;
-                double batchMeanSum = 0.0;
-                double batchMeanSquareSum = 0.0;
-                unsigned activeBatchCount = 0u;
+                kernels::forward::BatchStatistics statistics;
                 for(unsigned batch = 0u; batch < batchCount; ++batch)
-                {
-                    unsigned const batchRayCount = rawResult.rseBatchRayCounts.at(batch);
-                    double const batchScore = cellBatchScoreDensity.at(batch).at(volume) * volumeSize;
-                    scoreSum += batchScore;
-                    if(batchRayCount == 0u)
-                        continue;
-                    double const batchMean = batchScore / static_cast<double>(batchRayCount);
-                    batchMeanSum += batchMean;
-                    batchMeanSquareSum += batchMean * batchMean;
-                    ++activeBatchCount;
-                }
-                double const estimate
-                    = scoreSum * sourceStrengthTotal / (static_cast<double>(rawResult.rayCount) * volumeSize);
+                    statistics.add(cellBatchScoreDensity.at(batch).at(volume), rawResult.rseBatchRayCounts.at(batch));
+                auto const summary = statistics.finalize(sourceStrengthTotal, result.droppedRays[volume] != 0u);
+                double const estimate = summary.value;
                 result.phiAse.at(volume) = static_cast<float>(estimate);
-                double relativeError = std::numeric_limits<double>::max();
-                if(result.droppedRays[volume] == 0u && activeBatchCount >= 2u)
-                {
-                    double const count = static_cast<double>(activeBatchCount);
-                    double const batchMean = batchMeanSum / count;
-                    if(batchMean == 0.0)
-                        relativeError = std::numeric_limits<double>::quiet_NaN();
-                    else
-                    {
-                        double const sampleVariance = std::max(
-                            0.0,
-                            (batchMeanSquareSum - batchMeanSum * batchMeanSum / count) / (count - 1.0));
-                        relativeError = std::sqrt(sampleVariance / count) / std::abs(batchMean);
-                    }
-                }
-                result.relativeStandardError.at(volume) = relativeError;
-                result.standardError.at(volume)
-                    = result.droppedRays[volume] != 0u || !std::isfinite(relativeError)
-                          ? (std::isnan(relativeError) ? 0.0 : std::numeric_limits<double>::max())
-                          : relativeError * std::abs(estimate);
+                result.relativeStandardError.at(volume) = summary.relativeStandardError;
+                result.standardError.at(volume) = summary.standardError;
                 unsigned const material = hostMesh.cellMaterialIds.at(volume);
                 double const gainPerDensity = hostMesh.materialActive.at(material) != 0u
                                                   ? hostMesh.betaVolume.at(volume)

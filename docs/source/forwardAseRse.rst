@@ -39,8 +39,16 @@ batch samples the complete source and wavelength distributions and produces a
 complete cell-field estimate. The variation between these estimates supplies
 the reported RSE.
 
-Batching does not change the physical ASE field. The batch contributions are
-combined and normalized by the total number of ray histories.
+Batching does not change the expected physical ASE field. Each batch contribution
+is normalized by its own history count, and the reported field is the equal-weight
+mean of these complete-source estimates. RSE uses the sample variance of those
+same estimates divided by the number of active batches.
+
+Small positive-source domain quotas can reduce the number of batches and delay
+adaptive evaluations until all sources can be represented. A single active batch
+cannot estimate uncertainty and reports the maximum-error sentinel. A zero mean
+has undefined RSE (NaN). Source strata and wavelength strata use independent
+randomization to avoid coupling those sampling dimensions.
 
 Limitations
 -----------

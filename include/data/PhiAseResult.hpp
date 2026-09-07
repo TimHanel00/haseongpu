@@ -23,14 +23,6 @@ namespace hase::data
         maxPasses
     };
 
-    /** @brief Analytical completion state of a truncated reflected-pass series. */
-    enum class BoundaryTailStatus
-    {
-        none,
-        applied,
-        refused
-    };
-
     /**
      * @param status Domain-boundary termination state.
      * @return Stable lowercase transport spelling of `status`.
@@ -53,21 +45,6 @@ namespace hase::data
         return "maxPasses";
     }
 
-    /** @return Stable lowercase transport spelling of `status`. */
-    [[nodiscard]] inline char const* toString(BoundaryTailStatus const status)
-    {
-        switch(status)
-        {
-        case BoundaryTailStatus::none:
-            return "none";
-        case BoundaryTailStatus::applied:
-            return "applied";
-        case BoundaryTailStatus::refused:
-            return "refused";
-        }
-        return "refused";
-    }
-
     /** @brief Cell-ordered ASE estimates, uncertainty, diagnostics, and depletion rates. */
     struct PhiAseResult
     {
@@ -85,7 +62,6 @@ namespace hase::data
             double boundaryRemainingFraction = 0.0,
             unsigned boundaryMaxPasses = 0u,
             unsigned boundaryDivergenceStreak = 0u,
-            BoundaryTailStatus boundaryTailStatus = BoundaryTailStatus::none,
             double boundaryGamma = 0.0,
             double boundaryGammaStandardError = 0.0,
             double boundaryTailFactor = 0.0,
@@ -101,7 +77,6 @@ namespace hase::data
             , boundaryRemainingFraction(boundaryRemainingFraction)
             , boundaryMaxPasses(boundaryMaxPasses)
             , boundaryDivergenceStreak(boundaryDivergenceStreak)
-            , boundaryTailStatus(boundaryTailStatus)
             , boundaryGamma(boundaryGamma)
             , boundaryGammaStandardError(boundaryGammaStandardError)
             , boundaryTailFactor(boundaryTailFactor)
@@ -122,7 +97,6 @@ namespace hase::data
         double boundaryRemainingFraction = 0.0;
         unsigned boundaryMaxPasses = 0u;
         unsigned boundaryDivergenceStreak = 0u;
-        BoundaryTailStatus boundaryTailStatus = BoundaryTailStatus::none;
         double boundaryGamma = 0.0;
         double boundaryGammaStandardError = 0.0;
         double boundaryTailFactor = 0.0;

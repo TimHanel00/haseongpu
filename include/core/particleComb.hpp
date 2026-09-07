@@ -54,7 +54,6 @@ namespace hase::core
             , radixFlags(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(maxCandidateCount)))
             , radixPrefix(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(maxCandidateCount)))
             , radixZeroCount(alpaka::onHost::alloc<std::uint32_t>(device, std::size_t{1u}))
-            , selectedPositions(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(maxOutputCount)))
             , scanBuffer(
                   alpaka::onHost::alloc<char>(
                       device,
@@ -134,7 +133,7 @@ namespace hase::core
             }
         }
 
-        /** @brief Spatially stratify one destination route and redistribute all of its weight locally. */
+        /** @brief Spatially stratify a destination route with unbiased stratum weights. */
         template<alpaka::concepts::Executor T_Executor, typename T_Candidates>
         void enqueueSpatialDomain(
             alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
@@ -242,34 +241,12 @@ namespace hase::core
                     ALPAKA_TYPEOF(cdfView){cdfView},
                     ALPAKA_TYPEOF(sortedIndices){sortedIndices},
                     selectedCandidates.getView(),
-                    selectedPositions.getView(),
+                    selectedWeights.getView(),
                     std::uint32_t{routeCandidateCount},
                     std::uint32_t{outputOffset},
                     std::uint32_t{outputCount},
                     std::uint32_t{seed},
                     std::uint64_t{historyId}});
-            alpaka::onHost::fill(
-                queue,
-                selectedWeights.getView().getSubView(
-                    alpaka::Vec{static_cast<std::size_t>(outputOffset)},
-                    alpaka::Vec{static_cast<std::size_t>(outputCount)}),
-                0.0,
-                alpaka::Vec{static_cast<std::size_t>(outputCount)});
-            queue.enqueue(
-                routeFrame,
-                alpaka::KernelBundle{
-                    kernels::forward::RedistributeBoundaryRouteWeights{},
-                    candidates.weights.getSubView(candidateExtent),
-                    ALPAKA_TYPEOF(sortedIndices){sortedIndices},
-                    selectedPositions.getView(),
-                    selectedCandidates.getView(),
-                    candidates.positions.x.getSubView(candidateExtent),
-                    candidates.positions.y.getSubView(candidateExtent),
-                    candidates.positions.z.getSubView(candidateExtent),
-                    selectedWeights.getView(),
-                    std::uint32_t{routeCandidateCount},
-                    std::uint32_t{outputOffset},
-                    std::uint32_t{outputCount}});
         }
 
         /** @brief Enqueue scan, total capture, random offset, and candidate selection without waiting. */
@@ -426,7 +403,6 @@ namespace hase::core
         T_UnsignedBuffer radixFlags;
         T_UnsignedBuffer radixPrefix;
         T_UnsignedBuffer radixZeroCount;
-        T_UnsignedBuffer selectedPositions;
         T_ByteBuffer scanBuffer;
         T_ByteBuffer unsignedScanBuffer;
 

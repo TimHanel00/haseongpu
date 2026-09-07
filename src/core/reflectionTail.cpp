@@ -10,12 +10,12 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <sstream>
+#include <stdexcept>
 
 namespace hase::core
 {
-    BoundaryGammaFit fitBoundaryGamma(
-        std::span<double const> const residualFractions,
-        std::size_t const window)
+    BoundaryGammaFit fitBoundaryGamma(std::span<double const> const residualFractions, std::size_t const window)
     {
         if(window < 2u || residualFractions.size() < 2u)
             return {};
@@ -89,10 +89,8 @@ namespace hase::core
         auto const longTerm = fitBoundaryGamma(residualFractions, stationarityWindow);
         if(!longTerm.valid || !std::isfinite(longTerm.standardError))
             return result;
-        double const combinedStandardError
-            = std::hypot(recent.standardError, longTerm.standardError);
-        bool const stationary = std::abs(recent.gamma - longTerm.gamma)
-                                <= confidenceMargin * combinedStandardError;
+        double const combinedStandardError = std::hypot(recent.standardError, longTerm.standardError);
+        bool const stationary = std::abs(recent.gamma - longTerm.gamma) <= confidenceMargin * combinedStandardError;
 
         double const previous = residualFractions[residualFractions.size() - 2u];
         double const current = residualFractions.back();
@@ -102,5 +100,28 @@ namespace hase::core
                             && std::isfinite(result.tailClosure)
                             && std::abs(result.tailClosure - 1.0) <= closureTolerance;
         return result;
+    }
+
+    void requireUsableBoundaryAseForIntegration(data::PhiAseResult const& result, unsigned const simulationStep)
+    {
+        bool const finite = result.boundaryStatus == data::BoundaryStatus::disabled
+                            || result.boundaryStatus == data::BoundaryStatus::converged
+                            || result.boundaryStatus == data::BoundaryStatus::stable;
+        if(finite)
+            return;
+
+        std::ostringstream message;
+        message << "Reflected ASE has no established finite frozen-inversion solution before completing material "
+                   "step "
+                << simulationStep + 1u << ": boundaryStatus=" << data::toString(result.boundaryStatus)
+                << ", boundaryPasses=" << result.boundaryPasses << '/' << result.boundaryMaxPasses
+                << ", boundaryRemainingFraction=" << result.boundaryRemainingFraction
+                << ", boundaryGamma=" << result.boundaryGamma << " +/- " << result.boundaryGammaStandardError
+                << ", boundaryTailFactor=" << result.boundaryTailFactor
+                << ", boundaryTailClosure=" << result.boundaryTailClosure
+                << ". The partial PhiASE tally was not integrated. Reduce gain or optical confinement, or use a "
+                   "coupled dynamical photon-state model; increasing boundaryMaxPasses does not establish a finite "
+                   "steady state.";
+        throw std::runtime_error(message.str());
     }
 } // namespace hase::core

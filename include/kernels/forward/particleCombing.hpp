@@ -139,7 +139,7 @@ namespace hase::kernels::forward
             auto const cdf,
             auto const sortedIndices,
             auto selectedCandidates,
-            auto selectedPositions,
+            auto selectedWeights,
             std::uint32_t const routeCandidateCount,
             std::uint32_t const outputOffset,
             std::uint32_t const outputCount,
@@ -169,80 +169,10 @@ namespace hase::kernels::forward
                         upper = middle;
                 }
                 auto const position = lower < end ? lower : end - 1u;
-                selectedPositions[outputOffset + output] = position;
                 selectedCandidates[outputOffset + output] = sortedIndices[position];
-            }
-        }
-    };
-
-    struct RedistributeBoundaryRouteWeights
-    {
-        ALPAKA_FN_ACC void operator()(
-            alpaka::onAcc::concepts::Acc auto const& acc,
-            auto const candidateWeights,
-            auto const sortedIndices,
-            auto const selectedPositions,
-            auto const selectedCandidates,
-            auto const positionX,
-            auto const positionY,
-            auto const positionZ,
-            auto selectedWeights,
-            std::uint32_t const routeCandidateCount,
-            std::uint32_t const outputOffset,
-            std::uint32_t const outputCount) const
-        {
-            for(auto [position] : alpaka::onAcc::makeIdxMap(
-                    acc,
-                    alpaka::onAcc::worker::threadsInGrid,
-                    alpaka::IdxRange{routeCandidateCount}))
-            {
-                std::uint32_t lower = 0u;
-                std::uint32_t upper = outputCount;
-                while(lower < upper)
-                {
-                    auto const middle = lower + (upper - lower) / 2u;
-                    if(selectedPositions[outputOffset + middle] < position)
-                        lower = middle + 1u;
-                    else
-                        upper = middle;
-                }
-                double const weight = candidateWeights[sortedIndices[position]];
-                if(lower < outputCount && selectedPositions[outputOffset + lower] == position)
-                {
-                    alpaka::onAcc::atomicAdd(acc, &selectedWeights[outputOffset + lower], weight);
-                    continue;
-                }
-                if(lower == 0u)
-                {
-                    alpaka::onAcc::atomicAdd(acc, &selectedWeights[outputOffset], weight);
-                    continue;
-                }
-                if(lower == outputCount)
-                {
-                    alpaka::onAcc::atomicAdd(acc, &selectedWeights[outputOffset + outputCount - 1u], weight);
-                    continue;
-                }
-                auto const leftPosition = selectedPositions[outputOffset + lower - 1u];
-                auto const rightPosition = selectedPositions[outputOffset + lower];
-                auto const candidate = sortedIndices[position];
-                auto const leftCandidate = selectedCandidates[outputOffset + lower - 1u];
-                auto const rightCandidate = selectedCandidates[outputOffset + lower];
-                double const segmentX = positionX[rightCandidate] - positionX[leftCandidate];
-                double const segmentY = positionY[rightCandidate] - positionY[leftCandidate];
-                double const segmentZ = positionZ[rightCandidate] - positionZ[leftCandidate];
-                double const segmentNorm = segmentX * segmentX + segmentY * segmentY + segmentZ * segmentZ;
-                double const projection = segmentNorm > 0.0
-                                              ? ((positionX[candidate] - positionX[leftCandidate]) * segmentX
-                                                 + (positionY[candidate] - positionY[leftCandidate]) * segmentY
-                                                 + (positionZ[candidate] - positionZ[leftCandidate]) * segmentZ)
-                                                    / segmentNorm
-                                              : 0.5;
-                double const rightFraction = projection < 0.0 ? 0.0 : (projection > 1.0 ? 1.0 : projection);
-                alpaka::onAcc::atomicAdd(
-                    acc,
-                    &selectedWeights[outputOffset + lower - 1u],
-                    weight * (1.0 - rightFraction));
-                alpaka::onAcc::atomicAdd(acc, &selectedWeights[outputOffset + lower], weight * rightFraction);
+                // Selection probability is candidate weight / stratum weight.
+                // Assigning the whole stratum weight preserves every candidate's expected score.
+                selectedWeights[outputOffset + output] = upperWeight - lowerWeight;
             }
         }
     };

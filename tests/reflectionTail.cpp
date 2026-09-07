@@ -7,10 +7,10 @@
  */
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-
 #include <core/reflectionTail.hpp>
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 TEST_CASE("boundary gamma fit recovers a geometric reflected population", "[forward][reflection-tail]")
@@ -66,4 +66,48 @@ TEST_CASE("spectrally hardening reflected population refuses a stationary tail",
 
     CHECK_FALSE(estimate.divergent);
     CHECK_FALSE(estimate.applicable);
+}
+
+TEST_CASE("material integration accepts supported reflected ASE statuses", "[forward][reflection-tail]")
+{
+    hase::data::PhiAseResult result;
+
+    result.boundaryStatus = hase::data::BoundaryStatus::disabled;
+    CHECK_NOTHROW(hase::core::requireUsableBoundaryAseForIntegration(result, 0u));
+
+    result.boundaryStatus = hase::data::BoundaryStatus::converged;
+    CHECK_NOTHROW(hase::core::requireUsableBoundaryAseForIntegration(result, 0u));
+
+    result.boundaryStatus = hase::data::BoundaryStatus::stable;
+    CHECK_NOTHROW(hase::core::requireUsableBoundaryAseForIntegration(result, 0u));
+}
+
+TEST_CASE("material integration rejects an unresolved reflected ASE tally", "[forward][reflection-tail]")
+{
+    hase::data::PhiAseResult result;
+    result.boundaryStatus = hase::data::BoundaryStatus::maxPasses;
+    result.boundaryPasses = 162u;
+    result.boundaryMaxPasses = 162u;
+    result.boundaryRemainingFraction = 0.016;
+    result.boundaryGamma = 0.9988;
+    result.boundaryGammaStandardError = 0.0007;
+    result.boundaryTailFactor = 818.0;
+    result.boundaryTailClosure = 1.085;
+
+    try
+    {
+        hase::core::requireUsableBoundaryAseForIntegration(result, 3u);
+        FAIL("unresolved reflected ASE should stop material integration");
+    }
+    catch(std::runtime_error const& error)
+    {
+        std::string const message = error.what();
+        CHECK(message.find("material step 4") != std::string::npos);
+        CHECK(message.find("boundaryStatus=maxPasses") != std::string::npos);
+        CHECK(message.find("boundaryPasses=162/162") != std::string::npos);
+        CHECK(message.find("partial PhiASE tally was not integrated") != std::string::npos);
+    }
+
+    result.boundaryStatus = hase::data::BoundaryStatus::diverged;
+    CHECK_THROWS_AS(hase::core::requireUsableBoundaryAseForIntegration(result, 3u), std::runtime_error);
 }

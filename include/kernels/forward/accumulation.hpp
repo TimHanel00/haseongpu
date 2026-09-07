@@ -8,6 +8,7 @@
 #pragma once
 
 #include <core/geometry.hpp>
+#include <data/AseDomainGraph.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/barycentric.hpp>
 #include <kernels/forward/policyRay.hpp>
@@ -105,6 +106,14 @@ namespace hase::kernels::forward
     {
         return spectrumSize == 0u ? 0u
                                   : rseBatchSeed(rseBatchSeed(applicationSeed, batch), 0x6ca4'c37du) % spectrumSize;
+    }
+
+    /** @return A wavelength permutation key separated from the source shift and spectral phase. */
+    ALPAKA_FN_HOST_ACC constexpr unsigned rseBatchSpectrumPermutationSeed(
+        unsigned const applicationSeed,
+        unsigned const batch)
+    {
+        return rseBatchSeed(rseBatchSeed(applicationSeed, batch), 0x195a'4e27u);
     }
 
     /**
@@ -461,7 +470,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     batchRayIndex,
                     batchRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
                 walkForwardRay(
                     acc,
                     tracePolicies,
@@ -514,7 +524,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     batchRayIndex,
                     forwardRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
 
                 preparedRays.store(
                     batchRayIndex,
@@ -799,7 +810,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     batchRayIndex,
                     forwardRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
                 walkForwardRay(
                     acc,
                     tracePolicies,
@@ -875,7 +887,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     rayNumber,
                     domainRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
                 auto const origin = samplePointInVolume(mesh, tet, rng);
                 auto const direction = sampleIsotropicDirection(rng);
                 walker.walkForwardRay(

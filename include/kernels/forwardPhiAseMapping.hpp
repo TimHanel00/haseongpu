@@ -14,6 +14,7 @@
 #include <concepts/concepts.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
+#include <kernels/forward/batchStatistics.hpp>
 
 #include <concepts>
 #include <cstdint>
@@ -128,10 +129,7 @@ namespace hase::kernels
                 if(rayCount > 0u && volume > 0.0)
                 {
                     unsigned const materialVertexOffset = mesh.getMaterialId(cell) * mesh.numberOfMeshPoints;
-                    double scoreSum = 0.0;
-                    double batchMeanSum = 0.0;
-                    double batchMeanSquareSum = 0.0;
-                    unsigned activeBatchCount = 0u;
+                    forward::BatchStatistics statistics;
                     for(unsigned batch = 0u; batch < batchCount; ++batch)
                     {
                         double batchScoreDensity = 0.0;
@@ -146,34 +144,12 @@ namespace hase::kernels
                             batchScoreDensity += vertexVolume > 0.0 ? vertexBatchScoreSum[vertex] / vertexVolume : 0.0;
                         }
                         batchScoreDensity /= static_cast<double>(mesh.numberOfCellVertices);
-                        double const batchScore = batchScoreDensity * volume;
-                        scoreSum += batchScore;
-                        if(rseBatchRayCounts[batch] == 0u)
-                            continue;
-                        double const batchMean = batchScore / static_cast<double>(rseBatchRayCounts[batch]);
-                        batchMeanSum += batchMean;
-                        batchMeanSquareSum += batchMean * batchMean;
-                        ++activeBatchCount;
+                        statistics.add(batchScoreDensity, rseBatchRayCounts[batch]);
                     }
-                    estimate = scoreSum * sourceStrengthTotal / (static_cast<double>(rayCount) * volume);
-                    if(droppedRays[cell] == 0u && activeBatchCount >= 2u)
-                    {
-                        double const count = static_cast<double>(activeBatchCount);
-                        double const batchMean = batchMeanSum / count;
-                        if(batchMean == 0.0)
-                        {
-                            relativeError = std::numeric_limits<double>::quiet_NaN();
-                            absoluteError = 0.0;
-                        }
-                        else
-                        {
-                            double const sampleVariance = alpaka::math::max(
-                                0.0,
-                                (batchMeanSquareSum - batchMeanSum * batchMeanSum / count) / (count - 1.0));
-                            relativeError = alpaka::math::sqrt(sampleVariance / count) / alpaka::math::abs(batchMean);
-                            absoluteError = relativeError * alpaka::math::abs(estimate);
-                        }
-                    }
+                    auto const summary = statistics.finalize(sourceStrengthTotal, droppedRays[cell] != 0u);
+                    estimate = summary.value;
+                    relativeError = summary.relativeStandardError;
+                    absoluteError = summary.standardError;
                 }
                 float const phiAse = static_cast<float>(estimate);
                 volumePhiAse[cell] = phiAse;
@@ -186,7 +162,7 @@ namespace hase::kernels
                                     * (mesh.materialPeakEmission[material] + mesh.materialPeakAbsorption[material])
                                 - mesh.materialPeakAbsorption[material]
                           : 0.0;
-                volumeDndtAse[cell] = gainPerDensity * static_cast<double>(phiAse);
+                volumeDndtAse[cell] = gainPerDensity * estimate;
             }
         }
     };

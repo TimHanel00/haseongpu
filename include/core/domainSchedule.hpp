@@ -208,8 +208,9 @@ namespace hase::core
                 for(auto const& fraction : fractions)
                     if(assigned > remainder && result[fraction.index].rayCount > 1u)
                     {
-                        --result[fraction.index].rayCount;
-                        --assigned;
+                        auto const excess = std::min(assigned - remainder, result[fraction.index].rayCount - 1u);
+                        result[fraction.index].rayCount -= excess;
+                        assigned -= excess;
                     }
             }
             else
@@ -342,8 +343,9 @@ namespace hase::core
             for(auto const& fraction : fractions)
                 if(assigned > survivingRayCount && result[fraction.route] > 1u)
                 {
-                    --result[fraction.route];
-                    --assigned;
+                    auto const excess = std::min(assigned - survivingRayCount, result[fraction.route] - 1u);
+                    result[fraction.route] -= excess;
+                    assigned -= excess;
                 }
         }
         else

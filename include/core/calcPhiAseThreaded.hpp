@@ -9,11 +9,11 @@
 #pragma once
 
 #include <core/calcForwardPhiAse.hpp>
+#include <core/cancellableBarrier.hpp>
 #include <core/haseWorker.hpp>
 
 #include <algorithm>
 #include <any>
-#include <barrier>
 #include <chrono>
 #include <concepts>
 #include <limits>
@@ -70,11 +70,16 @@ namespace hase::core
                     throw std::invalid_argument("a HASE thread worker group cannot be empty");
             }
 
+            void cancel(std::exception_ptr failure)
+            {
+                m_barrier.cancel(std::move(failure));
+            }
+
             template<typename T_Value>
             [[nodiscard]] std::shared_ptr<std::vector<T_Value> const> gather(unsigned const workerIndex, T_Value value)
             {
                 m_values.at(workerIndex) = std::move(value);
-                m_barrier.arrive_and_wait();
+                m_barrier.arriveAndWait();
                 if(workerIndex == 0u)
                 {
                     auto gathered = std::make_shared<std::vector<T_Value>>();
@@ -83,9 +88,9 @@ namespace hase::core
                         gathered->emplace_back(std::any_cast<T_Value>(std::move(item)));
                     m_collectiveValue = std::move(gathered);
                 }
-                m_barrier.arrive_and_wait();
+                m_barrier.arriveAndWait();
                 auto result = std::any_cast<std::shared_ptr<std::vector<T_Value>>>(m_collectiveValue);
-                m_barrier.arrive_and_wait();
+                m_barrier.arriveAndWait();
                 return result;
             }
 
@@ -94,9 +99,9 @@ namespace hase::core
             {
                 if(workerIndex == 0u)
                     m_collectiveValue = std::move(value);
-                m_barrier.arrive_and_wait();
+                m_barrier.arriveAndWait();
                 auto result = std::any_cast<T_Value>(m_collectiveValue);
-                m_barrier.arrive_and_wait();
+                m_barrier.arriveAndWait();
                 return result;
             }
 
@@ -118,7 +123,7 @@ namespace hase::core
             }
 
         private:
-            std::barrier<> m_barrier;
+            CancellableBarrier m_barrier;
             std::vector<std::any> m_values;
             std::any m_collectiveValue;
         };
@@ -304,7 +309,6 @@ namespace hase::core
             result.boundaryRemainingFraction = item.raw.boundaryRemainingFraction;
             result.boundaryMaxPasses = item.raw.boundaryMaxPasses;
             result.boundaryDivergenceStreak = item.raw.boundaryDivergenceStreak;
-            result.boundaryTailStatus = item.raw.boundaryTailStatus;
             result.boundaryGamma = item.raw.boundaryGamma;
             result.boundaryGammaStandardError = item.raw.boundaryGammaStandardError;
             result.boundaryTailFactor = item.raw.boundaryTailFactor;

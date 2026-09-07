@@ -493,7 +493,7 @@ def testLaserPumpCladdingRunExampleReflectionToggleChangesPhiAse(
             adaptiveSteps=1,
             relativeStandardErrorThreshold=0.1,
             reflectionMaxIterations=17,
-            reflectionTolerance=0.0,
+            reflectionTolerance=0.1,
             outputSteps=(2,),
             useCladding=True,
         )

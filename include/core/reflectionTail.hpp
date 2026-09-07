@@ -8,7 +8,9 @@
 #pragma once
 
 #include <alpaka/alpaka.hpp>
+
 #include <concepts/concepts.hpp>
+#include <data/PhiAseResult.hpp>
 #include <kernels/reflectionTail.hpp>
 
 #include <cstddef>
@@ -56,6 +58,19 @@ namespace hase::core
      * @return Tail factor and classification derived from the pass history.
      */
     [[nodiscard]] BoundaryTailEstimate estimateBoundaryTail(std::span<double const> residualFractions);
+
+    /**
+     * @brief Reject failed reflected-ASE fields before coupling them to material evolution.
+     *
+     * Direct one-state PhiASE calculations may inspect unresolved partial tallies. A time
+     * integrator must not consume one: only residual convergence or an accepted analytical
+     * tail establishes a finite frozen-inversion field.
+     *
+     * @param result Reflected-ASE termination diagnostics.
+     * @param simulationStep Zero-based material step at which the field was evaluated.
+     * @throws std::runtime_error If the reflected field diverged or exhausted its pass limit.
+     */
+    void requireUsableBoundaryAseForIntegration(data::PhiAseResult const& result, unsigned simulationStep);
 
     /** Add the accepted Neumann continuation of the final pass to a device accumulator. */
     void applyBoundaryTail(

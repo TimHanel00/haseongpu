@@ -16,7 +16,6 @@ class Result:
     boundaryRemainingFraction: float = 0.0
     boundaryMaxPasses: int = 0
     boundaryDivergenceStreak: int = 0
-    boundaryTailStatus: str = "none"
     boundaryGamma: float = 0.0
     boundaryGammaStandardError: float = 0.0
     boundaryTailFactor: float = 0.0

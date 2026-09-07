@@ -228,9 +228,8 @@ namespace hase::core
                 boundaryStatusPriority(local.raw.boundaryStatus),
                 local.raw.boundaryPasses,
                 local.raw.boundaryMaxPasses,
-                local.raw.boundaryDivergenceStreak,
-                boundaryTailStatusPriority(local.raw.boundaryTailStatus)};
-            std::array<unsigned, 5u> globalStatus{};
+                local.raw.boundaryDivergenceStreak};
+            std::array<unsigned, 4u> globalStatus{};
             MPI_Allreduce(
                 localStatus.data(),
                 globalStatus.data(),
@@ -242,7 +241,6 @@ namespace hase::core
             global.raw.boundaryPasses = globalStatus[1u];
             global.raw.boundaryMaxPasses = globalStatus[2u];
             global.raw.boundaryDivergenceStreak = globalStatus[3u];
-            global.raw.boundaryTailStatus = boundaryTailStatusFromPriority(globalStatus[4u]);
             MPI_Allreduce(
                 &local.raw.boundaryRemainingFraction,
                 &global.raw.boundaryRemainingFraction,
@@ -373,7 +371,6 @@ namespace hase::core
             result.boundaryRemainingFraction = item.raw.boundaryRemainingFraction;
             result.boundaryMaxPasses = item.raw.boundaryMaxPasses;
             result.boundaryDivergenceStreak = item.raw.boundaryDivergenceStreak;
-            result.boundaryTailStatus = item.raw.boundaryTailStatus;
             result.boundaryGamma = item.raw.boundaryGamma;
             result.boundaryGammaStandardError = item.raw.boundaryGammaStandardError;
             result.boundaryTailFactor = item.raw.boundaryTailFactor;

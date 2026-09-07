@@ -112,6 +112,7 @@ namespace hase::core
             return scratch.totalWeight.getHostView()[0u];
         };
 
+        bool useGlobalComb = domainCount == 0u;
         auto measureRoutes = [&](auto& candidates, std::uint32_t const parentCount)
         {
             if(domainCount == 0u)
@@ -132,6 +133,11 @@ namespace hase::core
             scratch.liveCount.toHost(queue);
             scratch.routeWeights.toHost(queue);
             scratch.routeCandidateCounts.toHost(queue);
+            auto const nonEmptyRoutes
+                = std::ranges::count_if(scratch.routeCandidateCountsHost, [](auto const count) { return count > 0u; });
+            useGlobalComb = static_cast<std::size_t>(nonEmptyRoutes) > scratch.liveCountHost[0u];
+            if(useGlobalComb)
+                return std::vector<std::uint32_t>{scratch.liveCountHost[0u]};
             return allocateBoundaryRoutePopulations(
                 std::span<double const>{scratch.routeWeightsHost},
                 scratch.liveCountHost[0u],
@@ -143,14 +149,14 @@ namespace hase::core
                                std::span<std::uint32_t const> const routeCounts,
                                std::uint32_t const pass)
         {
-            if(domainCount == 0u)
+            if(useGlobalComb)
             {
                 scratch.comb.enqueue(
                     devBundle,
                     queue,
                     candidates.weights.getView(),
                     candidateCount,
-                    populationRayCount,
+                    std::accumulate(routeCounts.begin(), routeCounts.end(), std::uint32_t{0u}),
                     rngSeed,
                     static_cast<std::uint64_t>(pass));
                 return;
@@ -351,7 +357,6 @@ namespace hase::core
         if(result.boundaryStatus == data::BoundaryStatus::diverged || tail.divergent)
         {
             result.boundaryStatus = data::BoundaryStatus::diverged;
-            result.boundaryTailStatus = data::BoundaryTailStatus::refused;
         }
         else if(
             result.boundaryStatus == data::BoundaryStatus::stable
@@ -365,11 +370,7 @@ namespace hase::core
                     vertexBatchScoreSum,
                     boundaryTailSnapshot,
                     tail.tailFactor);
-                result.boundaryTailStatus = data::BoundaryTailStatus::applied;
-            }
-            else
-            {
-                result.boundaryTailStatus = data::BoundaryTailStatus::refused;
+                result.boundaryStatus = data::BoundaryStatus::converged;
             }
         }
     }

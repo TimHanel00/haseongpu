@@ -105,8 +105,10 @@ with its physical :math:`\beta V` density absorbs that factor into the source
 probability and leaves a unit importance weight. If :math:`B` is zero, the ASE
 estimate is zero.
 
-The spectral-bin and source-cell selections are stratified within each global
-batch. The stratification uses global history indices, so splitting a batch
+The spectral-bin and source-cell selections are stratified within each domain
+and statistical batch. An independently keyed permutation of wavelength strata
+prevents the two dimensions from sharing a monotone history ordering.
+The stratification uses global history indices, so splitting a batch
 over Alpaka devices or MPI ranks preserves the intended coverage. Directions
 remain isotropic; HASEonGPU does not infer a preferred direction from an
 arbitrary Tet4 mesh.
@@ -163,11 +165,18 @@ Direct Estimator and Physical Scaling
 
 Let :math:`X_{rj}` be the score deposited by direct history :math:`r` in cell
 :math:`j`, including a zero score when the history does not visit that cell.
-For :math:`N` globally launched histories, the unscaled volume estimator is
+For :math:`M` active independent statistical batches with :math:`n_b` histories
+each, the unscaled volume estimator is
 
 .. math::
 
-   \Phi_j^0 = \frac{B}{N V_j}\sum_{r=1}^{N} X_{rj}.
+   Y_{bj} = \frac{1}{n_b}\sum_{r\in b} X_{rj}, \qquad
+   \Phi_j^0 = \frac{B}{V_j}\frac{1}{M}\sum_{b=1}^{M}Y_{bj}.
+
+Every batch represents the complete source. A history in domain :math:`d`
+receives importance weight :math:`n_b B_d/(n_{db}B)`, where :math:`n_{db}` is
+that domain's history count in the batch. Unequal batch sizes use an equal-weight
+mean of batch estimates, matching the uncertainty calculation below.
 
 Uniform sampling over the sphere already represents the angular
 :math:`1/(4\pi)` average; no additional inverse-square target factor is applied.
@@ -187,14 +196,19 @@ factor. It must not be applied a second time in the population derivative.
 Statistical Uncertainty and Adaptation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-For each cell, the backend accumulates the score sum :math:`S_1=\sum_r X_r`
-and squared-score sum :math:`S_2=\sum_r X_r^2`. It reports the relative
-standard error
+The backend retains raw score sums and history counts per independent batch.
+For each cell it calculates the sample variance of normalized batch estimates
+using centered online moments and reports
 
 .. math::
 
-   \mathrm{RSE}
-   = \sqrt{\frac{N S_2/S_1^2 - 1}{N}}.
+   \bar Y = \frac{1}{M}\sum_b Y_b, \qquad
+   s_Y^2 = \frac{1}{M-1}\sum_b (Y_b-\bar Y)^2, \qquad
+   \mathrm{RSE} = \frac{\sqrt{s_Y^2/M}}{|\bar Y|}.
+
+At least two active batches are required; otherwise RSE is the maximum error
+sentinel. A zero mean has undefined RSE (NaN). Statistical batches, not
+correlated rays within a stratified or combed population, are the replicates.
 
 Unlike the former mean-squared-error threshold, RSE is dimensionless: an RSE of
 ``0.1`` represents an estimated one-standard-error uncertainty of 10% relative
@@ -204,7 +218,11 @@ to the mean. ``standardError`` carries the same physical unit as ``phiAse``;
 Adaptive execution starts with ``minRays`` and adds geometrically increasing
 global batches until all cells satisfy the configured RSE threshold or
 ``maxRays`` is reached. ``forwardRayCount`` selects a fixed global history count
-instead. Dropped or non-finite histories prevent the affected cell from being
+instead. Every positive-source domain must occur in every batch. The batch
+count is capped by the smallest positive-source quota, and adaptive increments
+are coalesced when necessary to preserve complete sources and exact final
+quotas. With ``adaptiveSteps=0``, evaluation stops after ``minRays``.
+Dropped or non-finite histories prevent the affected cell from being
 reported as converged. RSE measures Monte Carlo sampling uncertainty; it does
 not include mesh discretization or model error.
 

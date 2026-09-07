@@ -18,6 +18,7 @@
 #include <core/SimulationControls.hpp>
 #include <core/forwardPhiAseEvaluator.hpp>
 #include <core/logging.hpp>
+#include <core/reflectionTail.hpp>
 #include <data/Simulation.hpp>
 #include <data/SimulationPreparation.hpp>
 #include <data/SimulationSnapshot.hpp>
@@ -313,6 +314,7 @@ namespace hase::core
                         m_phiAseDeviceResident
                             = m_forwardAseContext.evaluate(m_experiment, m_compute, m_hostMesh, beta, m_lastAseResult)
                                   .deviceResidentPhi;
+                        requireUsableBoundaryAseForIntegration(m_lastAseResult, simulationStep);
                         if(!m_phiAseDeviceResident)
                             detail::copyVectorToBuffer(m_queue, m_lastAseResult.phiAse, m_phiAse);
                     }
@@ -491,7 +493,6 @@ namespace hase::core
             target.boundaryRemainingFraction = source.boundaryRemainingFraction;
             target.boundaryMaxPasses = source.boundaryMaxPasses;
             target.boundaryDivergenceStreak = source.boundaryDivergenceStreak;
-            target.boundaryTailStatus = source.boundaryTailStatus;
             target.boundaryGamma = source.boundaryGamma;
             target.boundaryGammaStandardError = source.boundaryGammaStandardError;
             target.boundaryTailFactor = source.boundaryTailFactor;

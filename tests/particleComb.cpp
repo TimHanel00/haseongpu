@@ -171,4 +171,22 @@ TEMPLATE_LIST_TEST_CASE(
     CHECK(selected[2u] % 2u == 1u);
     CHECK(selectedWeights[0u] + selectedWeights[1u] == Catch::Approx(1.2));
     CHECK(selectedWeights[2u] == Catch::Approx(1.2));
+
+    // Beyond total conservation, every original candidate must retain its expected measure.
+    // Domain 0 has strata {0} and {2,4}; the latter has total weight 0.8.
+    std::vector<double> expectedWeight(6u, 0.0);
+    constexpr unsigned trials = 512u;
+    for(unsigned seed = 0u; seed < trials; ++seed)
+    {
+        workspace.enqueueSpatialDomain(devBundle, queue, candidates, 6u, 3u, 0u, 0u, 2u, seed, 0u);
+        selectedTransfer.toHost(queue);
+        weightTransfer.toHost(queue);
+        CHECK(selectedWeights[0u] == Catch::Approx(0.4));
+        CHECK(selectedWeights[1u] == Catch::Approx(0.8));
+        for(unsigned output = 0u; output < 2u; ++output)
+            expectedWeight[selected[output]] += selectedWeights[output] / trials;
+    }
+    CHECK(expectedWeight[0u] == Catch::Approx(0.4));
+    CHECK(expectedWeight[2u] == Catch::Approx(0.5).margin(0.06));
+    CHECK(expectedWeight[4u] == Catch::Approx(0.3).margin(0.06));
 }

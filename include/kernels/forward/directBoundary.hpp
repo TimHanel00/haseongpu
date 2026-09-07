@@ -196,7 +196,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     rayNumber,
                     forwardRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
                 auto const origin = samplePointInVolume(mesh, tet, rng);
                 auto const direction = sampleIsotropicDirection(rng);
                 walk(
@@ -276,7 +277,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     rayNumber,
                     domainRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize));
+                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
                 auto const origin = samplePointInVolume(mesh, tet, rng);
                 auto const direction = sampleIsotropicDirection(rng);
                 walker.walk(

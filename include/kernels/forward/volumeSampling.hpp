@@ -8,6 +8,7 @@
 #pragma once
 
 #include <data/TraceData.hpp>
+#include <random/stratifiedPermutation.hpp>
 
 #include <cstdint>
 
@@ -21,20 +22,23 @@ namespace hase::kernels::forward
      * @param globalRayIndex Zero-based history index in the complete launch.
      * @param globalRayCount Number of histories in the complete launch.
      * @param phase Deterministic cyclic spectrum offset.
+     * @param permutationSeed Independent batch key for associating spectral and source strata.
      * @return Stratified spectrum index, or zero for an empty launch or spectrum.
      */
     [[nodiscard]] inline ALPAKA_FN_ACC unsigned stratifiedSpectrumIndex(
         unsigned const spectrumSize,
         unsigned const globalRayIndex,
         unsigned const globalRayCount,
-        unsigned const phase)
+        unsigned const phase,
+        unsigned const permutationSeed)
     {
         if(spectrumSize == 0u || globalRayCount == 0u)
         {
             return 0u;
         }
+        auto const spectralStratum = hase::random::permuteStratum(globalRayIndex, globalRayCount, permutationSeed);
         unsigned const evenlySpacedIndex
-            = static_cast<unsigned>(static_cast<std::uint64_t>(globalRayIndex) * spectrumSize / globalRayCount);
+            = static_cast<unsigned>(static_cast<std::uint64_t>(spectralStratum) * spectrumSize / globalRayCount);
         return (evenlySpacedIndex + phase % spectrumSize) % spectrumSize;
     }
 

@@ -17,6 +17,7 @@
 #include <core/calcForwardPhiAse.hpp>
 #include <core/calcPhiAseThreaded.hpp>
 #include <core/forwardPhiAseUtilities.hpp>
+#include <core/forwardSamplingPlan.hpp>
 #include <data/TraceData.hpp>
 #include <random/random.hpp>
 
@@ -142,12 +143,22 @@ namespace hase::core
         // adaptive sampling loop
         for(unsigned completedIncreases = 0u;; ++completedIncreases)
         {
-            unsigned const targetRayCount = adaptiveRayTarget(context.experiment, context.compute, completedIncreases);
-            unsigned const launchRayCount = targetRayCount - simulation.raw.rayCount;
+            auto const launch = planForwardLaunch(
+                context.experiment,
+                context.compute,
+                context.finalDomainQuotas,
+                previousDomainCounts,
+                context.batchCount,
+                simulation.raw.rayCount,
+                completedIncreases);
+            unsigned const targetRayCount = launch.target;
             unsigned const launchSeed = random::seedForAdaptiveLaunch(baseSeed, simulation.adaptiveLaunches);
             auto const previousBatchRayCounts = simulation.raw.rseBatchRayCounts;
-            auto const launchDomainCounts
-                = allocateDomainLaunchCounts(context.finalDomainQuotas, previousDomainCounts, launchRayCount);
+            auto const& launchDomainCounts = launch.domainCounts;
+            std::vector<unsigned> globalBatchCounts(context.batchCount, 0u);
+            for(auto const count : launchDomainCounts)
+                for(unsigned batch = 0u; batch < context.batchCount; ++batch)
+                    globalBatchCounts[batch] += domainBatchRayCount(count, batch, context.batchCount);
             for(std::size_t domain = 0u; domain < launchDomainCounts.size(); ++domain)
                 previousDomainCounts[domain] += launchDomainCounts[domain];
 
@@ -205,10 +216,11 @@ namespace hase::core
                         = domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
                     work.domainRayCounts[domain] = count;
                     work.rayCount += count;
-                    if(domainCount > 0u && context.betaVolumeTotal > 0.0)
-                        work.domainSourceWeights[domain]
-                            = static_cast<double>(launchRayCount) * quota->sourceStrength
-                              / (static_cast<double>(domainCount) * context.betaVolumeTotal);
+                    work.domainSourceWeights[domain] = domainBatchSourceWeight(
+                        quota->sourceStrength,
+                        context.betaVolumeTotal,
+                        count,
+                        globalBatchCounts[batch]);
                 }
                 if(work.rayCount == 0u)
                     continue;
@@ -261,7 +273,8 @@ namespace hase::core
                     targetRayCount,
                     context.experiment.relativeStandardErrorThreshold,
                     simulation.convergenceRayCounts);
-                stop = context.experiment.forwardRayCount != 0u || targetRayCount == context.experiment.maxRays
+                stop = context.experiment.forwardRayCount != 0u || context.compute.adaptiveSteps == 0u
+                       || targetRayCount == context.experiment.maxRays
                        || forwardResultMeetsRelativeStandardError(
                            simulation.convergence,
                            context.experiment.relativeStandardErrorThreshold);
@@ -447,9 +460,6 @@ namespace hase::core
                 workerCount = static_cast<unsigned>(mpiWorkerCount);
             }
 #endif
-            unsigned const batchCount = hase::kernels::forward::forwardRseBatchCount(workerCount);
-            for(auto& deviceContext : m_deviceContexts)
-                deviceContext->configureBatchCount(batchCount);
             refreshDynamicMeshes(betaVolume, hostMesh, requiresHostBetaVolume() || mpiMode, mpiMode);
             if(!experiment.isForwardPropagation())
                 throw std::runtime_error("Only forward volume propagation is supported by the openPMD backend.");
@@ -466,9 +476,17 @@ namespace hase::core
                 seed = random::SeedGenerator::get().getSeed();
 #endif
             }
-            auto const finalRayCount
-                = experiment.forwardRayCount != 0u ? experiment.forwardRayCount : experiment.maxRays;
+            if(experiment.forwardRayCount == 0u
+               && (experiment.minRays == 0u || experiment.maxRays < experiment.minRays))
+                throw std::invalid_argument("adaptive ASE requires 0 < minRays <= maxRays");
+            auto const finalRayCount = experiment.forwardRayCount != 0u
+                                           ? experiment.forwardRayCount
+                                           : (compute.adaptiveSteps == 0u ? experiment.minRays : experiment.maxRays);
             auto const finalDomainQuotas = allocateDomainRays(m_domainCosts, finalRayCount);
+            unsigned const batchCount
+                = domainRseBatchCount(finalDomainQuotas, hase::kernels::forward::forwardRseBatchCount(workerCount));
+            for(auto& deviceContext : m_deviceContexts)
+                deviceContext->configureBatchCount(batchCount);
             ForwardRunInputs simulationContext{
                 experiment,
                 compute,
@@ -490,34 +508,43 @@ namespace hase::core
                 detail::ThreadWorkerGroup group(threadWorkerCount);
                 std::vector<ForwardSimulationResult> workerResults(threadWorkerCount);
                 std::vector<std::exception_ptr> exceptions(threadWorkerCount);
-                std::vector<std::thread> workers;
+                std::vector<std::jthread> workers;
                 workers.reserve(threadWorkerCount);
-                for(unsigned workerIndex = 0u; workerIndex < threadWorkerCount; ++workerIndex)
+                try
                 {
-                    workers.emplace_back(
-                        [&, workerIndex]
-                        {
-                            try
+                    for(unsigned workerIndex = 0u; workerIndex < threadWorkerCount; ++workerIndex)
+                    {
+                        workers.emplace_back(
+                            [&, workerIndex]
                             {
-                                auto mesh
-                                    = workerIndex == 0u ? primaryMeshView(betaVolume) : m_meshes[workerIndex].view();
-                                HaseWorker worker{ThreadOwnedDevices{
-                                    workerIndex,
-                                    threadWorkerCount,
-                                    group,
-                                    mesh,
-                                    *m_deviceContexts[workerIndex],
-                                    experiment,
-                                    m_betaVolumeTotal,
-                                    m_interfaceMaps[workerIndex].view(),
-                                    m_domainSources[workerIndex].view()}};
-                                workerResults[workerIndex] = runForwardSimulation(worker, simulationContext);
-                            }
-                            catch(...)
-                            {
-                                exceptions[workerIndex] = std::current_exception();
-                            }
-                        });
+                                try
+                                {
+                                    auto mesh = workerIndex == 0u ? primaryMeshView(betaVolume)
+                                                                  : m_meshes[workerIndex].view();
+                                    HaseWorker worker{ThreadOwnedDevices{
+                                        workerIndex,
+                                        threadWorkerCount,
+                                        group,
+                                        mesh,
+                                        *m_deviceContexts[workerIndex],
+                                        experiment,
+                                        m_betaVolumeTotal,
+                                        m_interfaceMaps[workerIndex].view(),
+                                        m_domainSources[workerIndex].view()}};
+                                    workerResults[workerIndex] = runForwardSimulation(worker, simulationContext);
+                                }
+                                catch(...)
+                                {
+                                    exceptions[workerIndex] = std::current_exception();
+                                    group.cancel(exceptions[workerIndex]);
+                                }
+                            });
+                    }
+                }
+                catch(...)
+                {
+                    group.cancel(std::current_exception());
+                    throw;
                 }
                 for(auto& worker : workers)
                     worker.join();

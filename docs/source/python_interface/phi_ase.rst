@@ -60,7 +60,8 @@ Sampling controls
    the maximum is reached.
 
 ``adaptiveSteps``
-   Maximum geometric count increases between the two ray limits.
+   Maximum geometric count increases between the two ray limits. Zero performs
+   one evaluation at ``minRays`` (unless ``forwardRayCount`` is set).
 
 ``forwardRayCount``
    Fixed global history count. Setting it disables adaptive count selection.
@@ -96,7 +97,12 @@ components from their current total source strengths. Setting
 ``OpticalComponent.aseRays`` reserves that component's exact final primary-ray
 count; unspecified positive-source components share the remainder. It then
 deposits a gain-weighted track-length score in every traversed cell. Spectral
-bins and source cells are stratified within each domain and statistical batch. See
+bins and source cells are stratified within each domain and statistical batch,
+with an independently keyed permutation separating the two dimensions.
+Every statistical batch represents all positive-source components, using
+batch-specific importance weights. Small component quotas can reduce the batch
+count and coalesce adaptive increases; final requested quotas remain exact.
+One active batch cannot estimate RSE and reports the maximum error sentinel. See
 :ref:`forward-ase-model` for normalization and uncertainty equations.
 
 Forward traversal has no fixed cell-crossing limit. A valid ray continues until
@@ -147,11 +153,10 @@ there is no configurable forward ray-length cutoff.
    falls below this fraction.
 
 The runtime reports ``boundaryStatus``, ``boundaryPasses``,
-``boundaryRemainingFraction``, ``boundaryMaxPasses``, and
-``boundaryDivergenceStreak``. It also reports ``boundaryTailStatus``,
-``boundaryGamma``, ``boundaryGammaStandardError``, ``boundaryTailFactor``, and
-``boundaryTailClosure`` for analytical completion of a truncated reflected
-series. Terminal status can be ``converged``, ``stable``,
+``boundaryRemainingFraction``, ``boundaryMaxPasses``,
+``boundaryDivergenceStreak``, ``boundaryGamma``,
+``boundaryGammaStandardError``, ``boundaryTailFactor``, and
+``boundaryTailClosure``. Terminal status can be ``converged``, ``stable``,
 ``diverged``, or ``maxPasses``; ``disabled`` means neither reflections nor
 inter-component routing required boundary passes.
 ``HASE_SRM_DIVERGENCE_STREAK`` controls how many consecutive growing SRM passes
@@ -161,17 +166,23 @@ For a truncated series, HASE fits the recent reflected population as
 :math:`W_p \simeq W_0\Gamma^p`. When the multiplier is confidently below one,
 stationary over a longer window, and consistent with the weight removed by the
 last pass, the remaining Neumann series is added as the final pass contribution
-times :math:`\Gamma/(1-\Gamma)`. ``boundaryTailStatus="applied"`` identifies
-that completion. ``"refused"`` means the frozen-inversion field has not
-established a finite stationary continuation; no analytical tail is added.
+times :math:`\Gamma/(1-\Gamma)` and ``boundaryStatus`` becomes ``converged``.
+Otherwise the original stopping status is retained and no analytical tail is
+added. ``Simulation`` stops before updating excitation when the status is
+``diverged`` or ``maxPasses``; standalone ``PhiASE.run`` returns those partial
+tallies and diagnostics for analysis. Increasing the pass limit can provide
+more evidence, but does not by itself establish a finite steady-state field.
 
 With ``useReflections`` enabled, each eligible interface hit creates both
 histories: the reflected child has weight ``R W`` and the transmitted child has
 weight ``(1-R) W``. Total internal reflection creates only a reflected child
 with weight ``W``. Disabling reflections discards the reflected contribution.
-Particle combing then restores the configured per-domain population: discarded
-histories transfer their represented weight to selected histories, and
-histories may be duplicated when a domain has too few candidates. The model
+Direct particle combing groups spatially sorted candidates into strata, selects
+one candidate proportionally to weight in each stratum, and assigns that
+candidate the stratum's total weight. This preserves each candidate's expected
+contribution without duplicating candidates. If the surviving population is
+smaller than the number of live destination domains, global weighted combing
+samples destinations instead of requiring an impossible slot per domain. The model
 uses configured constant reflectivity and Snell refraction; it does not
 calculate Fresnel or polarization-dependent coefficients. See
 :ref:`ase-surface-reflections`.
