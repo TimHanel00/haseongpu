@@ -148,11 +148,11 @@ class PhiASE:
     srmPositionMode: str = "exact"
     """SRM relaunch position: the retained ``exact`` hit or the face ``centroid``."""
     reflectionMaxIterations: int = 40
-    """Maximum reflected-source passes after the direct volume-source pass."""
+    """Default boundary-pass limit for direct and SRM reflected-source propagation."""
     reflectionTolerance: float = 1e-4
     """Stop reflected passes when their source-weight fraction is below this value."""
     boundaryMaxPasses: int | None = None
-    """Hard boundary-pass cap; ``None`` selects a domain-count-dependent runtime cap."""
+    """Explicit boundary-pass limit overriding ``reflectionMaxIterations``."""
     monochromatic: bool = False
     """Use only the first spectral samples instead of wavelength integration."""
 

@@ -255,7 +255,7 @@ namespace hase::core
         enqueueComb(scratch.first, initialCandidateCount, routeCounts, 0u);
 
         double const initialWeight = readTotalWeight();
-        result.boundaryMaxPasses = experiment.resolvedBoundaryMaxPasses(experiment.domainCount);
+        result.boundaryMaxPasses = experiment.resolvedBoundaryMaxPasses();
         if(initialWeight <= 0.0)
         {
             result.boundaryStatus = data::BoundaryStatus::converged;

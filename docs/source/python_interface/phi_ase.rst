@@ -139,13 +139,13 @@ there is no configurable forward ray-length cutoff.
    ``reflectionMode="srm"``; direct mode always uses exact intersections.
 
 ``boundaryMaxPasses``
-   Hard limit for direct or SRM boundary passes. ``None`` chooses a limit from
-   the number of domains and the reflection iteration setting.
+   Optional explicit limit for direct or SRM boundary passes. ``None`` uses
+   ``reflectionMaxIterations``.
 
 ``reflectionMaxIterations``
-   Legacy reflection-pass setting used when deriving the automatic boundary
-   cap. For ``reflectionMode="srm"``, the positive integer environment
-   override is ``HASE_SRM_MAX_ITERATIONS``.
+   Default limit for direct or SRM boundary passes after the direct volume-source
+   pass. For ``reflectionMode="srm"``, the positive integer environment override
+   is ``HASE_SRM_MAX_ITERATIONS``.
 
 ``reflectionTolerance``
    Stop when remaining reflected source weight, relative to the direct pass,

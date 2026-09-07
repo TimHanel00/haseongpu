@@ -36,9 +36,7 @@ namespace hase::core
     SrmControls resolveSrmControls(AseTraceControls const& experiment)
     {
         return SrmControls{
-            positiveEnvironmentUnsigned(
-                "HASE_SRM_MAX_ITERATIONS",
-                experiment.resolvedBoundaryMaxPasses(experiment.domainCount)),
+            positiveEnvironmentUnsigned("HASE_SRM_MAX_ITERATIONS", experiment.resolvedBoundaryMaxPasses()),
             positiveEnvironmentUnsigned("HASE_SRM_DIVERGENCE_STREAK", 3u)};
     }
 

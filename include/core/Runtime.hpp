@@ -192,13 +192,12 @@ namespace hase::core
             return forwardRayCount == 0u ? minRays : forwardRayCount;
         }
 
-        /** @return Explicit boundary cap, or the topology-dependent default. */
-        [[nodiscard]] unsigned resolvedBoundaryMaxPasses(std::size_t const domainCount) const
+        /** @return Explicit boundary cap, or the configured reflection iteration limit. */
+        [[nodiscard]] unsigned resolvedBoundaryMaxPasses() const
         {
             if(boundaryMaxPasses != 0u)
                 return boundaryMaxPasses;
-            auto const domains = static_cast<unsigned>(std::max<std::size_t>(1u, domainCount));
-            return std::max(64u, (reflectionMaxIterations + 1u) * domains);
+            return reflectionMaxIterations;
         }
 
         unsigned minRays = 0u;

@@ -1056,7 +1056,13 @@ TEST_CASE("forward SRM environment controls are strict positive overrides", "[fo
     unsetenv("HASE_SRM_MAX_ITERATIONS");
     unsetenv("HASE_SRM_DIVERGENCE_STREAK");
     hase::core::AseTraceControls experiment{};
+    experiment.reflectionMaxIterations = 5u;
+    experiment.domainCount = 7u;
+    CHECK(experiment.resolvedBoundaryMaxPasses() == 5u);
+    CHECK(hase::core::resolveSrmControls(experiment).maxIterations == 5u);
+
     experiment.boundaryMaxPasses = 8u;
+    CHECK(experiment.resolvedBoundaryMaxPasses() == 8u);
     auto const defaults = hase::core::resolveSrmControls(experiment);
     CHECK(defaults.maxIterations == 8u);
     CHECK(defaults.divergenceStreak == 3u);
