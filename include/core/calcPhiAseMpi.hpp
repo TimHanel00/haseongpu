@@ -91,7 +91,7 @@ namespace hase::core
             double const betaVolumeTotal,
             unsigned const volumeCount,
             unsigned const vertexCount,
-            unsigned const batchCount,
+            unsigned const numIndependentRayPopulations,
             hase::data::AseDomainInterfaceView const interfaceMap,
             hase::data::AseDomainSourceView const domainSources)
             : m_communicator(communicator)
@@ -101,7 +101,7 @@ namespace hase::core
             , m_betaVolumeTotal(betaVolumeTotal)
             , m_volumeCount(volumeCount)
             , m_vertexCount(vertexCount)
-            , m_batchCount(batchCount)
+            , m_numIndependentRayPopulations(numIndependentRayPopulations)
             , m_interfaceMap(interfaceMap)
             , m_domainSources(domainSources)
         {
@@ -134,13 +134,15 @@ namespace hase::core
         double m_betaVolumeTotal;
         unsigned m_volumeCount;
         unsigned m_vertexCount;
-        unsigned m_batchCount;
+        unsigned m_numIndependentRayPopulations;
         hase::data::AseDomainInterfaceView m_interfaceMap;
         hase::data::AseDomainSourceView m_domainSources;
 
         friend struct HaseWorkerDispatch<MPIRank<T_Device, T_Exec>>;
-        friend struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayBatchGroup>;
+        friend struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayPopulationGroup>;
         friend struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, FinalizeForwardAse>;
+        template<typename, typename>
+        friend struct HaseWorkItemDispatch;
     };
 
     /** @brief Identity and collective dispatch for one-rank/one-device workers. */
@@ -187,24 +189,68 @@ namespace hase::core
             return value;
         }
 
+        template<typename T_Value>
+        requires std::is_trivially_copyable_v<T_Value>
+        [[nodiscard]] static std::vector<T_Value> scatter(T_Policy& policy, std::vector<T_Value> value)
+        {
+            std::uint64_t count = value.size();
+            MPI_Bcast(&count, 1, MPI_UINT64_T, 0, policy.m_communicator);
+            if(count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) / sizeof(T_Value))
+                throw std::overflow_error("MPI population broadcast exceeds the byte-count range");
+            value.resize(static_cast<std::size_t>(count));
+            MPI_Bcast(value.data(), static_cast<int>(count * sizeof(T_Value)), MPI_BYTE, 0, policy.m_communicator);
+            return value;
+        }
+
+        template<typename T_Value>
+        requires std::is_trivially_copyable_v<T_Value>
+        [[nodiscard]] static std::shared_ptr<std::vector<std::vector<T_Value>> const> gather(
+            T_Policy& policy,
+            std::vector<T_Value> value)
+        {
+            auto result = std::make_shared<std::vector<std::vector<T_Value>>>(policy.m_workerCount);
+            // Each origin broadcasts once; retain rank grouping for canonical reconstruction.
+            for(unsigned rank = 0u; rank < policy.m_workerCount; ++rank)
+            {
+                auto& part = result->at(rank);
+                if(rank == policy.m_workerIndex)
+                    part = std::move(value);
+                std::uint64_t count = part.size();
+                MPI_Bcast(&count, 1, MPI_UINT64_T, static_cast<int>(rank), policy.m_communicator);
+                if(count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) / sizeof(T_Value))
+                    throw std::overflow_error("MPI population gather exceeds the byte-count range");
+                part.resize(static_cast<std::size_t>(count));
+                MPI_Bcast(
+                    part.data(),
+                    static_cast<int>(count * sizeof(T_Value)),
+                    MPI_BYTE,
+                    static_cast<int>(rank),
+                    policy.m_communicator);
+            }
+            return result;
+        }
+
         [[nodiscard]] static std::shared_ptr<std::vector<ForwardWorkerResult> const> gather(
             T_Policy& policy,
             ForwardWorkerResult local)
         {
             auto gathered = std::make_shared<std::vector<ForwardWorkerResult>>(1u);
             auto& global = gathered->front();
-            global.raw = makeForwardRawResult(policy.m_volumeCount, policy.m_vertexCount, policy.m_batchCount);
+            global.raw = makeForwardRawResult(
+                policy.m_volumeCount,
+                policy.m_vertexCount,
+                policy.m_numIndependentRayPopulations);
             MPI_Allreduce(
-                local.raw.vertexBatchScoreSum.data(),
-                global.raw.vertexBatchScoreSum.data(),
-                static_cast<int>(global.raw.vertexBatchScoreSum.size()),
+                local.raw.vertexPopulationScoreSum.data(),
+                global.raw.vertexPopulationScoreSum.data(),
+                static_cast<int>(global.raw.vertexPopulationScoreSum.size()),
                 MPI_DOUBLE,
                 MPI_SUM,
                 policy.m_communicator);
             MPI_Allreduce(
-                local.raw.rseBatchRayCounts.data(),
-                global.raw.rseBatchRayCounts.data(),
-                static_cast<int>(global.raw.rseBatchRayCounts.size()),
+                local.raw.rayPopulationRayCounts.data(),
+                global.raw.rayPopulationRayCounts.data(),
+                static_cast<int>(global.raw.rayPopulationRayCounts.size()),
                 MPI_UNSIGNED,
                 MPI_SUM,
                 policy.m_communicator);
@@ -307,16 +353,33 @@ namespace hase::core
         }
     };
 
-    /** @brief Enqueue all rank-local batches and download their shared accumulator once. */
+    template<
+        alpaka::onHost::concepts::Device T_Device,
+        alpaka::concepts::Executor T_Exec,
+        std::derived_from<ForwardPopulationOperation> T_Work>
+    struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, T_Work>
+    {
+        static auto run(MPIRank<T_Device, T_Exec>& policy, T_Work work)
+        {
+            return work.execute(
+                policy.m_deviceContext,
+                policy.m_mesh,
+                policy.m_domainSources,
+                policy.m_interfaceMap,
+                policy.m_experiment);
+        }
+    };
+
+    /** @brief Enqueue all rank-local rayPopulations and download their shared accumulator once. */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
-    struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayBatchGroup>
+    struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, ForwardRayPopulationGroup>
     {
         using T_Policy = MPIRank<T_Device, T_Exec>;
 
-        [[nodiscard]] static ForwardWorkerResult run(T_Policy& policy, ForwardRayBatchGroup const& group)
+        [[nodiscard]] static ForwardWorkerResult run(T_Policy& policy, ForwardRayPopulationGroup const& group)
         {
             ForwardWorkerResult result;
-            if(group.batches.empty())
+            if(group.rayPopulations.empty())
             {
                 result.raw = policy.m_deviceContext.makeEmptyRawResult();
                 return result;
@@ -324,7 +387,7 @@ namespace hase::core
 
             auto const started = std::chrono::steady_clock::now();
             bool resetAccumulators = true;
-            for(auto const& batch : group.batches)
+            for(auto const& batch : group.rayPopulations)
             {
                 policy.m_deviceContext.begin(
                     policy.m_mesh,
@@ -349,7 +412,7 @@ namespace hase::core
         }
     };
 
-    /** @brief Finalize gathered batches on the rank-owned device. */
+    /** @brief Finalize gathered rayPopulations on the rank-owned device. */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     struct HaseWorkItemDispatch<MPIRank<T_Device, T_Exec>, FinalizeForwardAse>
     {

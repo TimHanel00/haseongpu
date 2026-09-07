@@ -15,6 +15,7 @@
 #include <core/surfaceReservoir.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
+#include <kernels/forward/populationTracing.hpp>
 #include <kernels/reflectionTail.hpp>
 
 #include <algorithm>
@@ -30,8 +31,8 @@ namespace hase::core
     /** @brief Unnormalized forward accumulators and boundary-pass convergence metadata. */
     struct ForwardPhiAseRawResult
     {
-        std::vector<double> vertexBatchScoreSum;
-        std::vector<unsigned> rseBatchRayCounts;
+        std::vector<double> vertexPopulationScoreSum;
+        std::vector<unsigned> rayPopulationRayCounts;
         std::vector<unsigned> totalRays;
         std::vector<unsigned> droppedRays;
         unsigned rayCount = 0u;
@@ -45,6 +46,23 @@ namespace hase::core
         double boundaryTailFactor = 0.0;
         double boundaryTailClosure = 0.0;
     };
+
+    /** Merge transport diagnostics without allocating or visiting field-sized score arrays. */
+    inline void mergeForwardBoundaryResult(ForwardPhiAseRawResult& target, ForwardPhiAseRawResult const& source)
+    {
+        if(boundaryStatusPriority(source.boundaryStatus) > boundaryStatusPriority(target.boundaryStatus))
+            target.boundaryStatus = source.boundaryStatus;
+        target.boundaryPasses = std::max(target.boundaryPasses, source.boundaryPasses);
+        target.boundaryRemainingFraction
+            = std::max(target.boundaryRemainingFraction, source.boundaryRemainingFraction);
+        target.boundaryMaxPasses = std::max(target.boundaryMaxPasses, source.boundaryMaxPasses);
+        target.boundaryDivergenceStreak = std::max(target.boundaryDivergenceStreak, source.boundaryDivergenceStreak);
+        target.boundaryGamma = std::max(target.boundaryGamma, source.boundaryGamma);
+        target.boundaryGammaStandardError
+            = std::max(target.boundaryGammaStandardError, source.boundaryGammaStandardError);
+        target.boundaryTailFactor = std::max(target.boundaryTailFactor, source.boundaryTailFactor);
+        target.boundaryTailClosure = std::max(target.boundaryTailClosure, source.boundaryTailClosure);
+    }
 
     /** @brief Customization point for distributing a scalar frame limit over a fixed dimensionality. */
     struct GetScalarDistribution
@@ -162,15 +180,16 @@ namespace hase::core
         AseTraceControls const& experiment,
         ForwardPhiAseRawResult& result,
         std::uint32_t const rayCount,
-        std::uint32_t const rseBatch,
+        std::uint32_t const rayPopulationId,
         double const sourceStrengthTotal,
-        alpaka::concepts::IBuffer<double> auto& vertexBatchScoreSum,
+        alpaka::concepts::IBuffer<double> auto& vertexPopulationScoreSum,
         alpaka::concepts::IBuffer<std::uint32_t> auto& volumeRayVisits,
         alpaka::concepts::IBuffer<std::uint32_t> auto& droppedRays,
         std::uint32_t const rngSeed,
         SrmControls const srmControls,
         SurfaceReservoirScratch<T_Device, T_PositionPolicy>& scratch,
         hase::kernels::forward::concepts::TracePolicy auto const diagnostics,
+        alpaka::concepts::IView<ForwardPopulationRay> auto const preparedRays,
         hase::data::AseDomainInterfaceView const interfaceMap = {},
         hase::data::AseDomainSourceView const domainSources = {},
         std::span<std::uint32_t const> const domainRayCounts = {},
@@ -185,7 +204,7 @@ namespace hase::core
                 return hase::kernels::forward::tracePolicy::position::centroid;
         }();
         auto accumulation = hase::kernels::forward::ForwardAccumulationSpans{
-            vertexBatchScoreSum.getMdSpan(),
+            vertexPopulationScoreSum.getMdSpan(),
             volumeRayVisits.getMdSpan(),
             droppedRays.getMdSpan()};
         std::uint32_t const faceCount = mesh.numberOfCells * mesh.numberOfFacesPerCell;
@@ -219,7 +238,29 @@ namespace hase::core
         };
 
         auto const rayFrameSpec = getRayFrameSpec(rayCount, queue);
-        if(domainRayCounts.empty())
+        if(preparedRays.getExtents().x() != 0u)
+        {
+            if(preparedRays.getExtents().x() != rayCount)
+                throw std::invalid_argument("prepared SRM ray count does not match the logical batch");
+            queue.enqueue(
+                rayFrameSpec,
+                alpaka::KernelBundle{
+                    kernels::forward::TracePreparedForwardSrm{},
+                    kernels::forward::TracePolicyList{
+                        kernels::forward::tracePolicy::source::volume,
+                        kernels::forward::tracePolicy::cell::forwardAse,
+                        kernels::forward::tracePolicy::boundary::surfaceReservoir,
+                        positionPolicy,
+                        diagnostics},
+                    mesh,
+                    preparedRays,
+                    accumulation,
+                    scratch.reservoir.first.view(slotsPerFace),
+                    interfaceMap,
+                    rngSeed,
+                    experiment.useReflections});
+        }
+        else if(domainRayCounts.empty())
             queue.enqueue(
                 rayFrameSpec,
                 alpaka::KernelBundle{
@@ -232,7 +273,7 @@ namespace hase::core
                         diagnostics},
                     mesh,
                     rayCount,
-                    rseBatch,
+                    rayPopulationId,
                     sourceStrengthTotal,
                     accumulation,
                     scratch.reservoir.first.view(slotsPerFace),
@@ -263,7 +304,7 @@ namespace hase::core
                         domain,
                         count,
                         candidateOffset,
-                        rseBatch,
+                        rayPopulationId,
                         domainSourceWeights[domain],
                         accumulation,
                         scratch.reservoir.first.view(slotsPerFace),
@@ -309,7 +350,7 @@ namespace hase::core
                             diagnostics},
                         mesh,
                         populationRayCount,
-                        rseBatch,
+                        rayPopulationId,
                         sourceWeight,
                         accumulation,
                         input.view(slotsPerFace),
@@ -332,7 +373,7 @@ namespace hase::core
                             diagnostics},
                         mesh,
                         populationRayCount,
-                        rseBatch,
+                        rayPopulationId,
                         accumulation,
                         input.view(slotsPerFace),
                         scratch.domainComb.selectedView(populationRayCount),

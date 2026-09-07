@@ -24,18 +24,18 @@ namespace hase::core
     using NodeId = std::uint32_t;
 
     /** @brief Stable identity of one indivisible domain-local statistical batch. */
-    struct DomainBatchId
+    struct DomainRayPopulationId
     {
         data::DomainId domain{};
-        data::BatchId batch{};
+        data::RayPopulationId rayPopulationId{};
 
-        constexpr auto operator<=>(DomainBatchId const&) const = default;
+        constexpr auto operator<=>(DomainRayPopulationId const&) const = default;
     };
 
     /** @brief Domain-local primary launch metadata retained by boundary histories. */
     struct DomainWorkItem
     {
-        DomainBatchId id;
+        DomainRayPopulationId id;
         std::uint64_t rayCount{};
         std::uint32_t rngSeed{};
     };
@@ -70,7 +70,7 @@ namespace hase::core
 
     struct DomainAssignment
     {
-        DomainBatchId id;
+        DomainRayPopulationId id;
         WorkerId worker{};
         std::uint64_t rayCount{};
         double estimatedWork{};
@@ -91,7 +91,7 @@ namespace hase::core
             return m_assignments;
         }
 
-        [[nodiscard]] WorkerId owner(DomainBatchId const id) const
+        [[nodiscard]] WorkerId owner(DomainRayPopulationId const id) const
         {
             auto const found = std::ranges::find(m_assignments, id, &DomainAssignment::id);
             if(found == m_assignments.end())
@@ -506,7 +506,7 @@ namespace hase::core
         std::vector<WorkerDescriptor> const& workers,
         std::vector<DomainCost> const& domains,
         std::vector<DomainQuota> const& quotas,
-        std::uint32_t batchCount,
+        std::uint32_t numIndependentRayPopulations,
         std::span<data::AseDomainInterface const> interfaces = {});
 
     /** @brief Compute immutable scheduling statistics once from the prepared domain graph. */

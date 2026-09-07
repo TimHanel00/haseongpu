@@ -203,6 +203,7 @@ namespace hase::core
         unsigned minRays = 0u;
         unsigned maxRays = 0u;
         unsigned forwardRayCount = 0u;
+        std::uint32_t numIndependentRayPopulations = 8u;
         std::string propagationMode = "forward";
         double relativeStandardErrorThreshold = 0.0;
         bool enableDiagnostics = false;

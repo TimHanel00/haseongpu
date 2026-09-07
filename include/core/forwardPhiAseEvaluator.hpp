@@ -92,11 +92,173 @@ namespace hase::core
         hase::data::TraceData const& hostMesh;
         unsigned baseSeed;
         double betaVolumeTotal;
-        unsigned batchCount;
+        unsigned numIndependentRayPopulations;
         std::vector<DomainCost> const& domainCosts;
         std::vector<DomainQuota> const& finalDomainQuotas;
         std::vector<hase::data::AseDomainInterface> const& interfaces;
     };
+
+    /** Execute complete statistical populations through smaller, worker-owned transport batches. */
+    template<typename T_WorkerPolicy>
+    ForwardWorkerResult runForwardPopulationLaunch(
+        HaseWorker<T_WorkerPolicy>& worker,
+        ForwardRunInputs const& context,
+        std::span<std::uint32_t const> const domainCounts,
+        std::uint32_t const seed)
+    {
+        auto const started = std::chrono::steady_clock::now();
+        auto const chunkSize = forwardExecutionChunkSize(
+            std::accumulate(domainCounts.begin(), domainCounts.end(), 0u),
+            worker.workerCount());
+        auto const plan = makeForwardPopulationBatches(
+            domainCounts,
+            context.finalDomainQuotas,
+            context.betaVolumeTotal,
+            context.numIndependentRayPopulations,
+            chunkSize);
+        std::vector<ForwardPopulationBatch> localWork;
+        for(auto [index] : hase::mapIdx(worker, alpaka::IdxRange{plan.size()}))
+            localWork.push_back(plan[index]);
+        (void) worker(PrepareRayPopulationWork{{}, localWork, seed});
+        // Every device has finished preparing its source rays before ANY worker traces.
+        (void) worker.gather(true);
+        ForwardPhiAseRawResult boundary;
+        for(std::uint32_t population = 0u; population < context.numIndependentRayPopulations; ++population)
+        {
+            std::vector<ForwardPopulationRay> incoming;
+            std::vector<double> fractions;
+            double initialWeight = 0.0;
+            double previousWeight = 0.0;
+            std::uint32_t grows = 0u;
+            auto status = data::BoundaryStatus::converged;
+            std::uint32_t passes = 0u;
+            double remaining = 0.0;
+            for(std::uint32_t pass = 0u;; ++pass)
+            {
+                std::vector<ForwardPopulationRay> localIncoming;
+                if(pass != 0u)
+                    for(std::size_t i = 0u; i < incoming.size(); ++i)
+                        if((i / chunkSize) % worker.workerCount() == worker.workerIndex())
+                            localIncoming.push_back(incoming[i]);
+                auto local = worker(TraceRayPopulationWork{{}, population, localIncoming, pass == 0u});
+                if(!context.experiment.useReflections && context.experiment.domainCount <= 1u)
+                    break;
+                auto gathered = worker.gather(std::move(local));
+                std::vector<ForwardPopulationRay> candidates;
+                double weight = 0.0;
+                if(worker.isRoot())
+                {
+                    for(auto const& part : *gathered)
+                        candidates.insert(candidates.end(), part.begin(), part.end());
+                    std::ranges::sort(candidates, {}, &ForwardPopulationRay::ordinal);
+                    for(auto const& ray : candidates)
+                    {
+                        if(!std::isfinite(ray.weight) || ray.weight < 0.0)
+                            throw std::runtime_error("invalid boundary ray population weight");
+                        weight += ray.weight;
+                    }
+                    if(!std::isfinite(weight))
+                        throw std::runtime_error("non-finite boundary ray population total");
+                }
+                weight = worker.scatter(weight);
+                if(pass == 0u)
+                {
+                    initialWeight = weight;
+                    previousWeight = weight;
+                    if(weight == 0.0)
+                        break;
+                    fractions.push_back(1.0);
+                    remaining = 1.0;
+                }
+                else
+                {
+                    passes = pass;
+                    remaining = weight / initialWeight;
+                    fractions.push_back(remaining);
+                    if(weight == 0.0 || remaining < context.experiment.reflectionTolerance)
+                        break;
+                    if(weight > previousWeight)
+                    {
+                        ++grows;
+                        if(grows >= 3u && estimateBoundaryTail(fractions).divergent)
+                        {
+                            status = data::BoundaryStatus::diverged;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        grows = 0u;
+                        if(std::abs(weight - previousWeight) / std::max(weight, 1.0e-30)
+                           < context.experiment.reflectionTolerance)
+                        {
+                            status = data::BoundaryStatus::stable;
+                            break;
+                        }
+                    }
+                    previousWeight = weight;
+                }
+                if(pass >= context.experiment.resolvedBoundaryMaxPasses())
+                {
+                    status = data::BoundaryStatus::maxPasses;
+                    break;
+                }
+                if(worker.isRoot())
+                    incoming = worker(
+                        SelectRayPopulationWork{
+                            {},
+                            std::move(candidates),
+                            kernels::forward::rayPopulationSeed(seed, population),
+                            pass});
+                incoming = worker.scatter(std::move(incoming));
+            }
+            auto const tail = estimateBoundaryTail(fractions);
+            if(tail.divergent)
+                status = data::BoundaryStatus::diverged;
+            if(boundaryStatusPriority(status) > boundaryStatusPriority(boundary.boundaryStatus))
+                boundary.boundaryStatus = status;
+            boundary.boundaryPasses = std::max(boundary.boundaryPasses, passes);
+            boundary.boundaryRemainingFraction = std::max(boundary.boundaryRemainingFraction, remaining);
+            boundary.boundaryMaxPasses = context.experiment.resolvedBoundaryMaxPasses();
+            boundary.boundaryDivergenceStreak = 3u;
+            boundary.boundaryGamma = std::max(boundary.boundaryGamma, tail.gamma);
+            boundary.boundaryGammaStandardError
+                = std::max(boundary.boundaryGammaStandardError, tail.gammaStandardError);
+            boundary.boundaryTailFactor = std::max(boundary.boundaryTailFactor, tail.tailFactor);
+            boundary.boundaryTailClosure = std::max(boundary.boundaryTailClosure, tail.tailClosure);
+        }
+        auto raw = worker(CollectRayPopulationWork{});
+        mergeForwardBoundaryResult(raw, boundary);
+        auto const elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        return {std::move(raw), static_cast<float>(elapsed)};
+    }
+
+    /** Fixed logical SRM batches retain their own reservoirs, independent of device ownership. */
+    template<typename T_WorkerPolicy>
+    ForwardWorkerResult runForwardLogicalSrmLaunch(
+        HaseWorker<T_WorkerPolicy>& worker,
+        ForwardRunInputs const& context,
+        std::span<std::uint32_t const> const domainCounts,
+        std::uint32_t const seed)
+    {
+        auto const started = std::chrono::steady_clock::now();
+        auto const plan = makeForwardPopulationBatches(
+            domainCounts,
+            context.finalDomainQuotas,
+            context.betaVolumeTotal,
+            context.numIndependentRayPopulations,
+            maxLogicalSrmBatchRays);
+        std::vector<ForwardPopulationBatch> localWork;
+        for(auto [index] : hase::mapIdx(worker, alpaka::IdxRange{plan.size()}))
+            localWork.push_back(plan[index]);
+        (void) worker(PrepareRayPopulationWork{{}, localWork, seed});
+        // All populations' source/wavelength samples exist before transport starts.
+        (void) worker.gather(true);
+        (void) worker(TraceLogicalSrmBatches{{}, seed});
+        auto raw = worker(CollectRayPopulationWork{});
+        auto const elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        return {std::move(raw), static_cast<float>(elapsed)};
+    }
 
     /** @brief Raw and convergence results produced by the worker-group simulation loop. */
     struct ForwardSimulationResult
@@ -129,17 +291,10 @@ namespace hase::core
         simulation.raw = makeForwardRawResult(
             context.hostMesh.numberOfCells,
             context.hostMesh.numberOfMaterials * context.hostMesh.numberOfMeshPoints,
-            context.batchCount);
+            context.numIndependentRayPopulations);
         simulation.convergenceRayCounts.assign(context.hostMesh.numberOfCells, 0u);
         std::vector<std::uint64_t> previousDomainCounts(context.finalDomainQuotas.size(), 0u);
         unsigned const baseSeed = worker.scatter(context.baseSeed);
-        auto const workerDescriptors = worker.gather(worker.descriptor());
-        auto const schedule = makeDomainSchedule(
-            *workerDescriptors,
-            context.domainCosts,
-            context.finalDomainQuotas,
-            context.batchCount,
-            context.interfaces);
         // adaptive sampling loop
         for(unsigned completedIncreases = 0u;; ++completedIncreases)
         {
@@ -148,102 +303,19 @@ namespace hase::core
                 context.compute,
                 context.finalDomainQuotas,
                 previousDomainCounts,
-                context.batchCount,
+                context.numIndependentRayPopulations,
                 simulation.raw.rayCount,
                 completedIncreases);
             unsigned const targetRayCount = launch.target;
             unsigned const launchSeed = random::seedForAdaptiveLaunch(baseSeed, simulation.adaptiveLaunches);
-            auto const previousBatchRayCounts = simulation.raw.rseBatchRayCounts;
+            auto const previousBatchRayCounts = simulation.raw.rayPopulationRayCounts;
             auto const& launchDomainCounts = launch.domainCounts;
-            std::vector<unsigned> globalBatchCounts(context.batchCount, 0u);
-            for(auto const count : launchDomainCounts)
-                for(unsigned batch = 0u; batch < context.batchCount; ++batch)
-                    globalBatchCounts[batch] += domainBatchRayCount(count, batch, context.batchCount);
             for(std::size_t domain = 0u; domain < launchDomainCounts.size(); ++domain)
                 previousDomainCounts[domain] += launchDomainCounts[domain];
 
-            ForwardRayBatchGroup localWork;
-            bool const usesDynamicDirectPopulation = context.experiment.reflectionMode == "direct";
-            std::vector<std::vector<std::uint32_t>> workerBatchCounts;
-            std::size_t localWorkerIndex = 0u;
-            if(!usesDynamicDirectPopulation)
-            {
-                workerBatchCounts.assign(
-                    workerDescriptors->size(),
-                    std::vector<std::uint32_t>(context.batchCount, 0u));
-                for(auto const& assignment : schedule.assignments())
-                {
-                    auto const quota
-                        = std::ranges::find(context.finalDomainQuotas, assignment.id.domain, &DomainQuota::id);
-                    if(quota == context.finalDomainQuotas.end())
-                        throw std::runtime_error("scheduled domain has no ASE quota");
-                    auto const domain
-                        = static_cast<std::size_t>(std::distance(context.finalDomainQuotas.begin(), quota));
-                    auto const batch = assignment.id.batch;
-                    auto const owner = std::ranges::find(*workerDescriptors, assignment.worker, &WorkerDescriptor::id);
-                    if(owner == workerDescriptors->end())
-                        throw std::runtime_error("scheduled ASE worker is absent from the worker group");
-                    auto const ownerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), owner));
-                    auto const domainCount = launchDomainCounts[domain];
-                    auto const count
-                        = domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
-                    workerBatchCounts[ownerIndex][batch] += count;
-                }
-            }
-            auto const localDescriptor = worker.descriptor();
-            if(!usesDynamicDirectPopulation)
-            {
-                auto const local = std::ranges::find(*workerDescriptors, localDescriptor.id, &WorkerDescriptor::id);
-                if(local == workerDescriptors->end())
-                    throw std::runtime_error("local ASE worker is absent from the worker group");
-                localWorkerIndex = static_cast<std::size_t>(std::distance(workerDescriptors->begin(), local));
-            }
-            for(std::uint32_t batch = 0u; batch < context.batchCount; ++batch)
-            {
-                ForwardRayBatch work{batch, 0u, launchSeed};
-                work.domainRayCounts.resize(launchDomainCounts.size(), 0u);
-                work.domainSourceWeights.resize(launchDomainCounts.size(), 0.0);
-                for(auto const& assignment : schedule.assignments())
-                {
-                    if(assignment.worker != localDescriptor.id || assignment.id.batch != batch)
-                        continue;
-                    auto const quota
-                        = std::ranges::find(context.finalDomainQuotas, assignment.id.domain, &DomainQuota::id);
-                    auto const domain
-                        = static_cast<std::size_t>(std::distance(context.finalDomainQuotas.begin(), quota));
-                    auto const domainCount = launchDomainCounts[domain];
-                    auto const count
-                        = domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
-                    work.domainRayCounts[domain] = count;
-                    work.rayCount += count;
-                    work.domainSourceWeights[domain] = domainBatchSourceWeight(
-                        quota->sourceStrength,
-                        context.betaVolumeTotal,
-                        count,
-                        globalBatchCounts[batch]);
-                }
-                if(work.rayCount == 0u)
-                    continue;
-
-                if(usesDynamicDirectPopulation)
-                    work.domainPopulationCounts.resize(launchDomainCounts.size(), 0u);
-                else
-                {
-                    std::vector<std::uint32_t> batchSourceDomainCounts(launchDomainCounts.size(), 0u);
-                    for(std::size_t domain = 0u; domain < launchDomainCounts.size(); ++domain)
-                        batchSourceDomainCounts[domain]
-                            = launchDomainCounts[domain] / context.batchCount
-                              + (batch < launchDomainCounts[domain] % context.batchCount ? 1u : 0u);
-                    auto const batchDomainCounts = reservePassiveDomainPopulationSlots(batchSourceDomainCounts);
-                    std::vector<std::uint32_t> batchWorkerCounts(workerDescriptors->size(), 0u);
-                    for(std::size_t workerIndex = 0u; workerIndex < workerDescriptors->size(); ++workerIndex)
-                        batchWorkerCounts[workerIndex] = workerBatchCounts[workerIndex][batch];
-                    auto const populations = distributeDomainPopulations(batchDomainCounts, batchWorkerCounts);
-                    work.domainPopulationCounts = populations[localWorkerIndex];
-                }
-                localWork.batches.emplace_back(std::move(work));
-            }
-            auto localResult = worker(std::move(localWork));
+            auto localResult = context.experiment.reflectionMode == "direct"
+                                   ? runForwardPopulationLaunch(worker, context, launchDomainCounts, launchSeed)
+                                   : runForwardLogicalSrmLaunch(worker, context, launchDomainCounts, launchSeed);
             simulation.runtime += worker.reduce(
                 localResult.runtime,
                 [](float const lhs, float const rhs) { return std::max(lhs, rhs); });
@@ -253,13 +325,13 @@ namespace hase::core
                 mergeForwardRawResult(simulation.raw, workerResult.raw);
             if(simulation.raw.rayCount != targetRayCount)
                 throw std::runtime_error("forward statistical batch accounting mismatch");
-            for(unsigned batch = 0u; batch < context.batchCount; ++batch)
+            for(unsigned batch = 0u; batch < context.numIndependentRayPopulations; ++batch)
             {
                 unsigned expectedBatchRays = 0u;
                 for(auto const domainCount : launchDomainCounts)
-                    expectedBatchRays
-                        += domainCount / context.batchCount + (batch < domainCount % context.batchCount ? 1u : 0u);
-                if(simulation.raw.rseBatchRayCounts[batch] != previousBatchRayCounts[batch] + expectedBatchRays)
+                    expectedBatchRays += domainCount / context.numIndependentRayPopulations
+                                         + (batch < domainCount % context.numIndependentRayPopulations ? 1u : 0u);
+                if(simulation.raw.rayPopulationRayCounts[batch] != previousBatchRayCounts[batch] + expectedBatchRays)
                     throw std::runtime_error("forward statistical batch accounting mismatch");
             }
 
@@ -451,15 +523,6 @@ namespace hase::core
             if(mpiMode)
                 detail::ensureMpiInitialized();
 #endif
-            unsigned workerCount = static_cast<unsigned>(m_meshes.size());
-#if defined(MPI_FOUND) && !defined(DISABLE_MPI)
-            if(mpiMode)
-            {
-                int mpiWorkerCount = 1;
-                MPI_Comm_size(MPI_COMM_WORLD, &mpiWorkerCount);
-                workerCount = static_cast<unsigned>(mpiWorkerCount);
-            }
-#endif
             refreshDynamicMeshes(betaVolume, hostMesh, requiresHostBetaVolume() || mpiMode, mpiMode);
             if(!experiment.isForwardPropagation())
                 throw std::runtime_error("Only forward volume propagation is supported by the openPMD backend.");
@@ -483,17 +546,21 @@ namespace hase::core
                                            ? experiment.forwardRayCount
                                            : (compute.adaptiveSteps == 0u ? experiment.minRays : experiment.maxRays);
             auto const finalDomainQuotas = allocateDomainRays(m_domainCosts, finalRayCount);
-            unsigned const batchCount
-                = domainRseBatchCount(finalDomainQuotas, hase::kernels::forward::forwardRseBatchCount(workerCount));
+            unsigned const numIndependentRayPopulations = experiment.numIndependentRayPopulations;
+            if(numIndependentRayPopulations == 0u
+               || domainRayPopulationCount(finalDomainQuotas, numIndependentRayPopulations)
+                      != numIndependentRayPopulations)
+                throw std::invalid_argument(
+                    "ASE budget must represent every emitting domain in every independent ray population");
             for(auto& deviceContext : m_deviceContexts)
-                deviceContext->configureBatchCount(batchCount);
+                deviceContext->configureRayPopulationCount(numIndependentRayPopulations);
             ForwardRunInputs simulationContext{
                 experiment,
                 compute,
                 hostMesh,
                 seed,
                 m_betaVolumeTotal,
-                batchCount,
+                numIndependentRayPopulations,
                 m_domainCosts,
                 finalDomainQuotas,
                 m_domains.interfaces};
@@ -577,7 +644,7 @@ namespace hase::core
                     m_betaVolumeTotal,
                     hostMesh.numberOfCells,
                     hostMesh.numberOfMaterials * hostMesh.numberOfMeshPoints,
-                    batchCount,
+                    numIndependentRayPopulations,
                     m_interfaceMaps[deviceIndex].view(),
                     m_domainSources[deviceIndex].view()}};
                 simulation = runForwardSimulation(worker, simulationContext);

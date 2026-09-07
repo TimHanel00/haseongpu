@@ -93,17 +93,17 @@ TEMPLATE_LIST_TEST_CASE(
         CAPTURE(scenario);
         auto raw = hase::core::makeForwardRawResult(1u, 4u, 2u);
         raw.rayCount = 3u;
-        raw.rseBatchRayCounts = {2u, 1u};
-        raw.vertexBatchScoreSum = {0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75};
+        raw.rayPopulationRayCounts = {2u, 1u};
+        raw.vertexPopulationScoreSum = {0.5, 0.5, 0.5, 0.5, 0.75, 0.75, 0.75, 0.75};
         if(scenario == 2u)
             raw.droppedRays[0u] = 1u;
         if(scenario == 3u)
-            raw.vertexBatchScoreSum[0u] = std::numeric_limits<double>::infinity();
+            raw.vertexPopulationScoreSum[0u] = std::numeric_limits<double>::infinity();
         double const sourceStrength = scenario == 1u ? 1.0e39 : 1.0;
         hase::data::PhiAseResult hostResult;
         hase::core::finalizeForwardPhiAse(mesh, raw, sourceStrength, hostResult);
-        auto scores = hase::alpakaUtils::toDevice(queue, raw.vertexBatchScoreSum);
-        auto counts = hase::alpakaUtils::toDevice(queue, raw.rseBatchRayCounts);
+        auto scores = hase::alpakaUtils::toDevice(queue, raw.vertexPopulationScoreSum);
+        auto counts = hase::alpakaUtils::toDevice(queue, raw.rayPopulationRayCounts);
         auto dropped = hase::alpakaUtils::toDevice(queue, raw.droppedRays);
         auto phi = hase::alpakaUtils::getHybridBuffer(device, std::array<float, 1u>{});
         auto error = hase::alpakaUtils::getHybridBuffer(device, std::array<double, 1u>{});

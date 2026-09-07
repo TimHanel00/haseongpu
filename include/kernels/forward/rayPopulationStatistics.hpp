@@ -6,8 +6,8 @@
 
 namespace hase::kernels::forward
 {
-    /** Independent, complete-source replicate means; history counts may differ. */
-    struct BatchStatistics
+    /** Independent, complete-source ray-population means; history counts may differ. */
+    struct RayPopulationStatistics
     {
         unsigned count = 0u;
         double mean = 0.0;

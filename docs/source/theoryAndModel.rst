@@ -218,8 +218,9 @@ to the mean. ``standardError`` carries the same physical unit as ``phiAse``;
 Adaptive execution starts with ``minRays`` and adds geometrically increasing
 global batches until all cells satisfy the configured RSE threshold or
 ``maxRays`` is reached. ``forwardRayCount`` selects a fixed global history count
-instead. Every positive-source domain must occur in every batch. The batch
-count is capped by the smallest positive-source quota, and adaptive increments
+instead. ``numIndependentRayPopulations`` selects the runtime population count
+(default 8), independently of workers. Every positive-source domain must occur
+in every population; insufficient quotas are rejected. Adaptive increments
 are coalesced when necessary to preserve complete sources and exact final
 quotas. With ``adaptiveSteps=0``, evaluation stops after ``minRays``.
 Dropped or non-finite histories prevent the affected cell from being
@@ -253,17 +254,20 @@ Domain-boundary transport
 Every optical component is an ASE scheduling domain. The global primary-ray
 count is divided among domains from their integrated spontaneous-source
 strength, except for exact counts reserved by ``OpticalComponent.aseRays``.
-Workers receive indivisible ``(domainId, batchId)`` items. Estimated work
-combines the item's ray count, the domain cell count, boundary faces, resident
-bytes, worker capacity, and node locality.
+Source CDFs restart at zero in each domain. Their totals are local endpoints,
+not differences between large global prefixes. A zero-source domain receives no
+automatic primary allocation but remains a receiving transport domain.
+Workers receive ``(rayPopulationId, domainId, batchId)`` work items. SRM logical
+batch boundaries are independent of the number of workers; direct execution
+chunks may vary with worker count because its resampling remains population-wide.
 
 The current execution context still keeps the complete prepared trace on every
-worker device. The schedule exposes each worker's required domain set so a
-later storage change can replace that replication with domain shards without
-changing work-item identity. Boundary candidates, CDFs, scans, selections, and
-alternating pass buffers remain device-resident and are enqueued on non-blocking
-queues. A worker downloads its combined raw accumulator once per adaptive
-launch; boundary pass control downloads only one aggregate-weight scalar.
+worker device. Source sampling, CDFs, scans, and reservoir operations execute
+on that device. SRM retains boundary records on the owner of each logical batch
+and downloads only aggregate weights for pass control. Direct transport gathers
+compact boundary records in canonical order through host memory for
+population-wide combing, then distributes the selected records to workers.
+Both paths download combined raw scores for population aggregation.
 
 At a domain boundary, configured constant reflectivity :math:`R` splits incoming
 weight :math:`W` deterministically. The specularly reflected child receives
@@ -278,15 +282,30 @@ restores the requested population before the next pass. The comb preserves the
 sum of candidate weights, transfers the weight represented by discarded
 candidates to retained histories, and duplicates histories when too few
 candidates reach a domain. Thus population control changes the number of
-histories, not the represented boundary weight. Domains with no primary
-emission reserve a minimal relaunch slot when the batch is large enough,
-allowing transmitted histories to enter passive components.
+histories, not the represented boundary weight. Positive boundary routes receive
+relaunch slots when the surviving population can represent them all; otherwise
+a global comb samples the routes without deterministically dropping a domain.
 
 The surface-reservoir method (SRM) retains a bounded weighted sample of the
 direction, spectral bin, and weight from both children arriving at their target
-faces. Per-domain face combing defines the source distribution for the next
-pass. The new pass contributes through the same track-length estimator and
-fills the reservoir for the following pass.
+faces. Each source domain's independent ray population is divided into logical
+batches of at most 65,536 primary rays, independently of worker count. Source
+and wavelength sampling is prepared for the complete domain population before
+tracing; splitting the prepared rays does not restart its strata. Each logical
+batch executes its complete SRM transport on one owner, including transmission
+into other domains, and retains separate reservoirs and stopping state. The
+next pass samples the batch's occupied target faces in proportion to aggregate
+face weight, including faces in domains with no primary source.
+
+The new pass contributes through the same track-length estimator and fills the
+batch's reservoir for the following pass. Reservoir randomness is keyed by
+ray population, source domain, logical batch, and pass, never by worker identity.
+Raw scores from all logical batches in a population are summed before
+normalization. Only the complete population estimates enter the RSE calculation;
+logical batches are not additional independent RSE samples. Changing worker
+ownership preserves this model, apart from floating-point reduction order.
+Changing the logical batch cap can change its sampling variance and effective
+reservoir capacity. This cap is not an automatic worker-load tuning parameter.
 
 Boundary propagation terminates when the remaining source weight is below
 ``reflectionTolerance``, reaches a non-growing stable state, exceeds the

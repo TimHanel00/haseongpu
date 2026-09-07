@@ -97,11 +97,19 @@ count; unspecified positive-source components share the remainder. It then
 deposits a gain-weighted track-length score in every traversed cell. Spectral
 bins and source cells are stratified within each domain and statistical batch,
 with an independently keyed permutation separating the two dimensions.
-Every statistical batch represents all positive-source components, using
-batch-specific importance weights. Small component quotas can reduce the batch
-count and coalesce adaptive increases; final requested quotas remain exact.
-One active batch cannot estimate RSE and reports the maximum error sentinel. See
+Every independent ray population represents all positive-source components,
+using population-specific importance weights. ``numIndependentRayPopulations``
+is a runtime integer (default 8), independent of worker count. YAML accepts
+``num_independent_ray_populations`` and the CLI accepts
+``--num-independent-ray-populations``. Each emitting component must have enough
+rays to occur in every population; insufficient quotas are rejected. Adaptive
+increases can be coalesced while preserving exact final quotas.
+One population cannot estimate RSE and reports the maximum error sentinel. See
 :ref:`forward-ase-model` for normalization and uncertainty equations.
+
+Domain-local source CDFs preserve very weak sources beside strong components.
+Zero-source domains receive no automatically allocated primary rays, but remain
+eligible for transmitted rays and their resulting field and RSE estimates.
 
 Forward traversal has no fixed cell-crossing limit. A valid ray continues until
 it reaches a physical boundary or a cell policy terminates it, so increasing
@@ -127,8 +135,23 @@ there is no configurable forward ray-length cutoff.
 
 ``surfaceReservoirSize``
    Number of statistically retained ray records per boundary face when
-   ``reflectionMode="srm"``. Reflected and transmitted weight is accumulated
-   independently of this bounded record count.
+   ``reflectionMode="srm"``, per logical batch. Reflected and transmitted weight
+   is accumulated independently of this bounded record count.
+
+   SRM divides each source domain's ray population into logical batches of at
+   most 65,536 primary rays before assigning workers. Source and wavelength
+   strata belong to the complete domain population, not to individual logical
+   batches. Each batch keeps its own reservoirs, random stream, and boundary
+   stopping state throughout transport. Reservoirs are reused between completed
+   batches on a worker; they are not merged merely because batches share a
+   worker. Transmitted rays can score domains with no primary emission.
+
+   Raw batch contributions are summed under their ``rayPopulationId`` before
+   population normalization and RSE estimation. Worker count changes ownership,
+   not these statistical boundaries. Floating-point reduction order can still
+   cause small numerical differences. Changing the logical batch cap can change
+   sampling variance; it must not be tuned automatically from worker count.
+   More workers than logical batches can leave workers idle.
 
 ``srmPositionMode``
    Selects where retained SRM records are relaunched. ``"exact"`` retains each

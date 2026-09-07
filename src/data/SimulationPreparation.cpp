@@ -676,21 +676,18 @@ namespace hase::internal::simulationPreparation
         }
 
         graph.domainCellOffsets.push_back(0u);
-        double globalSourceStrength = 0.0;
         for(auto const& domain : graph.domains)
         {
             graph.domainGlobalCells.insert(
                 graph.domainGlobalCells.end(),
                 domain.localToGlobalCells.begin(),
                 domain.localToGlobalCells.end());
-            double previousLocalStrength = 0.0;
-            for(double const localPrefix : domain.trace.sourceStrengthPrefix)
-            {
-                globalSourceStrength += localPrefix - previousLocalStrength;
-                previousLocalStrength = localPrefix;
-                graph.domainSourceStrengthPrefix.push_back(globalSourceStrength);
-            }
-            graph.domainSourceStrengthTotals.push_back(previousLocalStrength);
+            auto const& prefix = domain.trace.sourceStrengthPrefix;
+            graph.domainSourceStrengthPrefix.insert(
+                graph.domainSourceStrengthPrefix.end(),
+                prefix.begin(),
+                prefix.end());
+            graph.domainSourceStrengthTotals.push_back(prefix.empty() ? 0.0 : prefix.back());
             graph.domainCellOffsets.push_back(static_cast<std::uint32_t>(graph.domainGlobalCells.size()));
         }
 
@@ -1036,6 +1033,11 @@ namespace hase::data
         ase.propagationMode = simulation.phiAse->propagationMode;
         ase.forwardRayCount
             = narrow<unsigned>(simulation.phiAse->forwardRayCount.value_or(0u), "phiAse.forwardRayCount");
+        ase.numIndependentRayPopulations = narrow<std::uint32_t>(
+            simulation.phiAse->numIndependentRayPopulations,
+            "phiAse.numIndependentRayPopulations");
+        if(ase.numIndependentRayPopulations == 0u)
+            throw std::invalid_argument("phiAse.numIndependentRayPopulations must be positive");
         ase.reflectionMaxIterations
             = narrow<unsigned>(simulation.phiAse->reflectionMaxIterations, "phiAse.reflectionMaxIterations");
         ase.reflectionTolerance = simulation.phiAse->reflectionTolerance;

@@ -151,7 +151,7 @@ namespace hase::core
             sourceStrengthTotals.toDevice(queue);
         }
 
-        /** @brief Rebuild the flattened domain source CDF entirely on this device. */
+        /** @brief Rebuild independent domain-local CDFs in one flattened device buffer. */
         template<alpaka::concepts::Executor T_Executor>
         void rebuild(
             alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
@@ -161,7 +161,10 @@ namespace hase::core
             auto const cellCount = static_cast<std::uint32_t>(globalCells.getExtents().x());
             auto const domainCount = static_cast<std::uint32_t>(sourceStrengthTotals.getExtents().x());
             if(cellCount == 0u)
+            {
+                alpaka::onHost::fill(queue, sourceStrengthTotals.toDeviceView(), 0.0);
                 return;
+            }
             auto sourceStrengthPrefixView = sourceStrengthPrefix.toDeviceView();
             auto globalCellsView = globalCells.toDeviceView();
             alpaka::onHost::transform(
@@ -170,7 +173,21 @@ namespace hase::core
                 sourceStrengthPrefixView,
                 hase::kernels::DomainSourceStrength{mesh},
                 globalCellsView);
-            alpaka::onHost::inclusiveScanInPlace(queue, devBundle.executor, scanBuffer, sourceStrengthPrefixView);
+            // Topology offsets are already available on the host. Only scans execute
+            // here; source values and prefixes never leave the device. Starting each
+            // CDF at zero preserves weak sources next to much stronger domains.
+            auto const hostOffsets = offsets.getHostView();
+            for(std::uint32_t domain = 0u; domain < domainCount; ++domain)
+            {
+                auto const begin = static_cast<std::size_t>(hostOffsets[domain]);
+                auto const end = static_cast<std::size_t>(hostOffsets[domain + 1u]);
+                if(begin != end)
+                {
+                    auto localPrefix
+                        = sourceStrengthPrefixView.getSubView(alpaka::Vec{begin}, alpaka::Vec{end - begin});
+                    alpaka::onHost::inclusiveScanInPlace(queue, devBundle.executor, scanBuffer, localPrefix);
+                }
+            }
             auto const domainFrame = hase::alpakaUtils::getFrameSpec<std::uint32_t>(
                 devBundle.device,
                 devBundle.executor,
@@ -235,7 +252,7 @@ namespace hase::core
         T_UnsignedView targetDomains;
         T_UnsignedView targetCells;
         T_UnsignedView targetFaces;
-        T_UnsignedView batches;
+        T_UnsignedView rayPopulationIds;
         T_UnsignedView reflectionDepths;
         T_HistoryView historyIds;
     };
@@ -261,7 +278,7 @@ namespace hase::core
             , targetDomains(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(capacity)))
             , targetCells(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(capacity)))
             , targetFaces(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(capacity)))
-            , batches(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(capacity)))
+            , rayPopulationIds(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(capacity)))
             , reflectionDepths(alpaka::onHost::alloc<std::uint32_t>(device, static_cast<std::size_t>(capacity)))
             , historyIds(alpaka::onHost::alloc<std::uint64_t>(device, static_cast<std::size_t>(capacity)))
             , m_capacity(capacity)
@@ -279,7 +296,7 @@ namespace hase::core
                 targetDomains.getView(),
                 targetCells.getView(),
                 targetFaces.getView(),
-                batches.getView(),
+                rayPopulationIds.getView(),
                 reflectionDepths.getView(),
                 historyIds.getView()};
             static_assert(std::is_trivially_copyable_v<ALPAKA_TYPEOF(result)>);
@@ -300,7 +317,7 @@ namespace hase::core
         T_UnsignedBuffer targetDomains;
         T_UnsignedBuffer targetCells;
         T_UnsignedBuffer targetFaces;
-        T_UnsignedBuffer batches;
+        T_UnsignedBuffer rayPopulationIds;
         T_UnsignedBuffer reflectionDepths;
         T_HistoryBuffer historyIds;
 

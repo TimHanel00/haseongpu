@@ -91,7 +91,7 @@ namespace hase::kernels::forward
                 candidates.targetDomains[index] = targetDomain;
                 candidates.targetCells[index] = targetCell;
                 candidates.targetFaces[index] = targetFace;
-                candidates.batches[index] = batch;
+                candidates.rayPopulationIds[index] = batch;
                 candidates.reflectionDepths[index] = reflectionDepth;
                 candidates.historyIds[index] = branchHistory;
             };
@@ -141,7 +141,7 @@ namespace hase::kernels::forward
             rayState.forbiddenFace = forbiddenFace;
             rayState.weight = weight;
             rayState.wavelength = wavelength;
-            rayState.rseBatch = batch;
+            rayState.rayPopulationId = batch;
             auto const cellBehaviour = MakeForwardAseCellPolicy{}(tracePolicies.getDiagnostics(), accumulation);
             auto const failureBehaviour
                 = MakeForwardRayFailureBehaviour{}(tracePolicies.getDiagnostics(), accumulation);
@@ -181,14 +181,14 @@ namespace hase::kernels::forward
                     alpaka::onAcc::worker::threadsInGrid,
                     alpaka::IdxRange{forwardRayCount}))
             {
-                unsigned const batchSeed = rseBatchSeed(rngSeed, batch);
+                unsigned const batchSeed = rayPopulationSeed(rngSeed, batch);
                 auto rng = alpaka::rand::engine::Philox4x32x10{batchSeed, rayHistoryId(0u, rayNumber)};
                 unsigned const tet = sampleStratifiedVolumeBySourceStrength(
                     mesh,
                     sourceStrengthTotal,
                     rayNumber,
                     forwardRayCount,
-                    rseBatchSourceStratificationOffset(rngSeed, batch),
+                    rayPopulationSourceStratificationOffset(rngSeed, batch),
                     rng);
                 auto const material = mesh.getMaterialId(tet);
                 auto const spectrumSize = mesh.crossSectionCount(material);
@@ -196,8 +196,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     rayNumber,
                     forwardRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
-                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
+                    rayPopulationSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rayPopulationSpectrumPermutationSeed(rngSeed, batch));
                 auto const origin = samplePointInVolume(mesh, tet, rng);
                 auto const direction = sampleIsotropicDirection(rng);
                 walk(
@@ -246,19 +246,17 @@ namespace hase::kernels::forward
             auto const begin = sources.offsets[domain];
             auto const end = sources.offsets[domain + 1u];
             double const total = sources.sourceStrengthTotals[domain];
-            double const prefixBase = begin == 0u ? 0.0 : sources.sourceStrengthPrefix[begin - 1u];
             for(auto [rayNumber] :
                 alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{domainRayCount}))
             {
                 auto rng = alpaka::rand::engine::Philox4x32x10{
-                    rseBatchSeed(rngSeed, batch),
+                    rayPopulationSeed(rngSeed, batch),
                     rayHistoryId(0u, candidateOffset + rayNumber)};
                 double const target = stratifiedUnitInterval(
                                           rayNumber,
                                           domainRayCount,
-                                          rseBatchSourceStratificationOffset(rngSeed, batch))
-                                          * total
-                                      + prefixBase;
+                                          rayPopulationSourceStratificationOffset(rngSeed, batch))
+                                      * total;
                 std::uint32_t lower = begin;
                 std::uint32_t upper = end;
                 while(lower < upper)
@@ -277,8 +275,8 @@ namespace hase::kernels::forward
                     spectrumSize,
                     rayNumber,
                     domainRayCount,
-                    rseBatchSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
-                    rseBatchSpectrumPermutationSeed(rngSeed, batch));
+                    rayPopulationSpectrumStratificationPhase(rngSeed, batch, spectrumSize),
+                    rayPopulationSpectrumPermutationSeed(rngSeed, batch));
                 auto const origin = samplePointInVolume(mesh, tet, rng);
                 auto const direction = sampleIsotropicDirection(rng);
                 walker.walk(
@@ -339,7 +337,7 @@ namespace hase::kernels::forward
                     static_cast<int>(input.targetFaces[candidate]),
                     selectedWeights[rayNumber],
                     input.wavelengths[candidate],
-                    input.batches[candidate],
+                    input.rayPopulationIds[candidate],
                     accumulation,
                     output,
                     rayNumber,

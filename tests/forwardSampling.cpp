@@ -42,9 +42,9 @@ TEST_CASE("joint source and wavelength sampling improves with ray count", "[forw
             std::array<double, 8u> batchMeans{};
             for(std::uint32_t batch = 0u; batch < batchMeans.size(); ++batch)
             {
-                auto const shift = rseBatchSourceStratificationOffset(seed, batch);
-                auto const phase = rseBatchSpectrumStratificationPhase(seed, batch, 2u);
-                auto const key = rseBatchSpectrumPermutationSeed(seed, batch);
+                auto const shift = rayPopulationSourceStratificationOffset(seed, batch);
+                auto const phase = rayPopulationSpectrumStratificationPhase(seed, batch, 2u);
+                auto const key = rayPopulationSpectrumPermutationSeed(seed, batch);
                 for(std::uint32_t ray = 0u; ray < count; ++ray)
                 {
                     auto const source = stratifiedUnitInterval(ray, count, shift) < 0.5 ? 0u : 1u;

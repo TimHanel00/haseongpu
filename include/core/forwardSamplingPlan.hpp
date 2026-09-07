@@ -13,7 +13,7 @@
 namespace hase::core
 {
     /** Every active statistical batch must be able to sample every emitting domain. */
-    [[nodiscard]] inline std::uint32_t domainRseBatchCount(
+    [[nodiscard]] inline std::uint32_t domainRayPopulationCount(
         std::span<DomainQuota const> const quotas,
         std::uint32_t requested)
     {
@@ -25,16 +25,17 @@ namespace hase::core
         return requested;
     }
 
-    [[nodiscard]] inline std::uint32_t domainBatchRayCount(
+    [[nodiscard]] inline std::uint32_t domainPopulationRayCount(
         std::uint32_t const domainCount,
         std::uint32_t const batch,
-        std::uint32_t const batchCount)
+        std::uint32_t const numIndependentRayPopulations)
     {
-        return domainCount / batchCount + (batch < domainCount % batchCount ? 1u : 0u);
+        return domainCount / numIndependentRayPopulations
+               + (batch < domainCount % numIndependentRayPopulations ? 1u : 0u);
     }
 
     /** Importance weight making each batch estimate the complete physical source. */
-    [[nodiscard]] inline double domainBatchSourceWeight(
+    [[nodiscard]] inline double domainPopulationSourceWeight(
         double const domainStrength,
         double const sourceStrength,
         std::uint32_t const domainRays,
@@ -63,7 +64,7 @@ namespace hase::core
         ExecutionPolicy const& compute,
         std::span<DomainQuota const> const quotas,
         std::span<std::uint64_t const> const completed,
-        std::uint32_t const batchCount,
+        std::uint32_t const numIndependentRayPopulations,
         std::uint32_t const previousTarget,
         std::uint32_t& increase)
     {
@@ -82,9 +83,10 @@ namespace hase::core
             bool complete = true;
             for(std::size_t domain = 0u; domain < quotas.size(); ++domain)
                 if(quotas[domain].sourceStrength > 0.0)
-                    complete
-                        = complete && counts[domain] >= batchCount
-                          && (final || quotas[domain].rayCount - completed[domain] - counts[domain] >= batchCount);
+                    complete = complete && counts[domain] >= numIndependentRayPopulations
+                               && (final
+                                   || quotas[domain].rayCount - completed[domain] - counts[domain]
+                                          >= numIndependentRayPopulations);
             if(complete)
                 return {target, std::move(counts)};
             if(final)

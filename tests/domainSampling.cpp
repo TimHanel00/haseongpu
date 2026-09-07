@@ -40,7 +40,7 @@ TEST_CASE("adaptive launch coalescing never omits a positive source", "[forward]
     compute.adaptiveSteps = 1u;
     std::vector<DomainQuota> const quotas{{0u, 99u, 1.0, 0.0}, {1u, 1u, 1.0, 0.0}};
     std::vector<std::uint64_t> const completed(2u, 0u);
-    auto const batches = domainRseBatchCount(quotas, 8u);
+    auto const batches = domainRayPopulationCount(quotas, 8u);
     CHECK(batches == 1u);
     unsigned increase = 0u;
     auto const launch = planForwardLaunch(experiment, compute, quotas, completed, batches, 0u, increase);

@@ -26,21 +26,112 @@
 
 namespace hase::core
 {
+    struct ForwardPopulationOperation
+    {
+    };
+
+    struct PrepareRayPopulationWork : ForwardPopulationOperation
+    {
+        std::span<ForwardPopulationBatch const> work;
+        std::uint32_t seed;
+
+        bool execute(
+            alpaka::concepts::SpecializationOf<ForwardPhiAseDeviceContext> auto& context,
+            data::TraceView mesh,
+            data::AseDomainSourceView sources,
+            data::AseDomainInterfaceView,
+            AseTraceControls const&) const
+        {
+            context.prepareRayPopulations(mesh, sources, work, seed);
+            return true;
+        }
+    };
+
+    struct TraceRayPopulationWork : ForwardPopulationOperation
+    {
+        std::uint32_t rayPopulationId;
+        std::span<ForwardPopulationRay const> incoming;
+        bool primary;
+
+        auto execute(
+            alpaka::concepts::SpecializationOf<ForwardPhiAseDeviceContext> auto& context,
+            data::TraceView mesh,
+            data::AseDomainSourceView,
+            data::AseDomainInterfaceView interfaces,
+            AseTraceControls const& controls) const
+        {
+            return context.traceRayPopulation(mesh, interfaces, controls, rayPopulationId, incoming, primary);
+        }
+    };
+
+    struct SelectRayPopulationWork : ForwardPopulationOperation
+    {
+        std::vector<ForwardPopulationRay> candidates;
+        std::uint32_t seed;
+        std::uint32_t pass;
+
+        auto execute(
+            alpaka::concepts::SpecializationOf<ForwardPhiAseDeviceContext> auto& context,
+            data::TraceView,
+            data::AseDomainSourceView,
+            data::AseDomainInterfaceView,
+            AseTraceControls const& controls)
+        {
+            return context.selectRayPopulation(
+                std::move(candidates),
+                forwardPopulationDomainCount(controls.domainCount),
+                seed,
+                pass);
+        }
+    };
+
+    struct CollectRayPopulationWork : ForwardPopulationOperation
+    {
+        auto execute(
+            alpaka::concepts::SpecializationOf<ForwardPhiAseDeviceContext> auto& context,
+            data::TraceView,
+            data::AseDomainSourceView,
+            data::AseDomainInterfaceView,
+            AseTraceControls const&) const
+        {
+            ForwardPhiAseRawResult raw;
+            float runtime = 0.0f;
+            context.finish(raw, runtime);
+            return raw;
+        }
+    };
+
+    struct TraceLogicalSrmBatches : ForwardPopulationOperation
+    {
+        std::uint32_t seed;
+
+        bool execute(
+            alpaka::concepts::SpecializationOf<ForwardPhiAseDeviceContext> auto& context,
+            data::TraceView mesh,
+            data::AseDomainSourceView,
+            data::AseDomainInterfaceView interfaces,
+            AseTraceControls const& controls) const
+        {
+            context.traceLogicalSrmBatches(mesh, interfaces, controls, seed);
+            return true;
+        }
+    };
+
     /** @brief One statistical batch containing this worker's assigned domain work. */
-    struct ForwardRayBatch
+    struct ForwardRayPopulation
     {
         unsigned index = 0u; //!< Statistical batch index.
         unsigned rayCount = 0u; //!< Complete number of histories in this batch.
-        unsigned rngSeed = 0u; //!< Seed shared by all batches in one adaptive launch.
+        unsigned rngSeed = 0u; //!< Seed shared by all rayPopulations in one adaptive launch.
         std::vector<std::uint32_t> domainRayCounts;
         std::vector<double> domainSourceWeights;
         std::vector<std::uint32_t> domainPopulationCounts;
     };
 
     /** @brief Domain/batch assignments grouped for one worker and adaptive launch. */
-    struct ForwardRayBatchGroup
+    struct ForwardRayPopulationGroup
     {
-        std::vector<ForwardRayBatch> batches;
+        std::vector<ForwardRayPopulation> rayPopulations;
     };
 
     /** @brief One worker's device-resident accumulation downloaded once per adaptive launch. */
@@ -180,8 +271,10 @@ namespace hase::core
         hase::data::AseDomainSourceView m_domainSources;
 
         friend struct HaseWorkerDispatch<ThreadOwnedDevices<T_Device, T_Exec>>;
-        friend struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayBatchGroup>;
+        friend struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayPopulationGroup>;
         friend struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, FinalizeForwardAse>;
+        template<typename, typename>
+        friend struct HaseWorkItemDispatch;
     };
 
     /** @brief Identity and collective dispatch for one-thread/one-device workers. */
@@ -245,16 +338,33 @@ namespace hase::core
         }
     };
 
-    /** @brief Enqueue all locally assigned batches and download their shared accumulator once. */
+    template<
+        alpaka::onHost::concepts::Device T_Device,
+        alpaka::concepts::Executor T_Exec,
+        std::derived_from<ForwardPopulationOperation> T_Work>
+    struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, T_Work>
+    {
+        static auto run(ThreadOwnedDevices<T_Device, T_Exec>& policy, T_Work work)
+        {
+            return work.execute(
+                policy.m_deviceContext,
+                policy.m_mesh,
+                policy.m_domainSources,
+                policy.m_interfaceMap,
+                policy.m_experiment);
+        }
+    };
+
+    /** @brief Enqueue all locally assigned rayPopulations and download their shared accumulator once. */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
-    struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayBatchGroup>
+    struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, ForwardRayPopulationGroup>
     {
         using T_Policy = ThreadOwnedDevices<T_Device, T_Exec>;
 
-        [[nodiscard]] static ForwardWorkerResult run(T_Policy& policy, ForwardRayBatchGroup const& group)
+        [[nodiscard]] static ForwardWorkerResult run(T_Policy& policy, ForwardRayPopulationGroup const& group)
         {
             ForwardWorkerResult result;
-            if(group.batches.empty())
+            if(group.rayPopulations.empty())
             {
                 result.raw = policy.m_deviceContext.makeEmptyRawResult();
                 return result;
@@ -262,7 +372,7 @@ namespace hase::core
 
             auto const started = std::chrono::steady_clock::now();
             bool resetAccumulators = true;
-            for(auto const& batch : group.batches)
+            for(auto const& batch : group.rayPopulations)
             {
                 policy.m_deviceContext.begin(
                     policy.m_mesh,
@@ -287,7 +397,7 @@ namespace hase::core
         }
     };
 
-    /** @brief Finalize gathered batches on one thread-owned device. */
+    /** @brief Finalize gathered rayPopulations on one thread-owned device. */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Exec>
     struct HaseWorkItemDispatch<ThreadOwnedDevices<T_Device, T_Exec>, FinalizeForwardAse>
     {

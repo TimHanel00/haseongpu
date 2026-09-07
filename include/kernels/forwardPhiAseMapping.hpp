@@ -14,7 +14,7 @@
 #include <concepts/concepts.hpp>
 #include <data/TraceData.hpp>
 #include <kernels/forward/accumulation.hpp>
-#include <kernels/forward/batchStatistics.hpp>
+#include <kernels/forward/rayPopulationStatistics.hpp>
 
 #include <concepts>
 #include <cstdint>
@@ -64,7 +64,7 @@ namespace hase::kernels
         }
     };
 
-    /** @brief Compute domain totals from endpoints in one globally cumulative grouped prefix. */
+    /** @brief Read each domain's total directly from its local CDF endpoint. */
     struct ComputeDomainSourceStrengthTotals
     {
         ALPAKA_FN_ACC void operator()(
@@ -79,8 +79,7 @@ namespace hase::kernels
             {
                 auto const begin = offsets[domain];
                 auto const end = offsets[domain + 1u];
-                double const prefixBase = begin == 0u ? 0.0 : sourceStrengthPrefix[begin - 1u];
-                sourceStrengthTotals[domain] = begin == end ? 0.0 : sourceStrengthPrefix[end - 1u] - prefixBase;
+                sourceStrengthTotals[domain] = begin == end ? 0.0 : sourceStrengthPrefix[end - 1u];
             }
         }
     };
@@ -102,14 +101,14 @@ namespace hase::kernels
     struct FinalizeForwardVolumePhiAse
     {
         unsigned rayCount;
-        unsigned batchCount;
+        unsigned numIndependentRayPopulations;
         double sourceStrengthTotal;
 
         ALPAKA_FN_ACC void operator()(
             alpaka::onAcc::concepts::Acc auto const& acc,
             data::TraceView const mesh,
-            alpaka::concepts::IView<double const> auto vertexBatchScoreSum,
-            alpaka::concepts::IView<std::uint32_t> auto rseBatchRayCounts,
+            alpaka::concepts::IView<double const> auto vertexPopulationScoreSum,
+            alpaka::concepts::IView<std::uint32_t> auto rayPopulationRayCounts,
             alpaka::concepts::IView<std::uint32_t const> auto droppedRays,
             alpaka::concepts::IView<float> auto volumePhiAse,
             alpaka::concepts::IView<double> auto standardError,
@@ -129,8 +128,8 @@ namespace hase::kernels
                 if(rayCount > 0u && volume > 0.0)
                 {
                     unsigned const materialVertexOffset = mesh.getMaterialId(cell) * mesh.numberOfMeshPoints;
-                    forward::BatchStatistics statistics;
-                    for(unsigned batch = 0u; batch < batchCount; ++batch)
+                    forward::RayPopulationStatistics statistics;
+                    for(unsigned batch = 0u; batch < numIndependentRayPopulations; ++batch)
                     {
                         double batchScoreDensity = 0.0;
                         for(unsigned localVertex = 0u; localVertex < mesh.numberOfCellVertices; ++localVertex)
@@ -139,12 +138,14 @@ namespace hase::kernels
                                 = materialVertexOffset
                                   + mesh.cellPointIndices[cell * mesh.numberOfCellVertices + localVertex];
                             double const vertexVolume = mesh.lumpedMaterialVertexVolumes[materialVertex];
-                            unsigned const vertex
-                                = batch * (mesh.numberOfMaterials * mesh.numberOfMeshPoints) + materialVertex;
-                            batchScoreDensity += vertexVolume > 0.0 ? vertexBatchScoreSum[vertex] / vertexVolume : 0.0;
+                            std::size_t const vertex
+                                = static_cast<std::size_t>(batch) * mesh.numberOfMaterials * mesh.numberOfMeshPoints
+                                  + materialVertex;
+                            batchScoreDensity
+                                += vertexVolume > 0.0 ? vertexPopulationScoreSum[vertex] / vertexVolume : 0.0;
                         }
                         batchScoreDensity /= static_cast<double>(mesh.numberOfCellVertices);
-                        statistics.add(batchScoreDensity, rseBatchRayCounts[batch]);
+                        statistics.add(batchScoreDensity, rayPopulationRayCounts[batch]);
                     }
                     auto const summary = statistics.finalize(sourceStrengthTotal, droppedRays[cell] != 0u);
                     estimate = summary.value;
@@ -172,15 +173,15 @@ namespace hase::kernels
      * @param devBundle Device and executor used to build the cell launch.
      * @param queue Queue receiving the finalization kernel.
      * @param mesh Device-resident trace view and lumped material-vertex volumes.
-     * @param vertexBatchScoreSum Raw score sums indexed by batch and material vertex.
-     * @param rseBatchRayCounts Number of histories contributing to each batch.
+     * @param vertexPopulationScoreSum Raw score sums indexed by batch and material vertex.
+     * @param rayPopulationRayCounts Number of histories contributing to each batch.
      * @param droppedRays Per-cell traversal-failure counts.
      * @param volumePhiAse Cell PhiASE output.
      * @param standardError Cell absolute standard-error output.
      * @param relativeStandardError Cell relative standard-error output.
      * @param volumeDndtAse Cell ASE population-rate output.
      * @param rayCount Total histories represented by all batches.
-     * @param batchCount Number of statistical batches.
+     * @param numIndependentRayPopulations Number of statistical batches.
      * @param sourceStrengthTotal Integral used to normalize the sampled source.
      */
     template<alpaka::onHost::concepts::Device T_Device, alpaka::concepts::Executor T_Executor>
@@ -188,15 +189,15 @@ namespace hase::kernels
         alpakaUtils::DevBundle<T_Device, T_Executor>& devBundle,
         concepts::Queue auto const& queue,
         data::TraceView const mesh,
-        alpaka::concepts::IBuffer<double> auto const& vertexBatchScoreSum,
-        alpaka::concepts::IView<std::uint32_t> auto const& rseBatchRayCounts,
+        alpaka::concepts::IBuffer<double> auto const& vertexPopulationScoreSum,
+        alpaka::concepts::IView<std::uint32_t> auto const& rayPopulationRayCounts,
         alpaka::concepts::IBuffer<std::uint32_t> auto const& droppedRays,
         alpaka::concepts::IBuffer<float> auto& volumePhiAse,
         alpaka::concepts::IBuffer<double> auto& standardError,
         alpaka::concepts::IBuffer<double> auto& relativeStandardError,
         alpaka::concepts::IBuffer<double> auto& volumeDndtAse,
         unsigned rayCount,
-        unsigned batchCount,
+        unsigned numIndependentRayPopulations,
         double sourceStrengthTotal)
     {
         auto cellFrameSpec = hase::alpakaUtils::getFrameSpec<uint32_t>(
@@ -206,10 +207,10 @@ namespace hase::kernels
         queue.enqueue(
             cellFrameSpec,
             alpaka::KernelBundle{
-                FinalizeForwardVolumePhiAse{rayCount, batchCount, sourceStrengthTotal},
+                FinalizeForwardVolumePhiAse{rayCount, numIndependentRayPopulations, sourceStrengthTotal},
                 mesh,
-                vertexBatchScoreSum,
-                rseBatchRayCounts,
+                vertexPopulationScoreSum,
+                rayPopulationRayCounts,
                 droppedRays,
                 volumePhiAse,
                 standardError,

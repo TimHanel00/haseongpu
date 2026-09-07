@@ -9,7 +9,7 @@ namespace hase::core
     {
         struct PendingAssignment
         {
-            DomainBatchId id;
+            DomainRayPopulationId id;
             std::uint64_t rayCount{};
             double work{};
         };
@@ -28,10 +28,10 @@ namespace hase::core
         std::vector<WorkerDescriptor> const& workers,
         std::vector<DomainCost> const& domains,
         std::vector<DomainQuota> const& quotas,
-        std::uint32_t const batchCount,
+        std::uint32_t const numIndependentRayPopulations,
         std::span<data::AseDomainInterface const> const interfaces)
     {
-        if(workers.empty() || domains.empty() || batchCount == 0u)
+        if(workers.empty() || domains.empty() || numIndependentRayPopulations == 0u)
             throw std::invalid_argument("domain scheduling requires workers, domains, and batches");
         for(auto const& worker : workers)
             if(worker.relativeCapacity <= 0.0 || !std::isfinite(worker.relativeCapacity))
@@ -47,16 +47,17 @@ namespace hase::core
                 throw std::invalid_argument("domain quota ids must be unique");
 
         std::vector<PendingAssignment> pending;
-        pending.reserve(domains.size() * batchCount);
+        pending.reserve(domains.size() * numIndependentRayPopulations);
         for(auto const& domain : domains)
         {
             auto const found = quotaById.find(domain.id);
             if(found == quotaById.end())
                 throw std::invalid_argument("each scheduled domain requires a ray quota");
             auto const total = found->second->rayCount;
-            for(std::uint32_t batch = 0u; batch < batchCount; ++batch)
+            for(std::uint32_t batch = 0u; batch < numIndependentRayPopulations; ++batch)
             {
-                auto const rays = total / batchCount + (batch < total % batchCount ? 1u : 0u);
+                auto const rays
+                    = total / numIndependentRayPopulations + (batch < total % numIndependentRayPopulations ? 1u : 0u);
                 pending.push_back({{domain.id, batch}, rays, estimatedWork(domain, rays)});
             }
         }

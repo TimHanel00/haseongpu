@@ -11,7 +11,7 @@
 namespace hase::data
 {
     using DomainId = std::uint32_t;
-    using BatchId = std::uint32_t;
+    using RayPopulationId = std::uint32_t;
     inline constexpr DomainId invalidDomainId = std::numeric_limits<DomainId>::max();
 
     /** @brief Device-safe per-face routing metadata for one domain-local trace. */
@@ -42,7 +42,7 @@ namespace hase::data
     {
         std::span<std::uint32_t const> offsets;
         std::span<std::uint32_t const> globalCells;
-        std::span<double const> sourceStrengthPrefix;
+        std::span<double const> sourceStrengthPrefix; //!< Each offsets-delimited domain starts its CDF at zero.
         std::span<double const> sourceStrengthTotals;
     };
 
@@ -92,7 +92,7 @@ namespace hase::data
         std::vector<float> globalBoundaryTargetRefractiveIndices;
         std::vector<std::uint32_t> domainCellOffsets;
         std::vector<std::uint32_t> domainGlobalCells;
-        std::vector<double> domainSourceStrengthPrefix;
+        std::vector<double> domainSourceStrengthPrefix; //!< Concatenated domain-local, unnormalized CDFs.
         std::vector<double> domainSourceStrengthTotals;
     };
 } // namespace hase::data

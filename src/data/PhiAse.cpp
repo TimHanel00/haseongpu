@@ -10,6 +10,8 @@ namespace hase::data
         reader.assign(result.minRays, prefix, FieldName::minRays);
         reader.assign(result.maxRays, prefix, FieldName::maxRays);
         reader.assign(result.forwardRayCount, prefix, FieldName::forwardRayCount);
+        if(reader.contains(prefix, FieldName::numIndependentRayPopulations))
+            reader.assign(result.numIndependentRayPopulations, prefix, FieldName::numIndependentRayPopulations);
         reader.assign(result.relativeStandardErrorThreshold, prefix, FieldName::relativeStandardErrorThreshold);
         if(reader.contains(prefix, FieldName::enableDiagnostics))
             reader.assign(result.enableDiagnostics, prefix, FieldName::enableDiagnostics);

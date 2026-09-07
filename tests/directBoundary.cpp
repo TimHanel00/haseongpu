@@ -64,7 +64,48 @@ TEMPLATE_LIST_TEST_CASE(
     REQUIRE(prefix.getExtents().product() == 3u);
     CHECK(prefix[0u] == Catch::Approx(6.0));
     CHECK(prefix[1u] == Catch::Approx(8.0));
-    CHECK(prefix[2u] == Catch::Approx(12.0));
+    // The second domain starts a separate CDF; its physical total is still 4.
+    CHECK(prefix[2u] == Catch::Approx(4.0));
+}
+
+TEMPLATE_LIST_TEST_CASE("domain CDFs preserve weak zero and empty sources", "[forward][domain][backend]", TestBackends)
+{
+    auto selector = alpaka::onHost::makeDeviceSelector(TestType::makeDict());
+    if(!selector.isAvailable())
+        SKIP("Requested test backend has no available device");
+    auto device = selector.makeDevice(0u);
+    auto queue = device.makeQueue(alpaka::queueKind::nonBlocking);
+    hase::alpakaUtils::DevBundle bundle(device, alpaka::getExecutor(TestType::makeDict()));
+    hase::data::TraceData trace;
+    trace.numberOfCells = 3u;
+    trace.numberOfMaterials = 1u;
+    trace.betaVolume = {1.0, 1.0e-30, 0.0};
+    trace.cellVolumes = {1.0, 1.0, 1.0};
+    trace.cellMaterialIds = {0u, 0u, 0u};
+    trace.materialActive = {1u};
+    trace.materialActiveIonDensities = {2.0};
+    trace.materialFluorescenceLifetimes = {1.0};
+    auto resident = trace.makeResident(device);
+    resident.toDevice(queue);
+    hase::data::AseDomainGraph graph;
+    graph.domainCellOffsets = {0u, 1u, 2u, 3u, 3u};
+    graph.domainGlobalCells = {0u, 1u, 2u};
+    graph.domainSourceStrengthPrefix.resize(3u, 0.0);
+    graph.domainSourceStrengthTotals.resize(4u, 0.0);
+    hase::core::ResidentAseDomainSources sources(device, graph);
+    sources.toDevice(queue);
+    sources.rebuild(bundle, queue, resident.view());
+    auto const totals = sources.downloadSourceStrengthTotals(queue);
+    REQUIRE(totals.size() == 4u);
+    CHECK(totals[0u] == 2.0);
+    CHECK(totals[1u] == 2.0e-30);
+    CHECK(totals[2u] == 0.0);
+    CHECK(totals[3u] == 0.0);
+    sources.sourceStrengthPrefix.toHost(queue);
+    auto const prefix = sources.sourceStrengthPrefix.getHostView();
+    CHECK(prefix[0u] == 2.0);
+    CHECK(prefix[1u] == 2.0e-30);
+    CHECK(prefix[2u] == 0.0);
 }
 
 TEMPLATE_LIST_TEST_CASE(

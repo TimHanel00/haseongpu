@@ -335,14 +335,15 @@ TEST_CASE("forward PhiASE RSE handles invalid and zero-score estimates", "[forwa
 TEST_CASE("forward PhiASE RSE batches use independent deterministic sampling streams", "[forward][rse]")
 {
     constexpr unsigned applicationSeed = 123'456'789u;
-    constexpr unsigned batchCount = hase::kernels::forward::defaultForwardRseBatchCount;
-    std::array<unsigned, batchCount> seeds{};
-    std::array<double, batchCount> sourceOffsets{};
-    for(unsigned batch = 0u; batch < batchCount; ++batch)
+    unsigned const numIndependentRayPopulations = hase::core::AseTraceControls{}.numIndependentRayPopulations;
+    std::array<unsigned, numIndependentRayPopulations> seeds{};
+    std::array<double, numIndependentRayPopulations> sourceOffsets{};
+    for(unsigned batch = 0u; batch < numIndependentRayPopulations; ++batch)
     {
-        seeds.at(batch) = hase::kernels::forward::rseBatchSeed(applicationSeed, batch);
-        sourceOffsets.at(batch) = hase::kernels::forward::rseBatchSourceStratificationOffset(applicationSeed, batch);
-        CHECK(seeds.at(batch) == hase::kernels::forward::rseBatchSeed(applicationSeed, batch));
+        seeds.at(batch) = hase::kernels::forward::rayPopulationSeed(applicationSeed, batch);
+        sourceOffsets.at(batch)
+            = hase::kernels::forward::rayPopulationSourceStratificationOffset(applicationSeed, batch);
+        CHECK(seeds.at(batch) == hase::kernels::forward::rayPopulationSeed(applicationSeed, batch));
         CHECK(sourceOffsets.at(batch) >= 0.0);
         CHECK(sourceOffsets.at(batch) < 1.0);
     }
@@ -353,35 +354,37 @@ TEST_CASE("forward PhiASE RSE batches use independent deterministic sampling str
 
     constexpr unsigned rayCount = 19u;
     unsigned countedRays = 0u;
-    for(unsigned batch = 0u; batch < batchCount; ++batch)
+    for(unsigned batch = 0u; batch < numIndependentRayPopulations; ++batch)
     {
-        unsigned const batchRayCount = hase::kernels::forward::rseBatchRayCount(0u, rayCount, batch);
+        unsigned const batchRayCount = hase::kernels::forward::rayPopulationRayCount(0u, rayCount, batch);
         countedRays += batchRayCount;
         for(unsigned batchRay = 0u; batchRay < batchRayCount; ++batchRay)
         {
-            unsigned const globalRay = batchRay * batchCount + batch;
-            CHECK(hase::kernels::forward::rseBatchRayIndex(globalRay, batchCount) == batchRay);
+            unsigned const globalRay = batchRay * numIndependentRayPopulations + batch;
+            CHECK(hase::kernels::forward::rayPopulationRayIndex(globalRay, numIndependentRayPopulations) == batchRay);
         }
     }
     CHECK(countedRays == rayCount);
 }
 
-TEST_CASE("forward PhiASE batch count expands with the worker group", "[forward][rse][worker]")
+TEST_CASE("forward PhiASE population count is a runtime control", "[forward][rse][worker]")
 {
-    CHECK(hase::kernels::forward::forwardRseBatchCount(1u) == 8u);
-    CHECK(hase::kernels::forward::forwardRseBatchCount(8u) == 8u);
-    CHECK(hase::kernels::forward::forwardRseBatchCount(12u) == 12u);
+    hase::core::AseTraceControls controls;
+    CHECK(controls.numIndependentRayPopulations == 8u);
+    controls.numIndependentRayPopulations = 12u;
+    CHECK(controls.numIndependentRayPopulations == 12u);
 
     constexpr unsigned rayCount = 137u;
-    constexpr unsigned batchCount = 12u;
+    constexpr unsigned numIndependentRayPopulations = 12u;
     unsigned countedRays = 0u;
-    for(unsigned batch = 0u; batch < batchCount; ++batch)
-        countedRays += hase::kernels::forward::rseBatchRayCount(0u, rayCount, batch, batchCount);
+    for(unsigned batch = 0u; batch < numIndependentRayPopulations; ++batch)
+        countedRays
+            += hase::kernels::forward::rayPopulationRayCount(0u, rayCount, batch, numIndependentRayPopulations);
     CHECK(countedRays == rayCount);
 
-    auto const raw = hase::core::makeForwardRawResult(2u, 3u, batchCount);
-    CHECK(raw.rseBatchRayCounts.size() == batchCount);
-    CHECK(raw.vertexBatchScoreSum.size() == batchCount * 3u);
+    auto const raw = hase::core::makeForwardRawResult(2u, 3u, numIndependentRayPopulations);
+    CHECK(raw.rayPopulationRayCounts.size() == numIndependentRayPopulations);
+    CHECK(raw.vertexPopulationScoreSum.size() == numIndependentRayPopulations * 3u);
 }
 
 TEST_CASE("HASE workers map every complete batch exactly once", "[forward][worker]")
@@ -441,12 +444,12 @@ TEST_CASE("expanded HASE batch domains keep every worker active", "[forward][wor
     };
 
     constexpr unsigned workerCount = 12u;
-    constexpr unsigned batchCount = hase::kernels::forward::forwardRseBatchCount(workerCount);
+    constexpr unsigned numIndependentRayPopulations = 12u;
     std::array<unsigned, workerCount> workPerWorker{};
     for(unsigned workerIndex = 0u; workerIndex < workerCount; ++workerIndex)
     {
         WorkerIdentity const worker{workerIndex, workerCount};
-        for(auto const batch : hase::mapIdx(worker, alpaka::IdxRange{batchCount}))
+        for(auto const batch : hase::mapIdx(worker, alpaka::IdxRange{numIndependentRayPopulations}))
         {
             static_cast<void>(batch);
             ++workPerWorker.at(workerIndex);
@@ -476,8 +479,8 @@ TEST_CASE("forward PhiASE vertex accumulation remains cell based and conservativ
     std::array<double, 4u> const batchScores{0.1, 0.2, 0.3, 0.4};
     for(unsigned batch = 0u; batch < batchScores.size(); ++batch)
     {
-        raw.vertexBatchScoreSum[batch * materialVertexCount] = batchScores.at(batch);
-        raw.rseBatchRayCounts.at(batch) = 1u;
+        raw.vertexPopulationScoreSum[batch * materialVertexCount] = batchScores.at(batch);
+        raw.rayPopulationRayCounts.at(batch) = 1u;
     }
     raw.rayCount = 4u;
 
@@ -517,9 +520,9 @@ TEST_CASE("forward PhiASE vertex accumulation preserves material interfaces", "[
     auto raw = hase::core::makeForwardRawResult(mesh.numberOfCells, materialVertexCount);
     for(unsigned batch = 0u; batch < 4u; ++batch)
     {
-        raw.vertexBatchScoreSum[batch * materialVertexCount] = 0.25;
-        raw.vertexBatchScoreSum[batch * materialVertexCount + mesh.numberOfMeshPoints] = 1.0;
-        raw.rseBatchRayCounts.at(batch) = 1u;
+        raw.vertexPopulationScoreSum[batch * materialVertexCount] = 0.25;
+        raw.vertexPopulationScoreSum[batch * materialVertexCount + mesh.numberOfMeshPoints] = 1.0;
+        raw.rayPopulationRayCounts.at(batch) = 1u;
     }
     raw.rayCount = 4u;
 

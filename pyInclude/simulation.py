@@ -129,6 +129,8 @@ class PhiASE:
     """Maximum total number of globally launched rays during adaptive refinement."""
     forwardRayCount: int | None = None
     """Explicit fixed forward-ray count; disables adaptive refinement when set."""
+    numIndependentRayPopulations: int = 8
+    """Independent complete-source estimates used for RSE, unrelated to worker count."""
     relativeStandardErrorThreshold: float = 0.1
     """Target one-sigma relative sampling uncertainty for ASE flux estimates."""
     enableDiagnostics: bool = False
@@ -190,6 +192,7 @@ class PhiASE:
                 transportField("minRays"),
                 transportField("maxRays"),
                 transportField("forwardRayCount", optional=True),
+                transportField("numIndependentRayPopulations"),
                 transportField("relativeStandardErrorThreshold"),
                 transportField("enableDiagnostics"),
                 transportField("repetitions"),
@@ -272,6 +275,7 @@ class PhiASE:
         parser.add_argument("--max-rays", "--max-rays-per-sample", dest="max_rays", type=int, default=None)
         parser.add_argument("--propagation-mode", choices=("forward",), default=None)
         parser.add_argument("--forward-ray-count", type=int, default=None)
+        parser.add_argument("--num-independent-ray-populations", type=int, default=None)
         parser.add_argument("--relative-standard-error-threshold", type=float, default=None)
         diagnostics = parser.add_mutually_exclusive_group()
         diagnostics.add_argument(
@@ -328,6 +332,7 @@ class PhiASE:
             "max_rays_per_sample": "maxRays",
             "propagation_mode": "propagationMode",
             "forward_ray_count": "forwardRayCount",
+            "num_independent_ray_populations": "numIndependentRayPopulations",
             "relative_standard_error_threshold": "relativeStandardErrorThreshold",
             "enable_diagnostics": "enableDiagnostics",
             "track_ray_visits": "enableDiagnostics",
@@ -369,6 +374,12 @@ class PhiASE:
         max_rays = int(self.maxRays)
         adaptive_steps = int(self.adaptiveSteps)
         forward_ray_count = 0 if self.forwardRayCount is None else int(self.forwardRayCount)
+        if (
+            isinstance(self.numIndependentRayPopulations, bool)
+            or not isinstance(self.numIndependentRayPopulations, (int, np.integer))
+            or not 1 <= self.numIndependentRayPopulations <= np.iinfo(np.uint32).max
+        ):
+            raise ValueError("PhiASE.numIndependentRayPopulations must be a positive 32-bit integer")
         if min_rays == 0:
             raise ValueError("PhiASE.minRays must be greater than zero")
         if max_rays < min_rays:
@@ -387,6 +398,7 @@ class PhiASE:
             "maxRays": max_rays,
             "propagationMode": self.propagationMode,
             "forwardRayCount": forward_ray_count,
+            "numIndependentRayPopulations": int(self.numIndependentRayPopulations),
             "relativeStandardErrorThreshold": self.relativeStandardErrorThreshold,
             "enableDiagnostics": self.enableDiagnostics,
             "reflectionMaxIterations": self.reflectionMaxIterations,

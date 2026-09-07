@@ -8,7 +8,7 @@
 #include <alpaka/math.hpp>
 
 #include <core/calcForwardPhiAse.hpp>
-#include <kernels/forward/batchStatistics.hpp>
+#include <kernels/forward/rayPopulationStatistics.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -19,13 +19,13 @@ namespace hase::core
     ForwardPhiAseRawResult makeForwardRawResult(
         unsigned const volumeCount,
         unsigned const materialVertexCount,
-        unsigned const batchCount)
+        unsigned const numIndependentRayPopulations)
     {
-        if(batchCount == 0u)
+        if(numIndependentRayPopulations == 0u)
             throw std::invalid_argument("forward ASE batch count must be positive");
         return ForwardPhiAseRawResult{
-            std::vector<double>(batchCount * materialVertexCount, 0.0),
-            std::vector<unsigned>(batchCount, 0u),
+            std::vector<double>(static_cast<std::size_t>(numIndependentRayPopulations) * materialVertexCount, 0.0),
+            std::vector<unsigned>(numIndependentRayPopulations, 0u),
             std::vector<unsigned>(volumeCount, 0u),
             std::vector<unsigned>(volumeCount, 0u),
             0u,
@@ -47,7 +47,7 @@ namespace hase::core
 
     void mergeForwardRawResult(ForwardPhiAseRawResult& target, ForwardPhiAseRawResult const& source)
     {
-        if(target.vertexBatchScoreSum.empty())
+        if(target.vertexPopulationScoreSum.empty())
         {
             target = source;
             return;
@@ -66,14 +66,14 @@ namespace hase::core
             = std::max(target.boundaryGammaStandardError, source.boundaryGammaStandardError);
         target.boundaryTailFactor = std::max(target.boundaryTailFactor, source.boundaryTailFactor);
         target.boundaryTailClosure = std::max(target.boundaryTailClosure, source.boundaryTailClosure);
-        if(target.vertexBatchScoreSum.size() != source.vertexBatchScoreSum.size())
+        if(target.vertexPopulationScoreSum.size() != source.vertexPopulationScoreSum.size())
             throw std::runtime_error("cannot merge forward ASE results with different vertex counts");
-        for(unsigned vertex = 0u; vertex < target.vertexBatchScoreSum.size(); ++vertex)
-            target.vertexBatchScoreSum.at(vertex) += source.vertexBatchScoreSum.at(vertex);
-        if(target.rseBatchRayCounts.size() != source.rseBatchRayCounts.size())
+        for(unsigned vertex = 0u; vertex < target.vertexPopulationScoreSum.size(); ++vertex)
+            target.vertexPopulationScoreSum.at(vertex) += source.vertexPopulationScoreSum.at(vertex);
+        if(target.rayPopulationRayCounts.size() != source.rayPopulationRayCounts.size())
             throw std::runtime_error("cannot merge forward ASE results with different batch counts");
-        for(unsigned batch = 0u; batch < target.rseBatchRayCounts.size(); ++batch)
-            target.rseBatchRayCounts.at(batch) += source.rseBatchRayCounts.at(batch);
+        for(unsigned batch = 0u; batch < target.rayPopulationRayCounts.size(); ++batch)
+            target.rayPopulationRayCounts.at(batch) += source.rayPopulationRayCounts.at(batch);
         for(unsigned volume = 0u; volume < target.totalRays.size(); ++volume)
         {
             target.totalRays.at(volume) += source.totalRays.at(volume);
@@ -143,14 +143,16 @@ namespace hase::core
         data::PhiAseResult& result)
     {
         unsigned const volumeCount = hostMesh.numberOfCells;
-        unsigned const materialVertexCount = hostMesh.numberOfMaterials * hostMesh.numberOfMeshPoints;
-        unsigned const batchCount = static_cast<unsigned>(rawResult.rseBatchRayCounts.size());
-        if(batchCount == 0u || rawResult.vertexBatchScoreSum.size() != batchCount * materialVertexCount)
+        std::size_t const materialVertexCount
+            = static_cast<std::size_t>(hostMesh.numberOfMaterials) * hostMesh.numberOfMeshPoints;
+        unsigned const numIndependentRayPopulations = static_cast<unsigned>(rawResult.rayPopulationRayCounts.size());
+        if(numIndependentRayPopulations == 0u
+           || rawResult.vertexPopulationScoreSum.size() != numIndependentRayPopulations * materialVertexCount)
             throw std::runtime_error("forward ASE vertex score count does not match the mesh");
-        std::vector<std::vector<double>> cellBatchScoreDensity(batchCount);
-        for(unsigned batch = 0u; batch < batchCount; ++batch)
+        std::vector<std::vector<double>> cellBatchScoreDensity(numIndependentRayPopulations);
+        for(unsigned batch = 0u; batch < numIndependentRayPopulations; ++batch)
         {
-            auto const begin = rawResult.vertexBatchScoreSum.cbegin() + batch * materialVertexCount;
+            auto const begin = rawResult.vertexPopulationScoreSum.cbegin() + batch * materialVertexCount;
             std::vector<double> const vertexBatch(begin, begin + materialVertexCount);
             cellBatchScoreDensity.at(batch)
                 = hase::kernels::accumulateMaterialVertexIntegralsToCellDensities(hostMesh, vertexBatch);
@@ -176,9 +178,11 @@ namespace hase::core
             double const volumeSize = hostMesh.cellVolumes.at(volume);
             if(volumeSize > 0.0 && rawResult.rayCount > 0u)
             {
-                kernels::forward::BatchStatistics statistics;
-                for(unsigned batch = 0u; batch < batchCount; ++batch)
-                    statistics.add(cellBatchScoreDensity.at(batch).at(volume), rawResult.rseBatchRayCounts.at(batch));
+                kernels::forward::RayPopulationStatistics statistics;
+                for(unsigned batch = 0u; batch < numIndependentRayPopulations; ++batch)
+                    statistics.add(
+                        cellBatchScoreDensity.at(batch).at(volume),
+                        rawResult.rayPopulationRayCounts.at(batch));
                 auto const summary = statistics.finalize(sourceStrengthTotal, result.droppedRays[volume] != 0u);
                 double const estimate = summary.value;
                 result.phiAse.at(volume) = static_cast<float>(estimate);

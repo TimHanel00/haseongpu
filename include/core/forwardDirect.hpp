@@ -81,9 +81,9 @@ namespace hase::core
         AseTraceControls const& experiment,
         ForwardPhiAseRawResult& result,
         unsigned const rayCount,
-        unsigned const rseBatch,
+        unsigned const rayPopulationId,
         double const sourceStrengthTotal,
-        alpaka::concepts::IBuffer<double> auto& vertexBatchScoreSum,
+        alpaka::concepts::IBuffer<double> auto& vertexPopulationScoreSum,
         alpaka::concepts::IBuffer<std::uint32_t> auto& volumeRayVisits,
         alpaka::concepts::IBuffer<std::uint32_t> auto& droppedRays,
         unsigned const rngSeed,
@@ -100,7 +100,7 @@ namespace hase::core
         std::uint32_t const domainCount
             = domainPopulationCounts.empty() ? 0u : static_cast<std::uint32_t>(domainPopulationCounts.size());
         auto accumulation = hase::kernels::forward::ForwardAccumulationSpans{
-            vertexBatchScoreSum.getMdSpan(),
+            vertexPopulationScoreSum.getMdSpan(),
             volumeRayVisits.getMdSpan(),
             droppedRays.getMdSpan()};
         auto const frameSpec = getRayFrameSpec(rayCount, queue);
@@ -205,7 +205,7 @@ namespace hase::core
                         diagnostics},
                     mesh,
                     rayCount,
-                    rseBatch,
+                    rayPopulationId,
                     sourceStrengthTotal,
                     accumulation,
                     scratch.first.view(),
@@ -237,7 +237,7 @@ namespace hase::core
                         domain,
                         count,
                         candidateOffset,
-                        rseBatch,
+                        rayPopulationId,
                         sourceWeight,
                         accumulation,
                         scratch.first.view(),
